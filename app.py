@@ -13,20 +13,39 @@ st.set_page_config(page_title="가족 투자 대시보드 v11.1", layout="wide")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 1. 메인 종목 데이터 읽기 (실패하면 앱 중지)
+# 1. 데이터 읽기 부분 (파일 상단 try-except 구문)
 try:
-    full_df = conn.read(ttl="1m")
-except Exception as e:
-    st.error(f"구글 시트의 기본 데이터를 읽어오지 못했습니다: {e}")
-    st.stop()
-
-# 2. 일일 트렌드 데이터 읽기 (실패해도 경고만 띄우고 앱 계속 실행)
-try:
-    # worksheet 이름이 구글 시트 하단 탭 이름과 똑같아야 합니다.
     history_df = conn.read(worksheet="daily_trend", ttl="1m")
 except Exception as e:
-    st.warning("daily_trend 시트를 찾을 수 없거나 데이터가 비어 있습니다. 차트 작성을 위해 데이터를 입력해 주세요.")
-    history_df = pd.DataFrame()  # 에러 방지용 빈 데이터프레임 생성
+    st.info("구글 시트에 'daily_trend' 데이터가 입력되기를 기다리고 있습니다.")
+    history_df = pd.DataFrame()
+
+# 2. 차트 그리기 부분 (파일 맨 하단)
+if not history_df.empty:
+    st.divider()
+    st.subheader("📊 시장 대비 성과 추이 (KOSPI vs 전 계좌)")
+
+    # 데이터 정규화 (시작점을 100으로 맞춤)
+    first_kospi = history_df['KOSPI'].iloc[0]
+    history_df['KOSPI_IDX'] = (history_df['KOSPI'] / first_kospi) * 100
+    
+    # 계좌별 지수화 (서은, 서희, 큰스님)
+    history_df['SE_IDX'] = 100 + history_df['서은수익률'] - history_df['서은수익률'].iloc[0]
+    history_df['SH_IDX'] = 100 + history_df['서희수익률'] - history_df['서희수익률'].iloc[0]
+    history_df['KS_IDX'] = 100 + history_df['큰스님수익률'] - history_df['큰스님수익률'].iloc[0]
+
+    # 차트 생성
+    fig_trend = go.Figure()
+    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['KOSPI_IDX'], name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SE_IDX'], name='서은투자', line=dict(color='#FF4B4B', width=3)))
+    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SH_IDX'], name='서희투자', line=dict(color='#87CEEB', width=3)))
+    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['KS_IDX'], name='큰스님투자', line=dict(color='#00FF00', width=3))) # 연두색 추가
+
+    fig_trend.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
     
 # 종목 코드 매핑
 STOCK_CODES = {
@@ -171,4 +190,5 @@ if not history_df.empty:
     st.plotly_chart(fig_trend, use_container_width=True)
 else:
     st.info("구글 시트에 'daily_trend' 탭을 만들고 데이터를 입력하면 차트가 나타납니다.")
+
 
