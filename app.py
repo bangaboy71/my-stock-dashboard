@@ -22,37 +22,20 @@ except Exception as e:
     st.stop()
 
 # --- 2. 일일 트렌드 데이터 읽기 (history_df 정의) ---
+# --- [상단] 데이터 로드 엔진 ---
+# 1. 메인 종목 데이터 (이게 없으면 '계좌 선택'이 안 됩니다)
 try:
-    # 사용자님이 만드신 'daily_trend' 탭을 정확히 읽어옵니다.
+    full_df = conn.read(ttl="1m")
+except Exception as e:
+    st.error(f"메인 시트 데이터를 읽지 못했습니다: {e}")
+    st.stop()
+
+# 2. 트렌드 데이터 (사용자님의 daily_trend 탭)
+try:
     history_df = conn.read(worksheet="daily_trend", ttl="1m")
 except Exception as e:
-    # 시트가 아직 비어있거나 생성 중일 때 에러로 멈추지 않게 합니다.
     st.info("구글 시트의 'daily_trend' 데이터를 기다리고 있습니다.")
     history_df = pd.DataFrame()
-
-if not history_df.empty:
-    st.divider()
-    st.subheader("📊 시장 대비 성과 추이 (KOSPI vs 전 계좌)")
-
-    # 데이터 정규화 (시작점을 100으로 맞춤)
-    first_kospi = history_df['KOSPI'].iloc[0]
-    history_df['KOSPI_IDX'] = (history_df['KOSPI'] / first_kospi) * 100
-    
-    # 각 계좌별 지수화
-    history_df['SE_IDX'] = 100 + history_df['서은수익률'] - history_df['서은수익률'].iloc[0]
-    history_df['SH_IDX'] = 100 + history_df['서희수익률'] - history_df['서희수익률'].iloc[0]
-    history_df['KS_IDX'] = 100 + history_df['큰스님수익률'] - history_df['큰스님수익률'].iloc[0]
-
-    fig_trend = go.Figure()
-    # KOSPI (회색 점선)
-    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['KOSPI_IDX'], name='KOSPI 지수', line=dict(dash='dash', color='gray')))
-    # 계좌별 실선
-    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SE_IDX'], name='서은투자', line=dict(color='#FF4B4B', width=3)))
-    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SH_IDX'], name='서희투자', line=dict(color='#87CEEB', width=3)))
-    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['KS_IDX'], name='큰스님투자', line=dict(color='#00FF00', width=3))) # 연두색
-
-    fig_trend.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white")
-    st.plotly_chart(fig_trend, use_container_width=True)
     
 # 종목 코드 매핑
 STOCK_CODES = {
@@ -197,6 +180,7 @@ if not history_df.empty:
     st.plotly_chart(fig_trend, use_container_width=True)
 else:
     st.info("구글 시트에 'daily_trend' 탭을 만들고 데이터를 입력하면 차트가 나타납니다.")
+
 
 
 
