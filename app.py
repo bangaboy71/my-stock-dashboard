@@ -43,10 +43,11 @@ def get_naver_price(name):
 # 표 색상 스타일 함수 (플러스 빨강, 마이너스 파랑)
 def color_positive_negative(val):
     if isinstance(val, (int, float)):
-        color = 'red' if val > 0 else 'blue' if val < 0 else 'black'
+        # 플러스는 밝은 빨강(#FF4B4B), 마이너스는 화사한 하늘색(#87CEEB)
+        color = '#FF4B4B' if val > 0 else '#87CEEB' if val < 0 else '#FFFFFF'
         return f'color: {color}'
     return ''
-
+    
 # 2. 메인 UI 및 데이터 처리
 st.markdown(f"<h1 style='text-align: center; color: #002060;'>🌐 가족 투자 실시간 클라우드 대시보드</h1>", unsafe_allow_html=True)
 
@@ -93,12 +94,19 @@ with col_l:
     st.plotly_chart(fig, use_container_width=True)
 with col_r:
     st.subheader("📈 종목별 수익률 현황")
-    # 0을 기준으로 빨강/파랑이 갈리는 막대 차트
+    
+    # 수익률 절대값의 최대치를 기준으로 범위를 설정하여 0이 항상 가운데 오게 합니다.
+    max_val = max(abs(df['수익률']).max(), 1) 
+    
     fig_bar = px.bar(df.sort_values('수익률'), x='수익률', y='종목명', orientation='h',
-                     color='수익률', color_continuous_scale='RdBu_r', 
-                     range_color=[-max(abs(df['수익률'])+1), max(abs(df['수익률'])+1)])
+                     color='수익률', 
+                     # 하늘색(음수) -> 흰색(0) -> 빨간색(양수) 순으로 색상 변경
+                     color_continuous_scale=[[0, '#87CEEB'], [0.5, '#FFFFFF'], [1, '#FF4B4B']], 
+                     range_color=[-max_val, max_val])
+    
+    fig_bar.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white")
     st.plotly_chart(fig_bar, use_container_width=True)
-
+    
 # 상세 표 (스타일 적용)
 st.subheader(f"📑 {target} 상세 내역")
 st.dataframe(
@@ -107,5 +115,6 @@ st.dataframe(
     .format({'매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'}),
     hide_index=True, use_container_width=True
 )
+
 
 st.info(f"💡 업데이트: {datetime.now().strftime('%H:%M:%S')}")
