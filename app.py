@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import plotly.express as px
 import io
+import plotly.graph_objects as go  # 이 줄을 추가하세요!
 
 # 1. 설정 및 구글 시트 연결
 st.set_page_config(page_title="가족 투자 대시보드 v11.1", layout="wide")
@@ -14,6 +15,12 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
     full_df = conn.read(ttl="1m")
+# 기존 종목 데이터 아래에 추가
+try:
+    history_df = conn.read(worksheet="daily_trend", ttl="1m")
+except:
+    st.warning("daily_trend 시트를 찾을 수 없습니다. 시트 명을 확인해 주세요.")
+    history_df = pd.DataFrame() # 에러 방지용 빈 데이터프레임    
 except Exception as e:
     st.error(f"구글 시트를 읽어오지 못했습니다: {e}")
     st.stop()
@@ -118,3 +125,46 @@ st.dataframe(
 
 
 st.info(f"💡 업데이트: {datetime.now().strftime('%H:%M:%S')}")
+
+st.divider() # 구분선 추가
+st.subheader("📊 시장 대비 성과 추이 (KOSPI vs 계좌)")
+
+if not history_df.empty:
+    # 1. 데이터 정규화 (첫날을 100으로 기준)
+    # $$NormalizedValue_t = \frac{Value_t}{Value_{start}} \times 100$$
+    first_kospi = history_df['KOSPI'].iloc[0]
+    history_df['KOSPI_IDX'] = (history_df['KOSPI'] / first_kospi) * 100
+    
+    # 수익률은 100을 기준으로 변동폭을 더해줍니다.
+    history_df['SE_IDX'] = 100 + history_df['서은수익률'] - history_df['서은수익률'].iloc[0]
+    history_df['SH_IDX'] = 100 + history_df['서희수익률'] - history_df['서희수익률'].iloc[0]
+
+    # 2. 차트 생성
+    fig_trend = go.Figure()
+
+    # 코스피 추이 (회색 점선)
+    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['KOSPI_IDX'], 
+                                   name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+    
+    # 서은투자 추이 (빨간색 실선)
+    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SE_IDX'], 
+                                   name='서은투자', line=dict(color='#FF4B4B', width=3)))
+    
+    # 서희투자 추이 (하늘색 실선)
+    fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SH_IDX'], 
+                                   name='서희투자', line=dict(color='#87CEEB', width=3)))
+
+    # 3. 차트 디자인 (다크 모드 최적화)
+    fig_trend.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font_color="white",
+        xaxis=dict(showgrid=False, title="날짜"),
+        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', title="지수 (시작일=100)"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=0, r=0, t=30, b=0)
+    )
+    
+    st.plotly_chart(fig_trend, use_container_width=True)
+else:
+    st.info("구글 시트에 'daily_trend' 탭을 만들고 데이터를 입력하면 차트가 나타납니다.")
