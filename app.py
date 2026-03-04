@@ -13,18 +13,21 @@ st.set_page_config(page_title="가족 투자 대시보드 v11.1", layout="wide")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# 1. 메인 종목 데이터 읽기 (실패하면 앱 중지)
 try:
     full_df = conn.read(ttl="1m")
-# 기존 종목 데이터 아래에 추가
-try:
-    history_df = conn.read(worksheet="daily_trend", ttl="1m")
-except:
-    st.warning("daily_trend 시트를 찾을 수 없습니다. 시트 명을 확인해 주세요.")
-    history_df = pd.DataFrame() # 에러 방지용 빈 데이터프레임    
 except Exception as e:
-    st.error(f"구글 시트를 읽어오지 못했습니다: {e}")
+    st.error(f"구글 시트의 기본 데이터를 읽어오지 못했습니다: {e}")
     st.stop()
 
+# 2. 일일 트렌드 데이터 읽기 (실패해도 경고만 띄우고 앱 계속 실행)
+try:
+    # worksheet 이름이 구글 시트 하단 탭 이름과 똑같아야 합니다.
+    history_df = conn.read(worksheet="daily_trend", ttl="1m")
+except Exception as e:
+    st.warning("daily_trend 시트를 찾을 수 없거나 데이터가 비어 있습니다. 차트 작성을 위해 데이터를 입력해 주세요.")
+    history_df = pd.DataFrame()  # 에러 방지용 빈 데이터프레임 생성
+    
 # 종목 코드 매핑
 STOCK_CODES = {
     "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220",
@@ -168,3 +171,4 @@ if not history_df.empty:
     st.plotly_chart(fig_trend, use_container_width=True)
 else:
     st.info("구글 시트에 'daily_trend' 탭을 만들고 데이터를 입력하면 차트가 나타납니다.")
+
