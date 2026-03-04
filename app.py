@@ -8,28 +8,32 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. 설정 및 구글 시트 연결
-st.set_page_config(page_title="가족 투자 대시보드 v12.0", layout="wide")
+st.set_page_config(page_title="가족 투자 대시보드 v12.1", layout="wide")
 
 # 사이드바에서 캐시 제거 및 새로고침 버튼
-if st.sidebar.button("🔄 시세/데이터 강제 새로고침"):
+if st.sidebar.button("🔄 전체 시스템 초기화 및 새로고침"):
     st.cache_data.clear()
     st.rerun()
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- [상단] 데이터 로드 엔진 (중복 제거 및 최적화) ---
+# --- [상단] 데이터 로드 엔진 (최후의 수단: ttl=0 적용) ---
 try:
-    # 1. 메인 종목 데이터 읽기
+    # 1. 메인 종목 데이터 (첫 번째 탭)
     full_df = conn.read(ttl="1m")
     
-    # 2. 일일 트렌드 데이터 읽기 (daily_trend 탭)
+    # 2. 일일 트렌드 데이터 (이름으로 읽되, 캐시를 0으로 설정하여 즉시 반영)
     try:
-        history_df = conn.read(worksheet="daily_trend", ttl="1m")
-    except:
-        history_df = pd.DataFrame() # 시트가 없을 경우 대비
+        # worksheet 이름을 다시 한번 확인하세요: "daily_trend"
+        history_df = conn.read(worksheet="daily_trend", ttl=0) 
+    except Exception as e:
+        history_df = pd.DataFrame()
 except Exception as e:
     st.error(f"구글 시트 연결 오류: {e}")
     st.stop()
+
+# 진단용 코드 (왼쪽 사이드바에서 숫자 확인용)
+st.sidebar.write(f"🔍 트렌드 데이터 행 수: {len(history_df)}")
 
 # 종목 코드 매핑
 STOCK_CODES = {
@@ -53,10 +57,9 @@ def get_naver_price(name):
         return int(price.replace(",", ""))
     except: return 0
 
-# 표 색상 스타일 함수 (하늘색 적용 버전)
+# 표 색상 스타일 함수 (하늘색 적용)
 def color_positive_negative(val):
     if isinstance(val, (int, float)):
-        # 플러스는 밝은 빨강(#FF4B4B), 마이너스는 화사한 하늘색(#87CEEB)
         color = '#FF4B4B' if val > 0 else '#87CEEB' if val < 0 else '#FFFFFF'
         return f'color: {color}'
     return ''
@@ -66,15 +69,14 @@ st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 가족 투자
 
 # 계좌 선택 필터
 target = st.sidebar.selectbox("📂 계좌 선택", full_df['계좌명'].unique())
-# 현재 대시보드가 읽어온 'daily_trend'의 실제 데이터 모양을 확인하는 진단용 코드
-st.sidebar.write(f"데이터 행 수: {len(history_df)}")
 
 # --- 데이터 계산 로직 ---
 df = full_df[full_df['계좌명'] == target].copy()
 
-with st.spinner('실시간 시세를 가져오는 중...'):
-    df['수량'] = pd.to_numeric(df['수량'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    df['매입단가'] = pd.to_numeric(df['매입단가'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+with st.spinner('실시간 시세를 분석 중...'):
+    for col in ['수량', '매입단가']:
+        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    
     df['현재가'] = df['종목명'].apply(get_naver_price)
     df['매입금액'] = df['수량'] * df['매입단가']
     df['평가금액'] = df['수량'] * df['현재가']
@@ -117,36 +119,35 @@ st.dataframe(
     hide_index=True, use_container_width=True
 )
 
-# 6. 시장 대비 성과 추이 (큰스님투자 포함 완성형)
-if not history_df.empty:
+# 6. 시장 대비 성과 추이 (KOSPI vs 전 계좌)
+if not history_df.empty and len(history_df) >= 1:
     st.divider()
     st.subheader("📊 시장 대비 성과 추이 (KOSPI vs 전 계좌)")
     
+    # 데이터 타입 강제 변환 (에러 방지)
+    for col in ['KOSPI', '서은수익률', '서희수익률', '큰스님수익률']:
+        if col in history_df.columns:
+            history_df[col] = pd.to_numeric(history_df[col], errors='coerce').fillna(0)
+
     # 데이터 정규화 (첫날을 100으로 기준)
-    # $$NormalizedValue_t = \frac{Value_t}{Value_{start}} \times 100$$
-    first_kospi = history_df['KOSPI'].iloc[0]
+    first_kospi = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
     history_df['KOSPI_IDX'] = (history_df['KOSPI'] / first_kospi) * 100
     
-    # 각 계좌별 지수화
+    # 계좌별 지수화
     history_df['SE_IDX'] = 100 + history_df['서은수익률'] - history_df['서은수익률'].iloc[0]
     history_df['SH_IDX'] = 100 + history_df['서희수익률'] - history_df['서희수익률'].iloc[0]
     history_df['KS_IDX'] = 100 + history_df['큰스님수익률'] - history_df['큰스님수익률'].iloc[0]
 
     fig_trend = go.Figure()
-    # KOSPI (회색 점선)
     fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['KOSPI_IDX'], name='KOSPI 지수', line=dict(dash='dash', color='gray')))
-    # 서은 (빨강)
     fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SE_IDX'], name='서은투자', line=dict(color='#FF4B4B', width=3)))
-    # 서희 (하늘색)
     fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['SH_IDX'], name='서희투자', line=dict(color='#87CEEB', width=3)))
-    # 큰스님 (연두색)
     fig_trend.add_trace(go.Scatter(x=history_df['Date'], y=history_df['KS_IDX'], name='큰스님투자', line=dict(color='#00FF00', width=3)))
 
     fig_trend.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white",
-                            xaxis=dict(title="날짜"), yaxis=dict(title="지수 (100기준)"))
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig_trend, use_container_width=True)
 else:
-    st.info("💡 구글 시트에 'daily_trend' 탭을 작성하면 시장 비교 차트가 나타납니다.")
+    st.info("💡 'daily_trend' 탭의 데이터를 읽어오는 중이거나 데이터가 비어 있습니다. (시트 이름을 확인해 주세요)")
 
 st.caption(f"최종 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
