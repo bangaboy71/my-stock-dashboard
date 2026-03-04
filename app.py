@@ -66,6 +66,8 @@ st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 가족 투자
 
 # 계좌 선택 필터
 target = st.sidebar.selectbox("📂 계좌 선택", full_df['계좌명'].unique())
+# 현재 대시보드가 읽어온 'daily_trend'의 실제 데이터 모양을 확인하는 진단용 코드
+st.sidebar.write(f"데이터 행 수: {len(history_df)}")
 
 # --- 데이터 계산 로직 ---
 df = full_df[full_df['계좌명'] == target].copy()
@@ -147,3 +149,4 @@ else:
     st.info("💡 구글 시트에 'daily_trend' 탭을 작성하면 시장 비교 차트가 나타납니다.")
 
 st.caption(f"최종 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
