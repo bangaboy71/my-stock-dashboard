@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v18.1", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v18.2", layout="wide")
 
 # --- [GID 설정] ---
 STOCKS_GID = "301897027"
@@ -22,6 +22,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # --- [데이터 로드 엔진] ---
 try:
     full_df = conn.read(worksheet=STOCKS_GID, ttl="1m")
+    # 트렌드 데이터는 기록 여부 체크를 위해 ttl=0으로 읽어옵니다.
     history_df = conn.read(worksheet=TREND_GID, ttl=0)
 except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
@@ -68,35 +69,54 @@ full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
 full_df['평가금액'] = full_df['수량'] * full_df['현재가']
 full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- [신규 기능: 시트 기록 로직] ---
-def record_performance():
+# --- [신규 기능: 안전장치가 포함된 시트 기록 로직] ---
+def record_performance(overwrite=False):
+    today_str = now_kst.strftime('%Y-%m-%d')
     current_kospi = get_live_kospi()
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
     
-    new_data = pd.DataFrame([{
-        "Date": now_kst.strftime('%Y-%m-%d'),
+    new_row = {
+        "Date": today_str,
         "KOSPI": current_kospi,
         "서은수익률": acc_sum.get('서은투자', 0),
         "서희수익률": acc_sum.get('서희투자', 0),
         "큰스님수익률": acc_sum.get('큰스님투자', 0)
-    }])
+    }
     
     try:
-        updated_df = pd.concat([history_df, new_data], ignore_index=True)
+        if overwrite:
+            # 오늘 날짜를 제외한 나머지 데이터만 필터링
+            updated_df = history_df[history_df['Date'].astype(str) != today_str].copy()
+        else:
+            updated_df = history_df.copy()
+            
+        # 데이터 통합 및 업데이트
+        updated_df = pd.concat([updated_df, pd.DataFrame([new_row])], ignore_index=True)
         conn.update(worksheet=TREND_GID, data=updated_df)
-        st.sidebar.success("✅ 성과가 구글 시트에 기록되었습니다!")
+        st.sidebar.success(f"✅ {'덮어쓰기' if overwrite else '기록'} 완료!")
         st.cache_data.clear()
+        st.rerun()
     except Exception as e:
         st.sidebar.error(f"❌ 기록 실패: {e}")
 
-# 사이드바 버튼
+# --- 사이드바 관리 메뉴 ---
 st.sidebar.header("🕹️ 관리 메뉴")
+
+# 오늘 날짜 기록 존재 여부 확인
+today_str = now_kst.strftime('%Y-%m-%d')
+today_exists = today_str in history_df['Date'].astype(str).values
+
 if st.sidebar.button("🔄 시세 새로고침"):
     st.cache_data.clear()
     st.rerun()
 
-if st.sidebar.button("💾 오늘의 성과 시트에 기록하기"):
-    record_performance()
+if today_exists:
+    st.sidebar.warning(f"⚠️ 오늘은 이미 기록되었습니다.")
+    if st.sidebar.button("♻️ 오늘 데이터 덮어쓰기"):
+        record_performance(overwrite=True)
+else:
+    if st.sidebar.button("💾 오늘의 성과 시트에 기록하기"):
+        record_performance(overwrite=False)
 
 # --- UI 메인 섹션 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
@@ -151,7 +171,6 @@ def render_account_tab(acc_name, tab_obj):
         c2.metric("매입금액", f"{a_buy:,.0f}원")
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
         
-        # 🎯 [수정 완료] .style.format()을 사용하여 에러 해결
         st.dataframe(sub_df[['종목명', '수량', '현재가', '평가금액', '수익률']].style.map(color_positive_negative, subset=['수익률']).format({'현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
 render_account_tab("서은투자", tabs[1])
