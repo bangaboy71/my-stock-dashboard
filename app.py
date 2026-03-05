@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v18.0", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v18.1", layout="wide")
 
 # --- [GID 설정] ---
 STOCKS_GID = "301897027"
@@ -55,6 +55,11 @@ def get_live_kospi():
         return float(soup.find("em", {"id": "now_value"}).text.replace(",", ""))
     except: return 0
 
+def color_positive_negative(v):
+    if isinstance(v, (int, float)):
+        return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
+    return ''
+
 # 데이터 가공
 for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -68,7 +73,6 @@ def record_performance():
     current_kospi = get_live_kospi()
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
     
-    # 새로운 행 데이터 구성 (Date, KOSPI, 서은수익률, 서희수익률, 큰스님수익률 순서)
     new_data = pd.DataFrame([{
         "Date": now_kst.strftime('%Y-%m-%d'),
         "KOSPI": current_kospi,
@@ -78,12 +82,10 @@ def record_performance():
     }])
     
     try:
-        # trend 워크시트의 기존 데이터와 통합
         updated_df = pd.concat([history_df, new_data], ignore_index=True)
-        # 구글 시트에 업데이트 (기존 워크시트 덮어쓰기 방식)
         conn.update(worksheet=TREND_GID, data=updated_df)
         st.sidebar.success("✅ 성과가 구글 시트에 기록되었습니다!")
-        st.cache_data.clear() # 새 데이터를 반영하기 위해 캐시 삭제
+        st.cache_data.clear()
     except Exception as e:
         st.sidebar.error(f"❌ 기록 실패: {e}")
 
@@ -96,7 +98,7 @@ if st.sidebar.button("🔄 시세 새로고침"):
 if st.sidebar.button("💾 오늘의 성과 시트에 기록하기"):
     record_performance()
 
-# --- UI 메인 섹션: v17.0 레이아웃 유지 ---
+# --- UI 메인 섹션 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
@@ -115,12 +117,11 @@ with tabs[0]:
     st.subheader("📑 계좌별 자산 요약")
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
     sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
-    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
-    # 📊 성과 추이 그래프 (시트 데이터 기반)
     if not history_df.empty:
         st.divider()
-        st.subheader("📊 시장 대비 성과 추이 (Sheet 기반)")
+        st.subheader("📊 시장 대비 성과 추이")
         history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
         history_df = history_df.dropna(subset=['Date']).sort_values('Date')
         
@@ -149,7 +150,9 @@ def render_account_tab(acc_name, tab_obj):
         c1.metric("평가액", f"{a_eval:,.0f}원", f"{a_eval-a_buy:+,.0f}원")
         c2.metric("매입금액", f"{a_buy:,.0f}원")
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
-        st.dataframe(sub_df[['종목명', '수량', '현재가', '평가금액', '수익률']].format({'현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+        
+        # 🎯 [수정 완료] .style.format()을 사용하여 에러 해결
+        st.dataframe(sub_df[['종목명', '수량', '현재가', '평가금액', '수익률']].style.map(color_positive_negative, subset=['수익률']).format({'현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
