@@ -3,12 +3,11 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, time, timedelta, timezone
-import plotly.express as px
+from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v17.6", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v17.7", layout="wide")
 
 # --- [GID 설정] ---
 STOCKS_GID = "301897027"
@@ -28,14 +27,18 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # --- [데이터 로드 엔진] ---
 try:
     full_df = conn.read(worksheet=STOCKS_GID, ttl="1m")
-    # 그래프용 데이터는 시트에서 실시간으로 읽어옵니다.
     history_df = conn.read(worksheet=TREND_GID, ttl=0)
 except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [시세 엔진 (현재가 평가용)] ---
-STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
+# --- [시세 엔진 (KRX 종가 기준)] ---
+STOCK_CODES = {
+    "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", 
+    "현대글로비스": "086280", "현대차2우B": "005387", 
+    "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", 
+    "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"
+}
 
 def get_stable_price(name):
     clean_name = str(name).strip().replace(" ", "")
@@ -47,15 +50,16 @@ def get_stable_price(name):
         soup = BeautifulSoup(res.text, 'html.parser')
         price_area = soup.find("div", {"class": "today"})
         return int(price_area.find("span", {"class": "blind"}).text.replace(",", ""))
-    except: return 0
+    except:
+        return 0
 
 def color_positive_negative(v):
     if isinstance(v, (int, float)):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# 현재 시점 자산 가공
-with st.spinner('구글 시트 데이터를 분석 중입니다...'):
+# 데이터 가공
+with st.spinner('구글 시트 데이터를 정밀 분석 중입니다...'):
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     full_df['현재가'] = full_df['종목명'].apply(get_stable_price)
@@ -63,8 +67,9 @@ with st.spinner('구글 시트 데이터를 분석 중입니다...'):
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- UI 메인 섹션 ---
+# --- UI 메인 섹션: v17.0 레이아웃 고수 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
+
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # --- [Tab 0] 총괄 현황 ---
@@ -84,12 +89,12 @@ with tabs[0]:
     sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
     st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
-    # 📊 구글 시트 기반 성과 추이 그래프 (단순화 버전)
+    # 📊 구글 시트 기반 성과 추이 (날짜 전용 X축)
     if not history_df.empty:
         st.divider()
-        st.subheader("📊 시장 대비 성과 추이 (Sheet Data Only)")
+        st.subheader("📊 시장 대비 성과 추이 (날짜 기반)")
         
-        # 데이터 정제 및 날짜 형식 강제
+        # 데이터 정제
         history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
         history_df = history_df.dropna(subset=['Date']).sort_values('Date')
         
@@ -98,31 +103,33 @@ with tabs[0]:
                 history_df[col] = pd.to_numeric(history_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         
         fig_t = go.Figure()
-        
-        # 첫 번째 행 데이터를 기준으로 지수화 (기준점 100)
         bk = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
         
-        # 1. KOSPI 지수 (점선)
+        # 1. KOSPI 지수
         fig_t.add_trace(go.Scatter(x=history_df['Date'], y=(history_df['KOSPI']/bk)*100, 
                                    name='KOSPI 지수', line=dict(dash='dash', color='gray')))
         
-        # 2. 계좌별 수익률 (실선)
+        # 2. 계좌별 수익률
         acc_c = {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}
         for c, clr in acc_c.items():
             if c in history_df.columns:
-                # 시트의 누적 수익률 값을 100 기준으로 환산
                 nv = 100 + history_df[c] - history_df[c].iloc[0]
                 fig_t.add_trace(go.Scatter(x=history_df['Date'], y=nv, name=c.replace('수익률',''), 
-                                           line=dict(color=clr, width=3)))
+                                           line=dict(color=clr, width=3), mode='lines+markers'))
         
-        # 그래프 레이아웃 (사용자 철학 반영: Y축 50~150 고정)
+        # 🎯 [핵심 수정] X축 날짜 포맷 강제 지정 (시간 제외)
+        fig_t.update_xaxes(
+            type='date',
+            tickformat='%Y-%m-%d',  # 연-월-일만 표시
+            dtick="D1",             # 1일 단위 표시 (필요시 조정 가능)
+            gridcolor="rgba(255,255,255,0.05)"
+        )
+        
         fig_t.update_layout(
             yaxis=dict(title="상대 수익률 (100 기준)", range=[50, 150], gridcolor="rgba(255,255,255,0.05)"),
             hovermode="x unified",
             height=450, 
-            plot_bgcolor='rgba(0,0,0,0)', 
-            paper_bgcolor='rgba(0,0,0,0)', 
-            font_color="white", 
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         st.plotly_chart(fig_t, use_container_width=True)
@@ -145,4 +152,4 @@ render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | 시트 데이터 기반")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | 가로축 날짜 최적화")
