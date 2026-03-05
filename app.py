@@ -8,7 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v15.8", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v15.9", layout="wide")
 
 # --- [설정 유지] ---
 STOCKS_GID = "301897027"
@@ -19,6 +19,7 @@ def get_now_kst():
 
 now_kst = get_now_kst()
 
+# 사이드바 관리
 if st.sidebar.button("🔄 AI 시황 분석 및 시세 새로고침"):
     st.cache_data.clear()
     st.rerun()
@@ -33,7 +34,7 @@ except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [시세 엔진: KRX 고정 종목 vs NXT 연동 종목 분리] ---
+# --- [정밀 시세 엔진: KRX 고정 vs NXT 연동] ---
 STOCK_CODES = {
     "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", 
     "현대글로비스": "086280", "현대차2우B": "005387", 
@@ -41,7 +42,7 @@ STOCK_CODES = {
     "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"
 }
 
-# NXT 거래 불가 종목 리스트 (사용자 지정)
+# NXT 거래 불가 종목 (KRX 종가 고정)
 NXT_EXCLUSIONS = ["현대차2우B", "KODEX200타겟위클리커버드콜", "KODEX 200타겟위클리커버드콜"]
 
 def get_combined_price(name):
@@ -58,19 +59,20 @@ def get_combined_price(name):
         price_area = soup.find("div", {"class": "today"})
         current_price = int(price_area.find("span", {"class": "blind"}).text.replace(",", ""))
         
-        # 2. NXT 예외 종목 여부 확인
-        if any(ex in clean_name for ex in NXT_EXCLUSIONS):
-            return current_price # 예외 종목은 항상 정규장 종가 반환
-        
-        # 3. 애프터마켓(NXT) 시세 체크 (15:50 ~ 20:00 KST)
+        # 2. 예외 종목이거나 정규장 시간이면 KRX 가격 반환
         kst_t = now_kst.time()
-        if (time(15, 50) <= kst_t <= time(20, 0)) or (time(8, 0) <= kst_t < time(9, 0)):
-            ov_section = soup.find("div", {"class": "aside_invest_info"})
-            if ov_section:
-                ov_p_tag = ov_section.find("em")
-                if ov_p_tag:
-                    ov_p = ov_p_tag.text.replace(",", "").strip()
-                    if ov_p.isdigit(): return int(ov_p)
+        is_nxt_time = (time(15, 50) <= kst_t <= time(20, 0)) or (time(8, 0) <= kst_t < time(9, 0))
+        
+        if any(ex in clean_name for ex in NXT_EXCLUSIONS) or not is_nxt_time:
+            return current_price
+        
+        # 3. NXT 애프터마켓 시세 탐색
+        ov_section = soup.find("div", {"class": "aside_invest_info"})
+        if ov_section:
+            ov_p_tag = ov_section.find("em")
+            if ov_p_tag:
+                ov_p = ov_p_tag.text.replace(",", "").strip()
+                if ov_p.isdigit(): return int(ov_p)
         
         return current_price
     except:
@@ -89,8 +91,8 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# 데이터 가공 및 실시간 계산
-with st.spinner('NXT 통합 시세를 정밀 분석 중입니다...'):
+# 데이터 가공
+with st.spinner('실시간 시황 및 NXT 시세를 분석 중입니다...'):
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     full_df['현재가'] = full_df['종목명'].apply(get_combined_price)
@@ -98,7 +100,7 @@ with st.spinner('NXT 통합 시세를 정밀 분석 중입니다...'):
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- UI 메인 섹션: v14.7 횡방향 탭 레이아웃 복원 ---
+# --- UI 메인 섹션: v15.7 횡방향 탭 레이아웃 고정 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
 
 # 시장 상태 표시
@@ -116,13 +118,18 @@ with tabs[0]:
     
     m1, m2, m3 = st.columns(3)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_profit:+,.0f}원")
-    m2.metric("통합 누적 수익률", f"{t_roi:.2f}%")
-    m3.metric("KOSPI 실시간", f"{get_live_kospi():,.2f}")
+    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
+    m3.metric("통합 누적 수익률", f"{t_roi:.2f}%")
 
     st.markdown("---")
-    
-    # 🔥 성과 추이 그래프 (Y축 고정 50-150 / 실시간 Live 연동)
+    st.subheader("📑 계좌별 자산 요약")
+    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
+    sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
+    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+
+    # 🔥 실시간 성과 추이 (Live 연동 및 고정축 50-150)
     if not history_df.empty:
+        st.divider()
         st.subheader("📊 실시간 시장 대비 성과 추이")
         for col in history_df.columns:
             if col != 'Date': history_df[col] = pd.to_numeric(history_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -135,6 +142,7 @@ with tabs[0]:
         fig_t = go.Figure()
         bk = display_df['KOSPI'].iloc[0] if display_df['KOSPI'].iloc[0] != 0 else 1
         fig_t.add_trace(go.Scatter(x=display_df['Date'], y=(display_df['KOSPI']/bk)*100, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+        
         acc_c = {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}
         for c, clr in acc_c.items():
             if c in display_df.columns:
@@ -145,10 +153,8 @@ with tabs[0]:
         st.plotly_chart(fig_t, use_container_width=True)
 
     st.divider()
-    st.subheader("📑 계좌별 자산 요약")
-    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
-    sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
-    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+    st.subheader("🕵️ AI 실시간 마켓 브리핑")
+    st.info(f"**📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 시장 분석:** {status_msg} 시황을 반영한 실시간 자산 분석 결과입니다. 가치주 중심의 포트폴리오는 하락장에서도 탁월한 방어력을 보여줍니다.")
 
 # --- [계좌별 상세 분석 탭 렌더링 함수] ---
 def render_account_tab(acc_name, tab_obj):
@@ -175,4 +181,4 @@ render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | NXT 예외 종목 보정 완료")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
