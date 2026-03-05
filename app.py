@@ -8,7 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v15.7", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v15.8", layout="wide")
 
 # --- [설정 유지] ---
 STOCKS_GID = "301897027"
@@ -33,7 +33,7 @@ except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [통합 시세 엔진: 정규장 + NXT 애프터마켓] ---
+# --- [시세 엔진: KRX 고정 종목 vs NXT 연동 종목 분리] ---
 STOCK_CODES = {
     "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", 
     "현대글로비스": "086280", "현대차2우B": "005387", 
@@ -41,15 +41,28 @@ STOCK_CODES = {
     "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"
 }
 
+# NXT 거래 불가 종목 리스트 (사용자 지정)
+NXT_EXCLUSIONS = ["현대차2우B", "KODEX200타겟위클리커버드콜", "KODEX 200타겟위클리커버드콜"]
+
 def get_combined_price(name):
-    code = STOCK_CODES.get(str(name).strip().replace(" ", ""))
+    clean_name = str(name).strip().replace(" ", "")
+    code = STOCK_CODES.get(clean_name)
     if not code: return 0
+    
     url = f"https://finance.naver.com/item/main.naver?code={code}"
     try:
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 1. 애프터마켓(NXT) 시세 체크 (15:50 ~ 20:00 KST)
+        # 1. 기본 정규장 가격 (KRX)
+        price_area = soup.find("div", {"class": "today"})
+        current_price = int(price_area.find("span", {"class": "blind"}).text.replace(",", ""))
+        
+        # 2. NXT 예외 종목 여부 확인
+        if any(ex in clean_name for ex in NXT_EXCLUSIONS):
+            return current_price # 예외 종목은 항상 정규장 종가 반환
+        
+        # 3. 애프터마켓(NXT) 시세 체크 (15:50 ~ 20:00 KST)
         kst_t = now_kst.time()
         if (time(15, 50) <= kst_t <= time(20, 0)) or (time(8, 0) <= kst_t < time(9, 0)):
             ov_section = soup.find("div", {"class": "aside_invest_info"})
@@ -59,13 +72,9 @@ def get_combined_price(name):
                     ov_p = ov_p_tag.text.replace(",", "").strip()
                     if ov_p.isdigit(): return int(ov_p)
         
-        # 2. 기본 정규장 가격 (NXT 데이터가 없거나 정규장 시간일 경우)
-        price_area = soup.find("div", {"class": "today"})
-        if price_area:
-            return int(price_area.find("span", {"class": "blind"}).text.replace(",", ""))
+        return current_price
     except:
         return 0
-    return 0
 
 def get_live_kospi():
     try:
@@ -81,7 +90,7 @@ def color_positive_negative(v):
     return ''
 
 # 데이터 가공 및 실시간 계산
-with st.spinner('실시간 시황 및 NXT 시세를 동기화 중입니다...'):
+with st.spinner('NXT 통합 시세를 정밀 분석 중입니다...'):
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     full_df['현재가'] = full_df['종목명'].apply(get_combined_price)
@@ -89,12 +98,12 @@ with st.spinner('실시간 시황 및 NXT 시세를 동기화 중입니다...'):
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- UI 메인 섹션: v14.7 횡방향 탭 레이아웃 복구 ---
+# --- UI 메인 섹션: v14.7 횡방향 탭 레이아웃 복원 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
 
 # 시장 상태 표시
 kst_t = now_kst.time()
-status_msg = "☀️ 정규장 거래 중" if time(9,0) <= kst_t <= time(15,30) else "🌙 NXT/시간외 거래 중" if time(8,0) <= kst_t <= time(20,0) else "💤 시장 마감"
+status_msg = "☀️ 정규장 거래 중" if time(9,0) <= kst_t <= time(15,30) else "🌙 NXT 애프터마켓 가동 중" if time(15,50) <= kst_t <= time(20,0) else "💤 시장 마감"
 st.sidebar.info(f"{status_msg} ({now_kst.strftime('%H:%M')})")
 
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
@@ -107,18 +116,13 @@ with tabs[0]:
     
     m1, m2, m3 = st.columns(3)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_profit:+,.0f}원")
-    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    m3.metric("통합 누적 수익률", f"{t_roi:.2f}%")
+    m2.metric("통합 누적 수익률", f"{t_roi:.2f}%")
+    m3.metric("KOSPI 실시간", f"{get_live_kospi():,.2f}")
 
     st.markdown("---")
-    st.subheader("📑 계좌별 자산 요약")
-    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
-    sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
-    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
-
-    # 🔥 실시간 성과 추이 (Y축 고정 50-150 / 실시간 Live 연동)
+    
+    # 🔥 성과 추이 그래프 (Y축 고정 50-150 / 실시간 Live 연동)
     if not history_df.empty:
-        st.divider()
         st.subheader("📊 실시간 시장 대비 성과 추이")
         for col in history_df.columns:
             if col != 'Date': history_df[col] = pd.to_numeric(history_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -141,8 +145,10 @@ with tabs[0]:
         st.plotly_chart(fig_t, use_container_width=True)
 
     st.divider()
-    st.subheader("🕵️ AI 실시간 마켓 브리핑")
-    st.info(f"**📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 시장 리포트:** {status_msg} 시황을 반영 중입니다. 사용자님의 가치주 포트폴리오는 시장 변동성에도 불구하고 견고한 하방 경직성을 보여주고 있습니다.")
+    st.subheader("📑 계좌별 자산 요약")
+    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
+    sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
+    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
 # --- [계좌별 상세 분석 탭 렌더링 함수] ---
 def render_account_tab(acc_name, tab_obj):
@@ -164,13 +170,9 @@ def render_account_tab(acc_name, tab_obj):
             st.plotly_chart(fig_b, use_container_width=True)
         
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '평가금액', '손익', '수익률']].style.map(color_positive_negative, subset=['손익', '수익률']).format({'매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
-        
-        st.divider()
-        st.subheader(f"🔍 {acc_name} AI 맞춤 진단")
-        st.success(f"현재 {acc_name} 계좌의 보유 종목들은 실시간 시장 흐름을 안정적으로 반영하고 있습니다.")
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | NXT 예외 종목 보정 완료")
