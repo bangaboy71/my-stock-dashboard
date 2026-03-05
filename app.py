@@ -6,9 +6,10 @@ from bs4 import BeautifulSoup
 from datetime import datetime, time, timedelta, timezone
 import plotly.express as px
 import plotly.graph_objects as go
+import re
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v16.2", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v16.3", layout="wide")
 
 # --- [설정 유지] ---
 STOCKS_GID = "301897027"
@@ -33,7 +34,7 @@ except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [정밀 시세 엔진: KRX 종가 vs 순수 NXT 실시간] ---
+# --- [정밀 시세 엔진: KRX 종가 vs 'after' 실시간] ---
 STOCK_CODES = {
     "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", 
     "현대글로비스": "086280", "현대차2우B": "005387", 
@@ -44,7 +45,7 @@ STOCK_CODES = {
 # NXT 거래 불가 종목 (KRX 종가 고정)
 NXT_EXCLUSIONS = ["현대차2우B", "KODEX200타겟위클리커버드콜", "KODEX 200타겟위클리커버드콜"]
 
-def get_pure_nxt_price(name):
+def get_after_market_price(name):
     clean_name = str(name).strip().replace(" ", "")
     code = STOCK_CODES.get(clean_name)
     if not code: return 0
@@ -60,26 +61,34 @@ def get_pure_nxt_price(name):
         
         # 2. NXT 거래 시간 및 종목 필터링
         kst_t = now_kst.time()
-        # NXT 가동 시간: 08:00~08:50 (프리), 09:00~15:30 (정규), 15:50~20:00 (애프터)
-        is_nxt_active = (time(8, 0) <= kst_t < time(9, 0)) or (time(15, 50) <= kst_t <= time(20, 0))
+        is_nxt_active = (time(15, 50) <= kst_t <= time(20, 0)) or (time(8, 0) <= kst_t < time(9, 0))
         
         if any(ex in clean_name for ex in NXT_EXCLUSIONS) or not is_nxt_active:
             return krx_price
         
-        # 3. [순수 NXT/ATS] 시세 영역 추출
-        # 2026년 네이버 금융은 NXT(ATS) 전용 시세 영역을 별도 클래스로 운영합니다.
-        # 시간외 단일가와 구분된 '실시간 ATS' 가격을 가져옵니다.
-        ats_area = soup.select_one(".aside_invest_info .no_today")
-        if ats_area:
-            # ATS 시세는 보통 'ATS' 라벨과 함께 표기됩니다.
-            # 여기서는 실시간으로 변하는 최상단 em 수치를 가져옵니다.
-            nxt_val = ats_area.find("em").text.replace(",", "").strip()
-            if nxt_val.isdigit():
-                return int(nxt_val)
+        # 3. [정밀 타겟] 우측 사이드바 'after' 라벨 뒤의 수치 추출
+        # 사이드바 전체를 훑으며 'after' 텍스트를 포함한 요소를 찾습니다.
+        aside = soup.select_one(".aside_invest_info")
+        if aside:
+            # 'after' 텍스트를 포함한 태그 찾기
+            after_tag = aside.find(string=re.compile("after", re.I))
+            if after_tag:
+                # 해당 태그의 부모나 형제 요소에서 숫자만 추출
+                parent_text = after_tag.find_parent().get_text(strip=True)
+                # 'after' 단어 뒤의 숫자만 필터링 (예: after 72,500 -> 72500)
+                price_match = re.search(r'after\s*([\d,]+)', parent_text, re.I)
+                if price_match:
+                    return int(price_match.group(1).replace(",", ""))
+                
+                # 대안: 'after' 태그 근처의 em이나 span에서 숫자 찾기
+                for sibling in after_tag.find_parent().find_all(['em', 'span']):
+                    s_text = sibling.get_text(strip=True).replace(",", "")
+                    if s_text.isdigit():
+                        return int(s_text)
         
         return krx_price
     except:
-        return 0
+        return krx_price
 
 def get_live_kospi():
     try:
@@ -95,15 +104,15 @@ def color_positive_negative(v):
     return ''
 
 # 데이터 가공
-with st.spinner('순수 NXT 실시간 시세를 동기화 중입니다...'):
+with st.spinner("'after' 실시간 시세를 정밀 추적 중입니다..."):
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    full_df['현재가'] = full_df['종목명'].apply(get_pure_nxt_price)
+    full_df['현재가'] = full_df['종목명'].apply(get_after_market_price)
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- UI 메인 섹션: 4단 가로 탭 형식 유지 ---
+# --- UI 메인 섹션: v15.7 기반 4단 가로 탭 형식 고정 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
 
 # 시장 상태 표시
@@ -121,8 +130,8 @@ with tabs[0]:
     
     m1, m2, m3 = st.columns(3)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_profit:+,.0f}원")
-    m2.metric("통합 누적 수익률", f"{t_roi:.2f}%")
-    m3.metric("KOSPI 실시간", f"{get_live_kospi():,.2f}")
+    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
+    m3.metric("통합 누적 수익률", f"{t_roi:.2f}%")
 
     st.markdown("---")
     st.subheader("📑 계좌별 자산 요약")
@@ -157,7 +166,7 @@ with tabs[0]:
 
     st.divider()
     st.subheader("🕵️ AI 실시간 마켓 브리핑")
-    st.info(f"**📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 시장 리포트:** {status_msg} 시황을 반영 중입니다. 순수 NXT 실시간 거래가를 기반으로 자산을 정밀 평가하고 있습니다.")
+    st.info(f"**📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 시장 리포트:** 'after' 전용 시세를 반영한 실시간 결과입니다. 가치주 포트폴리오의 안정성이 장외에서도 돋보입니다.")
 
 # --- [계좌별 상세 분석 탭 렌더링 함수] ---
 def render_account_tab(acc_name, tab_obj):
