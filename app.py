@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v18.5", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v19.0", layout="wide")
 
 # --- [시트 탭 이름 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -74,7 +74,6 @@ def record_performance(overwrite=False):
     current_kospi = get_live_kospi()
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
     
-    # 🎯 명칭 통일: '큰스님수익률'로 기록합니다.
     new_row = {
         "Date": today_str,
         "KOSPI": current_kospi,
@@ -134,7 +133,6 @@ with tabs[0]:
     sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
     st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
-    # 📊 그래프 영역
     if not history_df.empty:
         st.divider()
         st.subheader("📊 시장 대비 성과 추이")
@@ -145,7 +143,6 @@ with tabs[0]:
         bk = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
         fig_t.add_trace(go.Scatter(x=history_df['Date'], y=(history_df['KOSPI']/bk)*100, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
         
-        # 🎯 명칭 통일: '큰스님수익률'을 그래프에서 찾습니다.
         acc_c = {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}
         for c, clr in acc_c.items():
             if c in history_df.columns:
@@ -155,10 +152,6 @@ with tabs[0]:
         fig_t.update_xaxes(type='date', tickformat='%Y-%m-%d')
         fig_t.update_layout(yaxis=dict(title="상대 수익률 (100 기준)", range=[50, 150]), hovermode="x unified", height=450, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_t, use_container_width=True)
-
-    st.divider()
-    st.subheader("🕵️ AI 실시간 마켓 브리핑")
-    st.info(f"**📅 {now_kst.strftime('%Y-%m-%d')} 리포트:** 안정적인 복리 효과가 시각적으로 확인되고 있습니다.")
 
 # --- [계좌별 상세 분석 탭] ---
 def render_account_tab(acc_name, tab_obj):
@@ -172,14 +165,15 @@ def render_account_tab(acc_name, tab_obj):
         c2.metric("매입금액", f"{a_buy:,.0f}원")
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
         
-        st.dataframe(sub_df[['종목명', '수량', '현재가', '평가금액', '수익률']].style.map(color_positive_negative, subset=['수익률']).format({'현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+        # 🎯 [수정] '매입단가' 컬럼을 추가하고 포맷팅을 적용했습니다.
+        st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '평가금액', '수익률']].style.map(color_positive_negative, subset=['수익률']).format({'매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
         
         st.divider()
         st.subheader(f"🔍 {acc_name} AI 맞춤 진단")
-        st.success(f"{acc_name} 포트폴리오는 현재 매우 견고한 흐름을 유지 중입니다.")
+        st.success(f"현재 {acc_name} 포트폴리오는 시장 대비 견고한 흐름을 유지 중입니다.")
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v18.5 명칭 통합 완료")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v19.0 매입단가 표기 완료")
