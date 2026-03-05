@@ -11,10 +11,11 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="가족 통합 자산 관제탑 v14.7", layout="wide")
 
 # --- [설정 유지] ---
-STOCKS_GID = "301897027"
-TREND_GID = "1055700982"
+STOCKS_GID = "301897027"   # 종목 탭 GID
+TREND_GID = "1055700982"  # 트렌드 데이터 탭 GID
 
 def get_now_kst():
+    # 한국 시간(KST) 강제 설정
     return datetime.now(timezone(timedelta(hours=9)))
 
 now_kst = get_now_kst()
@@ -36,7 +37,7 @@ except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [시세 엔진] ---
+# --- [시세 엔진 (KRX + NXT 통합)] ---
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
 
 def get_combined_price(name):
@@ -48,7 +49,7 @@ def get_combined_price(name):
         soup = BeautifulSoup(res.text, 'html.parser')
         price = int(soup.find("div", {"class": "today"}).find("span", {"class": "blind"}).text.replace(",", ""))
         
-        # NXT/시간외 시세 보정 로직
+        # NXT/시간외 시세 보정 로직 (08:00~09:00, 15:50~20:00)
         kst_t = now_kst.time()
         if kst_t < time(9, 0) or kst_t > time(15, 30):
             ov_section = soup.find("div", {"class": "aside_invest_info"})
@@ -63,7 +64,7 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# 데이터 가공
+# 데이터 가공 및 계산
 with st.spinner('실시간 시장 데이터를 분석 중입니다...'):
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -72,10 +73,10 @@ with st.spinner('실시간 시장 데이터를 분석 중입니다...'):
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- UI 메인 섹션 ---
+# --- UI 메인 섹션: 횡방향 탭 구성 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
 
-# 시장 상태 표시
+# 시장 상태 표시 (사이드바)
 kst_t = now_kst.time()
 status_msg = "☀️ 정규장 거래 중" if time(9,0) <= kst_t <= time(15,30) else "🌙 NXT/시간외 거래 중" if time(8,0) <= kst_t <= time(20,0) else "💤 시장 마감"
 st.sidebar.info(f"{status_msg} ({now_kst.strftime('%H:%M')})")
@@ -101,18 +102,37 @@ with tabs[0]:
 
     if not history_df.empty:
         st.divider()
-        st.subheader("📊 시장 대비 성과 추이 (KOSPI vs 전 계좌)")
+        st.subheader("📊 시장 대비 성과 추이 (KOSPI vs 포트폴리오)")
         for col in history_df.columns:
             if col != 'Date': history_df[col] = pd.to_numeric(history_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        
         fig_t = go.Figure()
         bk = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
+        
+        # KOSPI 배경
         fig_t.add_trace(go.Scatter(x=history_df['Date'], y=(history_df['KOSPI']/bk)*100, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+        
+        # 계좌별 수익률 곡선
         acc_c = {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}
         for c, clr in acc_c.items():
             if c in history_df.columns:
                 nv = 100 + history_df[c] - history_df[c].iloc[0]
                 fig_t.add_trace(go.Scatter(x=history_df['Date'], y=nv, name=c.replace('수익률',''), line=dict(color=clr, width=3)))
-        fig_t.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        
+        # 🎯 [요청 반영] 세로축 범위 고정 (50 ~ 150)
+        fig_t.update_layout(
+            yaxis=dict(
+                title="상대 수익률 (100 기준)",
+                range=[50, 150], # 심리적 마지노선 및 목표치 설정
+                gridcolor="rgba(255,255,255,0.05)"
+            ),
+            hovermode="x unified",
+            height=450, 
+            plot_bgcolor='rgba(0,0,0,0)', 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            font_color="white", 
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
         st.plotly_chart(fig_t, use_container_width=True)
 
     # --- [총괄 전용 AI 평론] ---
@@ -121,12 +141,12 @@ with tabs[0]:
     st.info(f"""
     **📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 시장 동향 리포트**
     
-    * **시장 전반:** 어제의 급락 이후 기관 매수세 유입으로 지수 방어선 구축 중입니다. 코스피 5100선 회복 여부가 관건입니다.
-    * **주도주 및 특이사항:** 삼성전자 등 반도체 대형주가 지수를 견인 중이며, NXT 거래 유동성이 배당주 섹터의 하방 경직성을 강화하고 있습니다.
-    * **종합 자문:** 변동성이 크지만 사용자님의 가치주 중심 포트폴리오는 시장 대비 견고한 방어력을 보여주고 있습니다.
+    * **시장 전반:** 변동성이 큰 구간이지만 기관의 하방 지지선 구축 노력이 보입니다. KOSPI 기준 주요 저항선 돌파 여부가 핵심입니다.
+    * **주도주 및 특이사항:** 삼성전자 등 시총 상위주가 지수를 방어 중이며, 배당주 섹터는 여전히 강력한 현금 흐름 매력을 보유하고 있습니다.
+    * **종합 자문:** 고정된 시각(50~150) 내에서 자산의 장기적 우상향을 관찰하며 평정심을 유지하는 전략이 주효합니다.
     """)
 
-# --- [계좌별 상세 분석 탭] ---
+# --- [계좌별 상세 분석 탭 렌더링 함수] ---
 def render_account_tab(acc_name, tab_obj):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
@@ -141,10 +161,10 @@ def render_account_tab(acc_name, tab_obj):
         c3.metric("누적 수익률", f"{a_roi:.2f}%")
         
         col_l, col_r = st.columns(2)
-        with col_l: st.plotly_chart(px.pie(sub_df, values='평가금액', names='종목명', hole=0.4, title="종목 비중", color_discrete_sequence=px.colors.sequential.Blues_r), use_container_width=True)
+        with col_l: st.plotly_chart(px.pie(sub_df, values='평가금액', names='종목명', hole=0.4, title=f"[{acc_name}] 종목 비중", color_discrete_sequence=px.colors.sequential.Blues_r), use_container_width=True)
         with col_r:
             m = max(abs(sub_df['수익률']).max(), 1)
-            fig_b = px.bar(sub_df.sort_values('수익률'), x='수익률', y='종목명', orientation='h', title="종목별 수익률", color='수익률', color_continuous_scale=[[0, '#87CEEB'], [0.5, '#FFFFFF'], [1, '#FF4B4B']], range_color=[-m, m])
+            fig_b = px.bar(sub_df.sort_values('수익률'), x='수익률', y='종목명', orientation='h', title=f"[{acc_name}] 종목별 수익률", color='수익률', color_continuous_scale=[[0, '#87CEEB'], [0.5, '#FFFFFF'], [1, '#FF4B4B']], range_color=[-m, m])
             st.plotly_chart(fig_b, use_container_width=True)
         
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '평가금액', '손익', '수익률']].style.map(color_positive_negative, subset=['손익', '수익률']).format({'매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
@@ -159,6 +179,7 @@ def render_account_tab(acc_name, tab_obj):
         ai_msg += "현재의 포트폴리오 구성은 장기적인 관점에서 시장 수익률을 상회할 수 있는 안정적인 구조를 갖추고 있습니다."
         st.success(ai_msg)
 
+# 탭 실행
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
