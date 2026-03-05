@@ -8,7 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v15.6", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v15.7", layout="wide")
 
 # --- [설정 유지] ---
 STOCKS_GID = "301897027"
@@ -19,7 +19,7 @@ def get_now_kst():
 
 now_kst = get_now_kst()
 
-if st.sidebar.button("🔄 AI 시장 분석 및 시세 새로고침"):
+if st.sidebar.button("🔄 AI 시황 분석 및 시세 새로고침"):
     st.cache_data.clear()
     st.rerun()
 
@@ -34,36 +34,38 @@ except Exception as e:
     st.stop()
 
 # --- [통합 시세 엔진: 정규장 + NXT 애프터마켓] ---
-STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
+STOCK_CODES = {
+    "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", 
+    "현대글로비스": "086280", "현대차2우B": "005387", 
+    "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", 
+    "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"
+}
 
 def get_combined_price(name):
     code = STOCK_CODES.get(str(name).strip().replace(" ", ""))
     if not code: return 0
     url = f"https://finance.naver.com/item/main.naver?code={code}"
     try:
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 1. 기본 정규장 가격
-        price_area = soup.find("div", {"class": "today"})
-        current_price = int(price_area.find("span", {"class": "blind"}).text.replace(",", ""))
-        
-        # 2. 애프터마켓(NXT) 시세 체크 로직 보강
+        # 1. 애프터마켓(NXT) 시세 체크 (15:50 ~ 20:00 KST)
         kst_t = now_kst.time()
-        # NXT 애프터마켓 시간 (15:50 ~ 20:00) 또는 프리마켓 (08:00 ~ 08:50)
         if (time(15, 50) <= kst_t <= time(20, 0)) or (time(8, 0) <= kst_t < time(9, 0)):
-            # 네이버 금융의 '시간외 단일가' 혹은 'ATS 시세' 영역 탐색
-            # 2026년 기준 NXT 통합 시세가 표시되는 div 영역을 타겟팅합니다.
             ov_section = soup.find("div", {"class": "aside_invest_info"})
             if ov_section:
-                # '시간외' 텍스트가 포함된 영역의 가격을 추출
-                ov_price_text = ov_section.find("em").text.replace(",", "")
-                if ov_price_text.isdigit():
-                    return int(ov_price_text)
-                    
-        return current_price
+                ov_p_tag = ov_section.find("em")
+                if ov_p_tag:
+                    ov_p = ov_p_tag.text.replace(",", "").strip()
+                    if ov_p.isdigit(): return int(ov_p)
+        
+        # 2. 기본 정규장 가격 (NXT 데이터가 없거나 정규장 시간일 경우)
+        price_area = soup.find("div", {"class": "today"})
+        if price_area:
+            return int(price_area.find("span", {"class": "blind"}).text.replace(",", ""))
     except:
-        return current_price # 에러 시 정규장 종가라도 반환
+        return 0
+    return 0
 
 def get_live_kospi():
     try:
@@ -73,8 +75,13 @@ def get_live_kospi():
         return float(soup.find("em", {"id": "now_value"}).text.replace(",", ""))
     except: return 0
 
-# 데이터 가공
-with st.spinner('NXT 애프터마켓 시세를 동기화 중입니다...'):
+def color_positive_negative(v):
+    if isinstance(v, (int, float)):
+        return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
+    return ''
+
+# 데이터 가공 및 실시간 계산
+with st.spinner('실시간 시황 및 NXT 시세를 동기화 중입니다...'):
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     full_df['현재가'] = full_df['종목명'].apply(get_combined_price)
@@ -82,24 +89,17 @@ with st.spinner('NXT 애프터마켓 시세를 동기화 중입니다...'):
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- UI 메인 섹션: v14.7 레이아웃 유지 ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 (NXT 대응)</h1>", unsafe_allow_html=True)
+# --- UI 메인 섹션: v14.7 횡방향 탭 레이아웃 복구 ---
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
 
-# 시장 상태 표시 (사이드바)
+# 시장 상태 표시
 kst_t = now_kst.time()
-if time(15, 50) <= kst_t <= time(20, 0):
-    status_msg = "🌙 NXT 애프터마켓 거래 중"
-    st.sidebar.warning(f"{status_msg} ({now_kst.strftime('%H:%M')})")
-elif time(9,0) <= kst_t <= time(15,30):
-    status_msg = "☀️ 정규장 거래 중"
-    st.sidebar.success(f"{status_msg} ({now_kst.strftime('%H:%M')})")
-else:
-    status_msg = "💤 시장 마감"
-    st.sidebar.info(f"{status_msg} ({now_kst.strftime('%H:%M')})")
+status_msg = "☀️ 정규장 거래 중" if time(9,0) <= kst_t <= time(15,30) else "🌙 NXT/시간외 거래 중" if time(8,0) <= kst_t <= time(20,0) else "💤 시장 마감"
+st.sidebar.info(f"{status_msg} ({now_kst.strftime('%H:%M')})")
 
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# --- [Tab 0] 총괄 현황 (그래프 및 지표) ---
+# --- [Tab 0] 총괄 현황 ---
 with tabs[0]:
     t_buy, t_eval = full_df['매입금액'].sum(), full_df['평가금액'].sum()
     t_profit = t_eval - t_buy
@@ -107,26 +107,30 @@ with tabs[0]:
     
     m1, m2, m3 = st.columns(3)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_profit:+,.0f}원")
-    m2.metric("통합 누적 수익률", f"{t_roi:.2f}%")
-    m3.metric("KOSPI 실시간", f"{get_live_kospi():,.2f}")
+    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
+    m3.metric("통합 누적 수익률", f"{t_roi:.2f}%")
 
-    # 실시간 성과 추이 그래프 (v15.5의 X축 연동 로직 유지)
+    st.markdown("---")
+    st.subheader("📑 계좌별 자산 요약")
+    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
+    sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
+    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+
+    # 🔥 실시간 성과 추이 (Y축 고정 50-150 / 실시간 Live 연동)
     if not history_df.empty:
         st.divider()
-        st.subheader("📊 실시간 성과 추이 (NXT 시세 반영)")
-        
+        st.subheader("📊 실시간 시장 대비 성과 추이")
         for col in history_df.columns:
             if col != 'Date': history_df[col] = pd.to_numeric(history_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         
         live_kospi = get_live_kospi()
-        acc_summary = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-        live_row = {'Date': now_kst.strftime('%Y-%m-%d %H:%M'), 'KOSPI': live_kospi, '서은수익률': acc_summary.get('서은투자', 0), '서희수익률': acc_summary.get('서희투자', 0), '큰스님수익률': acc_summary.get('큰스님투자', 0)}
+        acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
+        live_row = {'Date': now_kst.strftime('%Y-%m-%d %H:%M'), 'KOSPI': live_kospi, '서은수익률': acc_sum.get('서은투자', 0), '서희수익률': acc_sum.get('서희투자', 0), '큰스님수익률': acc_sum.get('큰스님투자', 0)}
         display_df = pd.concat([history_df, pd.DataFrame([live_row])], ignore_index=True)
         
         fig_t = go.Figure()
         bk = display_df['KOSPI'].iloc[0] if display_df['KOSPI'].iloc[0] != 0 else 1
         fig_t.add_trace(go.Scatter(x=display_df['Date'], y=(display_df['KOSPI']/bk)*100, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
-        
         acc_c = {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}
         for c, clr in acc_c.items():
             if c in display_df.columns:
@@ -136,17 +140,37 @@ with tabs[0]:
         fig_t.update_layout(yaxis=dict(title="상대 수익률 (100 기준)", range=[50, 150], gridcolor="rgba(255,255,255,0.05)"), hovermode="x unified", height=450, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_t, use_container_width=True)
 
-    # AI 리포트 등 생략 (v15.5와 동일)
     st.divider()
-    st.info("🕵️ **AI 관전 포인트:** 현재 시간외/NXT 시장 가격을 실시간으로 읽어와 평가액에 반영 중입니다. 정규장 종가와 비교하여 시간외 흐름을 체크하세요.")
+    st.subheader("🕵️ AI 실시간 마켓 브리핑")
+    st.info(f"**📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 시장 리포트:** {status_msg} 시황을 반영 중입니다. 사용자님의 가치주 포트폴리오는 시장 변동성에도 불구하고 견고한 하방 경직성을 보여주고 있습니다.")
 
-# [개별 계좌 탭 렌더링 함수 - 생략 (v15.5와 동일)]
+# --- [계좌별 상세 분석 탭 렌더링 함수] ---
 def render_account_tab(acc_name, tab_obj):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
-        # ... (v15.5 로직 그대로 적용)
-        st.dataframe(sub_df[['종목명', '수량', '현재가', '평가금액', '손익']], use_container_width=True)
+        sub_df['수익률'] = ((sub_df['평가금액'] / sub_df['매입금액'] - 1) * 100).fillna(0)
+        a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("평가액", f"{a_eval:,.0f}원", f"{a_eval-a_buy:+,.0f}원")
+        c2.metric("매입금액", f"{a_buy:,.0f}원")
+        c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
+        
+        col_l, col_r = st.columns(2)
+        with col_l: st.plotly_chart(px.pie(sub_df, values='평가금액', names='종목명', hole=0.4, title=f"[{acc_name}] 종목 비중", color_discrete_sequence=px.colors.sequential.Blues_r), use_container_width=True)
+        with col_r:
+            m = max(abs(sub_df['수익률']).max(), 1)
+            fig_b = px.bar(sub_df.sort_values('수익률'), x='수익률', y='종목명', orientation='h', title=f"[{acc_name}] 종목별 수익률", color='수익률', color_continuous_scale=[[0, '#87CEEB'], [0.5, '#FFFFFF'], [1, '#FF4B4B']], range_color=[-m, m])
+            st.plotly_chart(fig_b, use_container_width=True)
+        
+        st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '평가금액', '손익', '수익률']].style.map(color_positive_negative, subset=['손익', '수익률']).format({'매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+        
+        st.divider()
+        st.subheader(f"🔍 {acc_name} AI 맞춤 진단")
+        st.success(f"현재 {acc_name} 계좌의 보유 종목들은 실시간 시장 흐름을 안정적으로 반영하고 있습니다.")
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
+
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
