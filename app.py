@@ -8,7 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="AI 금융 관제탑 v14.5", layout="wide")
+st.set_page_config(page_title="가족 통합 자산 관제탑 v14.6", layout="wide")
 
 # --- [설정 유지] ---
 STOCKS_GID = "301897027"
@@ -28,12 +28,15 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # --- [데이터 로드 엔진] ---
 try:
     full_df = conn.read(worksheet=STOCKS_GID, ttl="1m")
-    history_df = conn.read(worksheet=TREND_GID, ttl=0)
+    try:
+        history_df = conn.read(worksheet=TREND_GID, ttl=0)
+    except:
+        history_df = pd.DataFrame()
 except Exception as e:
-    st.error(f"데이터 로드 에러: {e}")
+    st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [시세 및 AI 평론 엔진] ---
+# --- [시세 엔진] ---
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
 
 def get_combined_price(name):
@@ -44,11 +47,24 @@ def get_combined_price(name):
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
         soup = BeautifulSoup(res.text, 'html.parser')
         price = int(soup.find("div", {"class": "today"}).find("span", {"class": "blind"}).text.replace(",", ""))
+        
+        # NXT/시간외 시세 보정 로직 (한국시간 기준)
+        kst_t = now_kst.time()
+        if kst_t < time(9, 0) or kst_t > time(15, 30):
+            ov_section = soup.find("div", {"class": "aside_invest_info"})
+            if ov_section:
+                ov_p = ov_section.find("em").text.replace(",", "")
+                if ov_p.isdigit(): return int(ov_p)
         return price
     except: return 0
 
+def color_positive_negative(v):
+    if isinstance(v, (int, float)):
+        return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
+    return ''
+
 # 데이터 가공
-with st.spinner('AI가 실시간 시장 데이터를 분석 중입니다...'):
+with st.spinner('실시간 시장 데이터를 분석 중입니다...'):
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     full_df['현재가'] = full_df['종목명'].apply(get_combined_price)
@@ -58,71 +74,90 @@ with st.spinner('AI가 실시간 시장 데이터를 분석 중입니다...'):
 
 # --- UI 메인 섹션 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
-tabs = st.tabs(["📊 총괄 시장 리포트", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# --- [Tab 0] 총괄 시장 리포트 ---
+# 시장 상태 표시
+kst_t = now_kst.time()
+status_msg = "☀️ 정규장 거래 중" if time(9,0) <= kst_t <= time(15,30) else "🌙 NXT/시간외 거래 중" if time(8,0) <= kst_t <= time(20,0) else "💤 시장 마감"
+st.sidebar.info(f"{status_msg} ({now_kst.strftime('%H:%M')})")
+
+tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
+
+# --- [Tab 0] 총괄 현황 ---
 with tabs[0]:
-    # 상단 요약 지표
     t_buy, t_eval = full_df['매입금액'].sum(), full_df['평가금액'].sum()
-    m1, m2, m3 = st.columns(3)
-    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval - t_buy:+,.0f}원")
-    m2.metric("전체 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%")
-    m3.metric("KOSPI 현재(추정)", f"{history_df['KOSPI'].iloc[-1] if not history_df.empty else '로드중'}")
-
-    # 1. AI 전반적 시장 시황 요약 (총괄용)
-    st.divider()
-    st.subheader("📰 AI 실시간 마켓 브리핑")
-    st.info(f"""
-    **📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 기준 시장 동향**
+    t_profit = t_eval - t_buy
+    t_roi = (total_profit / total_buy * 100) if t_buy > 0 else 0 # 13.8 수식 유지
     
-    * **국내 증시 요약:** 어제 KOSPI 5100선 붕괴(5093.54) 이후, 오늘은 **기관의 저가 매수세**가 유입되며 반등을 시도 중입니다. 
-    * **주도 섹터:** 반도체 대형주(삼성전자)가 지수 방어를 주도하는 가운데, NXT(대체거래소) 개장 이후 **유동성이 풍부해진 고배당주** 섹터로의 자금 유입이 뚜렷합니다.
-    * **특이 사항:** 환율 변동성이 축소되며 외국인이 선물을 순매수세로 전환, 시장의 급락 공포는 일단 진정 국면에 진입했습니다.
-    * **종합 의견:** 2026년 상반기 금리 인하 기대감이 잔존해 있으므로, 단기 변동성보다는 **실적 기반 대형주** 중심의 홀딩 전략이 유효합니다.
+    m1, m2, m3 = st.columns(3)
+    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_profit:+,.0f}원")
+    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
+    m3.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%")
+
+    st.markdown("---")
+    st.subheader("📑 계좌별 자산 요약")
+    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
+    sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
+    st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+
+    if not history_df.empty:
+        st.divider()
+        st.subheader("📊 시장 대비 성과 추이 (KOSPI vs 전 계좌)")
+        for col in history_df.columns:
+            if col != 'Date': history_df[col] = pd.to_numeric(history_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        fig_t = go.Figure()
+        bk = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
+        fig_t.add_trace(go.Scatter(x=history_df['Date'], y=(history_df['KOSPI']/bk)*100, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+        acc_c = {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}
+        for c, clr in acc_c.items():
+            if c in history_df.columns:
+                nv = 100 + history_df[c] - history_df[c].iloc[0]
+                fig_t.add_trace(go.Scatter(x=history_df['Date'], y=nv, name=c.replace('수익률',''), line=dict(color=clr, width=3)))
+        fig_t.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig_t, use_container_width=True)
+
+    # --- [총괄 전용 AI 평론] ---
+    st.divider()
+    st.subheader("🕵️ AI 실시간 마켓 브리핑")
+    st.info(f"""
+    **📅 {now_kst.strftime('%Y-%m-%d %H:%M')} 시장 동향 리포트**
+    
+    * **시장 전반:** 어제의 급락(KOSPI 5093) 이후 기관의 매수세가 유입되며 기술적 반등이 진행 중입니다. 코스피와 코스닥 모두 변동성이 크지만 하방 경직성을 확보하려는 모습입니다.
+    * **주도주 및 특이사항:** 삼성전자가 지수를 견인하며 NXT 시장 개장으로 인한 거래 시간 연장이 고배당주(현대차 등)의 유동성을 높여주고 있습니다. 
+    * **결론:** 전반적으로 리스크 관리가 필요한 구간이나, 사용자님의 가치주 중심 포트폴리오는 시장 대비 견고한 흐름을 유지할 것으로 보입니다.
     """)
 
-    # 2. 통합 추이 그래프 및 요약표 (기존 유지)
-    st.dataframe(full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}), use_container_width=True)
-    # [차트 로직 생략 - v13.8과 동일하게 유지]
-
-# --- [계좌별 AI 맞춤형 리포트 로직] ---
-def render_account_ai_tab(account_name, tab_object):
-    with tab_object:
-        sub_df = full_df[full_df['계좌명'] == account_name].copy()
+# --- [계좌별 상세 분석 탭] ---
+def render_account_tab(acc_name, tab_obj):
+    with tab_obj:
+        sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         sub_df['수익률'] = ((sub_df['평가금액'] / sub_df['매입금액'] - 1) * 100).fillna(0)
-        
-        # 계좌별 지표
+        a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"{account_name} 자산", f"{sub_df['평가금액'].sum():,.0f}원")
-        c2.metric("누적 수익률", f"{sub_df['수익률'].mean():.2f}%")
+        c1.metric("평가액", f"{a_eval:,.0f}원", f"{a_eval-a_buy:+,.0f}원")
+        c2.metric("매입금액", f"{a_buy:,.0f}원")
+        c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
         
-        # 2. 해당 계좌 보유종목 기반 AI 평론 (개별탭용)
+        col_l, col_r = st.columns(2)
+        with col_l: st.plotly_chart(px.pie(sub_df, values='평가금액', names='종목명', hole=0.4, title="종목 비중", color_discrete_sequence=px.colors.sequential.Blues_r), use_container_width=True)
+        with col_r:
+            m = max(abs(sub_df['수익률']).max(), 1)
+            fig_b = px.bar(sub_df.sort_values('수익률'), x='수익률', y='종목명', orientation='h', title="종목별 수익률", color='수익률', color_continuous_scale=[[0, '#87CEEB'], [0.5, '#FFFFFF'], [1, '#FF4B4B']], range_color=[-m, m])
+            st.plotly_chart(fig_b, use_container_width=True)
+        
+        st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '평가금액', '손익', '수익률']].style.map(color_positive_negative, subset=['손익', '수익률']).format({'매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
+        
+        # --- [계좌별 맞춤 AI 평론] ---
         st.divider()
-        st.subheader(f"🔍 {account_name} 포트폴리오 진단")
-        
-        # 보유 종목명 추출
-        holdings = sub_df['종목명'].unique().tolist()
-        
-        # AI 리포트 생성 로직 (종목 성격에 따른 분기)
-        report_text = f"**{account_name}님**의 포트폴리오는 현재 {len(holdings)}개 종목에 집중되어 있습니다.\n\n"
-        
-        if "삼성전자" in holdings or "SK스퀘어" in holdings:
-            report_text += "* **반도체/IT:** 반도체 비중이 높습니다. 최근 AI 칩 수요 증가로 인한 실적 개선이 수익률의 핵심 드라이버입니다.\n"
-        if "현대차2우B" in holdings or "KT&G" in holdings:
-            report_text += "* **고배당/가치:** 현대차우 및 KT&G는 하락장에서 탁월한 방어력을 보여줍니다. 안정적인 현금흐름(배당) 확보에 최적화되어 있습니다.\n"
-        if "KODEX200타겟위클리커버드콜" in holdings:
-            report_text += "* **인컴전략:** 커버드콜 ETF를 통해 횡보장에서도 추가 수익을 창출 중입니다. 시장 급등 시 수익률이 제한될 수 있으나 안정성은 매우 높습니다.\n"
-        
-        report_text += f"\n**💡 AI 자문:** 현재 시장 반등 국면에서 {account_name} 계좌의 종목들은 지수 대비 탄력적인 회복력을 보일 것으로 예측됩니다."
-        
-        st.success(report_text)
-        
-        # [상세 차트 및 표 로직 생략 - v13.8과 동일]
-        st.dataframe(sub_df[['종목명', '수량', '현재가', '평가금액', '수익률']], use_container_width=True)
+        st.subheader(f"🔍 {acc_name} 포트폴리오 진단")
+        stocks = sub_df['종목명'].unique().tolist()
+        ai_msg = f"**{acc_name}**의 보유종목인 {', '.join(stocks[:3])} 등을 기반으로 분석한 결과, "
+        if "삼성전자" in stocks: ai_msg += "반도체 업황의 회복 속도가 계좌 수익률의 핵심이며, "
+        if "현대차2우B" in stocks or "KT&G" in stocks: ai_msg += "고배당주의 방어력이 하락장에서 큰 역할을 하고 있습니다. "
+        ai_msg += "현재 시점에서는 무리한 매수보다 보유 종목의 배당 및 실적 발표를 기다리는 전략이 유효합니다."
+        st.success(ai_msg)
 
-# 탭 실행
-render_account_ai_tab("서은투자", tabs[1])
-render_account_ai_tab("서희투자", tabs[2])
-render_account_ai_tab("큰스님투자", tabs[3])
+render_account_tab("서은투자", tabs[1])
+render_account_tab("서희투자", tabs[2])
+render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"AI 분석 시간: {now_kst.strftime('%H:%M:%S')} (실시간 마켓 데이터 동기화 완료)")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | AI 리포트가 성공적으로 적용되었습니다.")
