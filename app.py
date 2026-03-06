@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v25.2", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v25.3", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -69,21 +69,25 @@ def get_market_status():
     except: pass
     return market
 
-# --- [데이터 전처리 및 계산] ---
+# --- [데이터 전처리: 에러 해결 핵심 구간] ---
 for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-prices_data = full_df['종목명'].apply(get_stock_data)
-full_df['현재가'] = [p[0] for p in prices_data]
-full_df['전일종가'] = [p[1] for p in prices_data]
-full_df['전일대비(%)'] = ((full_df['현재가'] / full_df['전일종가'] - 1) * 100).fillna(0)
+# 시세 데이터 수집 및 컬럼 생성 (에러 방지를 위한 순차적 할당)
+prices_list = full_df['종목명'].apply(get_stock_data).tolist()
+full_df['현재가'] = [p[0] for p in prices_list]
+full_df['전일종가'] = [p[1] for p in prices_list]
+
+# 모든 수치 계산 수행
 full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
 full_df['평가금액'] = full_df['수량'] * full_df['현재가']
 full_df['전일평가금액'] = full_df['수량'] * full_df['전일종가']
+full_df['주가변동'] = full_df['현재가'] - full_df['매입단가']
 full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 full_df['수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).fillna(0)
+full_df['전일대비(%)'] = ((full_df['현재가'] / full_df['전일종가'] - 1) * 100).fillna(0) # 🎯 KeyError 해결: 컬럼 생성 보장
 
-# --- 성과 기록 함수 및 사이드바 ---
+# --- 성과 기록 함수 ---
 def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_info = get_market_status()
@@ -102,7 +106,7 @@ st.sidebar.divider()
 if st.sidebar.button("💾 오늘의 결과 저장하기"): record_performance()
 
 # --- UI 메인 ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v25.2</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v25.3</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -115,11 +119,9 @@ with tabs[0]:
     m1, m2, m3 = st.columns(3)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval-t_prev_eval:+,.0f}원 (전일대비)")
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    # 🎯 보정: 통합 누적 수익률 하단에 전일 대비 변동률 병기
     m3.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{total_daily_rate:+.2f}% (전일대비)")
     
     st.markdown("---")
-    # 🎯 총괄표에 전일대비(%) 열 삽입
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '전일평가금액':'sum', '손익':'sum'}).reset_index()
     sum_acc['전일대비(%)'] = ((sum_acc['평가금액'] / sum_acc['전일평가금액'] - 1) * 100).fillna(0)
     sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
@@ -138,14 +140,14 @@ with tabs[0]:
             for col, color in {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}.items():
                 if col in history_df.columns:
                     fig_t.add_trace(go.Scatter(x=history_df['Date'], y=100 + history_df[col], name=col.replace('수익률',''), line=dict(color=color, width=3)))
-            fig_t.update_layout(title="📈 가족 자산 통합 성장 추이 (vs KOSPI)", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", xaxis=dict(tickformat="%Y-%m-%d"))
+            fig_t.update_layout(title="📈 가족 자산 통합 성장 추이", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", xaxis=dict(tickformat="%Y-%m-%d"))
             st.plotly_chart(fig_t, use_container_width=True)
         with col_g2:
             fig_pie = go.Figure(data=[go.Pie(labels=sum_acc['계좌명'], values=sum_acc['평가금액'], hole=.3, marker_colors=['#FF4B4B', '#87CEEB', '#00FF00'], textinfo='percent+label')])
             fig_pie.update_layout(title="💰 계좌별 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_pie, use_container_width=True)
 
-# [계좌별 상세 분석 탭 공통 함수]
+# [계좌별 상세 분석 탭]
 def render_account_tab(acc_name, tab_obj, history_col):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
@@ -158,6 +160,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         c2.metric("매입금액", f"{a_buy:,.0f}원")
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%", f"{a_daily_rate:+.2f}%")
         
+        # 🎯 보정: 전일대비(%) 열이 반드시 존재하도록 display_cols 지정
         display_cols = ['종목명', '수량', '매입단가', '현재가', '주가변동', '매입금액', '평가금액', '손익', '전일대비(%)', '수익률']
         st.dataframe(sub_df[display_cols].style.map(color_positive_negative, subset=['주가변동', '손익', '전일대비(%)', '수익률']).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '주가변동': '{:+,.0f}원', '매입금액': '{:,.0f}원', 
@@ -191,4 +194,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v25.2 통합 지표 동기화 완료")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v25.3 에러 해결 및 지표 동기화 완료")
