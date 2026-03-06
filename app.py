@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v24.1", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v24.2", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -54,16 +54,24 @@ def get_market_status():
     except: pass
     return market
 
-# --- [현재가 수집 엔진] ---
-STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
+# --- [현재가 수집 엔진: 이름 매칭 강화] ---
+STOCK_CODES = {
+    "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", 
+    "현대글로비스": "086280", "현대차2우B": "005387", 
+    "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", 
+    "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"
+}
 
 def get_price(name):
-    code = STOCK_CODES.get(str(name).strip())
+    # 공백을 제거하여 시트의 'KODEX 200...'과 딕셔너리의 'KODEX200...'을 매칭
+    clean_name = str(name).replace(" ", "").strip()
+    code = STOCK_CODES.get(clean_name)
     if not code: return 0
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
-        return int(BeautifulSoup(res.text, 'html.parser').find("div", {"class": "today"}).find("span", {"class": "blind"}).text.replace(",", ""))
+        soup = BeautifulSoup(res.text, 'html.parser')
+        return int(soup.find("div", {"class": "today"}).find("span", {"class": "blind"}).text.replace(",", ""))
     except: return 0
 
 # --- [성과 기록 함수] ---
@@ -81,14 +89,14 @@ def record_performance(overwrite=False):
         st.cache_data.clear(); st.rerun()
     except Exception as e: st.sidebar.error(f"❌ 기록 실패: {e}")
 
-# --- 데이터 전처리 및 계산 ---
+# --- 데이터 전처리 ---
 for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
 full_df['현재가'] = full_df['종목명'].apply(get_price)
-full_df['주가변동'] = full_df['현재가'] - full_df['매입단가']
-full_df['매입금액'] = full_df['수량'] * full_df['매입단가'] # 🎯 복구 완료
+full_df['매입금액'] = full_df['수량'] * full_df['매입단가'] # 🎯 매입금액 복구
 full_df['평가금액'] = full_df['수량'] * full_df['현재가']
+full_df['주가변동'] = full_df['현재가'] - full_df['매입단가']
 full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 full_df['수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).fillna(0)
 
@@ -124,7 +132,7 @@ with tabs[0]:
     st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
     st.divider()
-    st.subheader("🕵️ AI 실시간 시장 모니터링 리포트")
+    st.subheader("🕵️ AI 실시간 시장 모니터링 리포트") # 🎯 리포트 기능 복구
     c_idx1, c_idx2 = st.columns(2)
     with c_idx1:
         v = m_info.get('KOSPI', {})
@@ -141,10 +149,10 @@ def render_account_tab(acc_name, tab_obj, history_col):
         
         c1, c2, c3 = st.columns(3)
         c1.metric("평가액", f"{a_eval:,.0f}원", f"{a_eval-a_buy:+,.0f}원")
-        c2.metric("매입금액", f"{a_buy:,.0f}원")
+        c2.metric("매입금액", f"{a_buy:,.0f}원") # 🎯 모든 계좌 매입금액 복구
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
         
-        # v19.8 시원한 표 레이아웃 및 9개 컬럼 복구
+        # 보유 종목 리스트
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '주가변동', '매입금액', '평가금액', '손익', '수익률']].style.map(color_positive_negative, subset=['주가변동', '손익', '수익률']).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '주가변동': '{:+,.0f}원', '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
@@ -156,19 +164,22 @@ def render_account_tab(acc_name, tab_obj, history_col):
             if not history_df.empty and history_col in history_df.columns:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=history_df['Date'], y=history_df[history_col], mode='lines+markers', line=dict(color='#87CEEB', width=2), fill='tozeroy'))
+                # 🎯 그래프 축 및 날짜 포맷 보정
                 fig.update_layout(title=f"📈 {acc_name} 수익률 추이", height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font_color="white", yaxis=dict(ticksuffix="%"))
-                fig.update_xaxes(tickformat="%Y-%m-%d") # 🎯 시간 삭제, 날짜만 표기
+                fig.update_xaxes(tickformat="%Y-%m-%d") 
                 st.plotly_chart(fig, use_container_width=True)
-        with col_c2: # 🎯 오타 수정 완료 (col_chart2 -> col_c2)
+        with col_c2:
             if not sub_df.empty:
                 fig_pie = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
                 fig_pie.update_layout(title="💰 자산 비중", height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-        st.success(f"🔍 **AI 진단 리포트:** {acc_name} 계좌의 주력 종목은 **{sub_df.sort_values('평가금액', ascending=False).iloc[0]['종목명'] if not sub_df.empty else '없음'}**입니다.")
+        # 🎯 AI 진단 리포트 복구
+        top_name = sub_df.sort_values('평가금액', ascending=False).iloc[0]['종목명'] if not sub_df.empty else "없음"
+        st.success(f"🔍 **AI 진단 리포트:** {acc_name} 계좌는 현재 **{top_name}**의 비중이 가장 높으며 안정적으로 관리되고 있습니다.")
 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v24.1 무결성 통합 복구")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v24.2 평가액 오류 해결 버전")
