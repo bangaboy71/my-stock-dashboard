@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v20.8", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v20.9", layout="wide")
 
 # --- [시트 탭 이름 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -48,7 +48,7 @@ def get_stable_price(name):
     except: return 0
 
 def get_market_status():
-    """지수 및 등락 정밀 수집 (부호 및 텍스트 논리 보정)"""
+    """지수 정밀 수집 (v20.8의 부호 및 텍스트 보정 로직 유지)"""
     market = {}
     try:
         for code in ["KOSPI", "KOSDAQ"]:
@@ -62,10 +62,9 @@ def get_market_status():
             diff = raw_text[0].replace("상승", "").replace("하락", "").strip()
             rate = raw_text[1].replace("상승", "").replace("하락", "").strip()
             
-            # 네이버 클래스명을 분석하여 상승/하락 판별
-            if 'red02' in str(change_area) or 'plus' in str(change_area):
+            if 'red02' in str(change_area) or '+' in diff:
                 diff, rate = "+" + diff.replace("+", ""), "+" + rate.replace("+", "")
-            elif 'nv01' in str(change_area) or 'minus' in str(change_area):
+            elif 'nv01' in str(change_area) or '-' in diff:
                 diff, rate = "-" + diff.replace("-", ""), "-" + rate.replace("-", "")
                 
             market[code] = {"now": now_val, "diff": diff, "rate": rate}
@@ -73,7 +72,7 @@ def get_market_status():
     return market
 
 def get_real_investor_top10():
-    """네이버에서 실제 외인/기관 매수/매도 TOP 10 실시간 수집"""
+    """네이버 금융 실시간 순매수/순매도 TOP 10 동적 크롤링"""
     trades = {"외인매수": [], "기관매수": [], "외인매도": [], "기관매도": []}
     try:
         url = "https://finance.naver.com/sise/sise_deal_rank.naver"
@@ -92,7 +91,7 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# 데이터 가공 및 정수화
+# 데이터 가공 및 정수화 원칙
 for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 full_df['현재가'] = full_df['종목명'].apply(get_stable_price)
@@ -102,7 +101,7 @@ full_df['평가금액'] = full_df['수량'] * full_df['현재가']
 full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 full_df['수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).fillna(0)
 
-# --- [성과 기록 엔진] ---
+# --- [성과 기록 엔진: 복구 기능 유지] ---
 def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_info = get_market_status()
@@ -117,44 +116,56 @@ def record_performance(overwrite=False):
         st.cache_data.clear(); st.rerun()
     except Exception as e: st.sidebar.error(f"❌ 기록 실패: {e}")
 
-# --- [AI 통합 레이더: 실시간 대조 및 색상 하이라이트] ---
+# --- [AI 통합 레이더: 전수 표출 및 스마트 색상 식별] ---
 def render_radar_report(m_info, my_stocks):
     st.divider()
-    st.subheader("🕵️ AI 실시간 금융 통합 레이더 (데이터 무결성 검증)")
+    st.subheader("🕵️ AI 실시간 금융 통합 레이더 (전수 모니터링 모드)")
     
-    # 1. 지수 현황 (부호 정교화)
+    # 1. 지수 현황
     c_idx1, c_idx2 = st.columns(2)
     for i, (name, val) in enumerate(m_info.items()):
         col = c_idx1 if i == 0 else c_idx2
         color = "#FF4B4B" if "+" in val['rate'] else "#87CEEB"
         col.markdown(f"**{name}: {val['now']}** <span style='color:{color}; font-weight:bold;'>({val['diff']} {val['rate']})</span>", unsafe_allow_html=True)
 
-    # 2. 실시간 수급 크롤링 데이터
+    # 2. 실시간 수급 데이터 크롤링
     trades = get_real_investor_top10()
     
-    def highlight_stocks(stock_list, my_stocks, color):
-        if not stock_list: return "데이터 로딩 중..."
+    def highlight_investor_list(top_list, my_stocks, color):
+        """10개 모두 표출하되 보유 종목만 색상 강조"""
+        if not top_list: return "데이터 로딩 중..."
         formatted = []
-        for s in stock_list:
-            if s in my_stocks:
-                formatted.append(f"<span style='color:{color}; font-weight:bold;'>{s}</span>")
-            else: formatted.append(s)
-        return ", ".join(formatted)
+        for i, stock in enumerate(top_list):
+            if stock in my_stocks:
+                # 보유 종목: 강조 색상 적용
+                formatted.append(f"{i+1}. <span style='color:{color}; font-weight:bold;'>{stock} (보유)</span>")
+            else:
+                # 미보유 종목: 일반 텍스트
+                formatted.append(f"{i+1}. {stock}")
+        return "<br>".join(formatted)
 
-    # 3. 위험 종목 실시간 감시
+    # 3. 위험 종목 즉각 경고
     danger_list = [s for s in my_stocks if s in trades['외인매도'] or s in trades['기관매도']]
     if danger_list:
-        st.error(f"⚠️ **[수급 위험 감시]** 현재 외인/기관 매도 상위권에 포함된 보유 종목: {', '.join(danger_list)}")
+        st.error(f"⚠️ **[수급 위험 감시]** 현재 시장 매도 상위에 포함된 내 종목: {', '.join(danger_list)}")
     else:
-        st.success("✅ **[수급 위험 감시]** 보유 종목 중 시장 매도 상위권(TOP 10) 노출 종목 없음.")
+        st.success("✅ **[수급 위험 감시]** 보유 종목 중 대량 매도(TOP 10) 징후가 없습니다.")
 
-    # 4. 시장 수급 TOP 10 (🎯 요청 반영: 매수-빨강, 매도-파랑 하이라이트)
-    st.markdown("#### 📊 실시간 수급 TOP 10 (네이버 금융 공식 데이터)")
+    # 4. 시장 수급 TOP 10 전수 리포트 (🎯 요청: 10개 전수 표출 + 보유 식별)
+    st.markdown("#### 📊 실시간 시장 수급 TOP 10 및 포트폴리오 대조")
     col_t1, col_t2, col_t3, col_t4 = st.columns(4)
-    col_t1.write("**외인 매수 상위**"); col_t1.markdown(highlight_stocks(trades['외인매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
-    col_t2.write("**외인 매도 상위**"); col_t2.markdown(highlight_stocks(trades['외인매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
-    col_t3.write("**기관 매수 상위**"); col_t3.markdown(highlight_stocks(trades['기관매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
-    col_t4.write("**기관 매도 상위**"); col_t4.markdown(highlight_stocks(trades['기관매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
+    with col_t1:
+        st.write("🟢 **외인 매수 상위**")
+        st.markdown(highlight_investor_list(trades['외인매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
+    with col_t2:
+        st.write("🔵 **외인 매도 상위**")
+        st.markdown(highlight_investor_list(trades['외인매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
+    with col_t3:
+        st.write("🟢 **기관 매수 상위**")
+        st.markdown(highlight_investor_list(trades['기관매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
+    with col_t4:
+        st.write("🔵 **기관 매도 상위**")
+        st.markdown(highlight_investor_list(trades['기관매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
 
 # --- 사이드바 ---
 st.sidebar.header("🕹️ 관리 메뉴")
@@ -237,10 +248,10 @@ def render_account_tab(acc_name, tab_obj):
         with col_low2:
             st.subheader(f"🔍 AI 맞춤 진단")
             top_stock = sub_df.sort_values('평가금액', ascending=False).iloc[0]['종목명'] if not sub_df.empty else "없음"
-            st.success(f"{acc_name} 계좌의 핵심 종목은 **{top_stock}**입니다.")
+            st.success(f"{acc_name} 계좌의 주력 종목은 **{top_stock}**입니다.")
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.8 실시간 수급 크롤링 정식 버전")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.9 수급 전수 리포트 완성")
