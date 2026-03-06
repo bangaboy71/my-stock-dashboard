@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v27.9", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v28.0", layout="wide")
 
 # --- [CSS: 메트릭 및 섹터 리포트 박스 스타일] ---
 st.markdown("""
@@ -15,7 +15,7 @@ st.markdown("""
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; }
     [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
     .report-box { padding: 15px; border-radius: 10px; height: 320px; overflow-y: auto; margin-bottom: 10px; }
-    .sector-box { padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background-color: rgba(255,255,255,0.03); min-height: 280px; }
+    .sector-box { padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background-color: rgba(255,255,255,0.03); min-height: 280px; margin-bottom: 15px; }
     .sector-title { font-size: 1.1rem; font-weight: bold; border-bottom: 2px solid #87CEEB; padding-bottom: 5px; margin-bottom: 10px; color: #87CEEB; }
     </style>
     """, unsafe_allow_html=True)
@@ -114,7 +114,7 @@ else:
     if st.sidebar.button("💾 오늘의 결과 저장하기"): record_performance()
 
 # --- UI 메인 ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v27.9</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v28.0</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -151,7 +151,7 @@ with tabs[0]:
         fig_t.update_layout(title="📈 가족 자산 통합 수익률 추이", height=400, xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig_t, use_container_width=True)
 
-    # 🕵️ [v27.8 베이스] AI 관제탑 데일리 분석 리포트
+    # 🕵️ AI 관제탑 데일리 분석 리포트
     st.divider()
     st.subheader("🕵️ AI 관제탑 데일리 분석 리포트")
     idx_c1, idx_c2 = st.columns(2)
@@ -163,29 +163,26 @@ with tabs[0]:
     st.markdown("<br>", unsafe_allow_html=True)
     rep_l, rep_r = st.columns(2)
     with rep_l:
-        st.markdown(f"""<div class='report-box' style='background-color: rgba(135,206,235,0.05); border: 1px solid rgba(135,206,235,0.2);'><h4 style='color: #87CEEB;'>📋 포트폴리오 성과 분석</h4><ul style='font-size: 0.95em;'><li><b>시장 대비 성과:</b> KOSPI 대비 <b>{total_daily_rate - float(m_info['KOSPI']['rate'].replace('%','')) :+.2f}%p</b> {'초과 수익' if total_daily_rate > float(m_info['KOSPI']['rate'].replace('%','')) else '하회'} 중</li><li><b>전략 가이드:</b> 반도체 및 에너지 섹터의 수급 흐름에 따라 전체 수익률 탄력성이 결정되고 있습니다.</li></ul></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class='report-box' style='background-color: rgba(135,206,235,0.05); border: 1px solid rgba(135,206,235,0.2);'><h4 style='color: #87CEEB;'>📋 포트폴리오 성과 분석</h4><ul style='font-size: 0.95em;'><li><b>지수 대비 성과:</b> KOSPI 대비 <b>{total_daily_rate - float(m_info['KOSPI']['rate'].replace('%','')) :+.2f}%p</b> {'초과 수익' if total_daily_rate > float(m_info['KOSPI']['rate'].replace('%','')) else '하회'} 중</li><li><b>전략:</b> 시장 주도 섹터인 반도체와 에너지의 변동성을 면밀히 모니터링하며 수익을 방어하고 있습니다.</li></ul></div>""", unsafe_allow_html=True)
     with rep_r:
-        st.markdown(f"""<div class='report-box' style='background-color: rgba(255,75,75,0.05); border: 1px solid rgba(255,75,75,0.2);'><h4 style='color: #FF4B4B;'>🌍 시장 동향 및 수급 리포트</h4><ul style='font-size: 0.95em;'><li><b>수급 현황:</b> 외국인은 반도체 대형주 중심 매도 우위이나, 개인은 ESS/전력 섹터에서 강한 매수세를 보입니다.</li><li><b>주요 이슈:</b> 금리 인하 기대감과 지정학적 불안감이 혼재하며 섹터별 순환매가 빠르게 진행 중입니다.</li></ul></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class='report-box' style='background-color: rgba(255,75,75,0.05); border: 1px solid rgba(255,75,75,0.2);'><h4 style='color: #FF4B4B;'>🌍 시장 동향 및 수급 리포트</h4><ul style='font-size: 0.95em;'><li><b>수급 현황:</b> 외국인은 대형 반도체 매도 우위이나, 개인은 ESS 및 2차전지 전고체 관련주에 높은 관심을 보이고 있습니다.</li></ul></div>""", unsafe_allow_html=True)
 
-    # 📊 [신규 확장] 관심 섹터 동향 분석
+    # 📊 관심 섹터 동향 분석 (배터리/전고체 추가)
     st.divider()
     st.subheader("📊 관심 섹터 동향 분석")
     
-    sec1, sec2, sec3 = st.columns(3)
-    sec4, sec5, sec6 = st.columns(3) # 여유분 포함
-    
-    # 섹터 데이터 정의 (AI 분석 기반)
+    sec_cols = st.columns(3)
     sectors = {
-        "반도체": {"trend": "HBM 및 AI 칩 수요 지속", "supply": "외인 매도 vs 기관 매수", "leader": "삼성전자, SK하이닉스, 한미반도체", "news": "엔비디아 차세대 칩 양산 가시화에 따른 공급망 재편 이슈"},
-        "로봇/AI": {"trend": "휴머노이드 및 스마트 팩토리 확산", "supply": "개인 위주 테마성 수급 유입", "leader": "두산로보틱스, 레인보우로보틱스", "news": "글로벌 빅테크의 AI 에이전트 시장 경쟁 격화로 관련주 변동성 확대"},
-        "의약/화장품": {"trend": "K-뷰티 수출 호조 및 CDMO 성장", "supply": "외인 지속 매수세 유입", "leader": "삼성바이오로직스, 아모레퍼시픽", "news": "북미 시장 점유율 확대 소식에 화장품 중소형주 신고가 경신 중"},
-        "ESS/전력": {"trend": "AI 데이터센터 증설에 따른 전력난 부각", "supply": "기관/외인 동반 순매수", "leader": "LS ELECTRIC, 일진전기, HD현대일렉트릭", "news": "미국 내 노후 변압기 교체 주기와 데이터센터 전력 수요 폭증 수혜"},
-        "방산/우주": {"trend": "지정학적 리스크 지속 및 수출 계약 확대", "supply": "기관 매집 지속", "leader": "한화에어로스페이스, LIG넥스원", "news": "동유럽 및 중동발 K-방산 추가 수주 계약 소식으로 수주 잔고 사상 최대"}
+        "반도체": {"trend": "HBM 수요 견조 및 공급망 다변화", "supply": "외인 매도 vs 기관 매수", "leader": "삼성전자, SK하이닉스", "news": "AI 칩 시장 성장에 따른 전공정 장비주 수혜 기대"},
+        "로봇/AI": {"trend": "지능형 로봇법 개정 및 서비스 로봇 확산", "supply": "개인 위주 테마 수급 유입", "leader": "두산로보틱스, 레인보우로보틱스", "news": "빅테크 기업의 로봇 스타트업 투자 확대로 섹터 모멘텀 강화"},
+        "의약/화장품": {"trend": "K-뷰티 북미 매출 폭증 지속", "supply": "외인 순매수 지속 유입", "leader": "삼성바이오로직스, 아모레퍼시픽", "news": "실적 시즌을 맞아 중소형 화장품 브랜드사 어닝 서프라이즈 기대"},
+        "ESS/전력": {"trend": "북미 전력망 교체 및 데이터센터 전력 수요", "supply": "기관/외인 동반 순매수", "leader": "LS ELECTRIC, 일진전기", "news": "변압기 부족 현상 장기화에 따른 관련 기업 수주 잔고 사상 최대"},
+        "방산/우주": {"trend": "수출국 다변화 및 차세대 발사체 개발", "supply": "기관 장기 매집 포착", "leader": "한화에어로스페이스, LIG넥스원", "news": "동유럽 및 동남아발 추가 수주 소식으로 장기 성장 동력 확보"},
+        "배터리/전고체": {"trend": "차세대 배터리 로드맵 가시화 및 리튬 가격 안정", "supply": "외인 저점 매수세 유입 시도", "leader": "LG에너지솔루션, 삼성SDI, 이수스페셜티케미컬", "news": "전고체 배터리 파일럿 라인 가동 소식에 따른 기술 선점 경쟁 본격화"}
     }
     
     for i, (name, data) in enumerate(sectors.items()):
-        target_col = [sec1, sec2, sec3, sec4, sec5][i]
-        with target_col:
+        with sec_cols[i % 3]:
             st.markdown(f"""
             <div class='sector-box'>
                 <div class='sector-title'>{name}</div>
@@ -237,15 +234,10 @@ def render_account_tab(acc_name, tab_obj, history_col):
         st.divider()
         st.subheader(f"🕵️ {acc_name} 인텔리전스 리포트")
         b_s = sub_df.sort_values('전일대비(%)', ascending=False).iloc[0]
-        w_s = sub_df.sort_values('전일대비(%)', ascending=True).iloc[0]
-        ar_l, ar_r = st.columns(2)
-        with ar_l:
-            st.markdown(f"<div class='report-box' style='background-color: rgba(135,206,235,0.05); border: 1px solid rgba(135,206,235,0.2);'><h4 style='color: #87CEEB;'>📋 계좌 성과 분석</h4><ul style='font-size: 0.95em;'><li><b>베스트 종목:</b> {b_s['종목명']}({b_s['전일대비(%)']:+.2f}%)</li><li><b>워스트 종목:</b> {w_s['종목명']}({w_s['전일대비(%)']:+.2f}%)</li></ul></div>""", unsafe_allow_html=True)
-        with ar_r:
-            st.markdown(f"<div class='report-box' style='background-color: rgba(255,75,75,0.05); border: 1px solid rgba(255,75,75,0.2);'><h4 style='color: #FF4B4B;'>🌍 보유 종목 섹터 분석</h4><ul style='font-size: 0.95em;'><li><b>섹터 동향:</b> 현재 {b_s['종목명']}의 주도력이 계좌 성과를 뒷받침하고 있습니다.</li></ul></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class='report-box' style='background-color: rgba(135,206,235,0.05); border: 1px solid rgba(135,206,235,0.2);'><h4 style='color: #87CEEB;'>📋 계좌 분석 리포트</h4><ul style='font-size: 0.95em;'><li><b>베스트:</b> {b_s['종목명']}({b_s['전일대비(%)']:+.2f}%)</li><li><b>평가:</b> {acc_name} 계좌는 {b_s['종목명']}의 탄력성에 힘입어 오늘 하루 안정적인 방어력을 보여주었습니다.</li></ul></div>""", unsafe_allow_html=True)
 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v27.9 섹터 인텔리전스 분석 통합")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v28.0 배터리/전고체 섹터 분석 통합")
