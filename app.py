@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v24.2", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v24.3", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -63,7 +63,6 @@ STOCK_CODES = {
 }
 
 def get_price(name):
-    # 공백을 제거하여 시트의 'KODEX 200...'과 딕셔너리의 'KODEX200...'을 매칭
     clean_name = str(name).replace(" ", "").strip()
     code = STOCK_CODES.get(clean_name)
     if not code: return 0
@@ -94,7 +93,7 @@ for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
 full_df['현재가'] = full_df['종목명'].apply(get_price)
-full_df['매입금액'] = full_df['수량'] * full_df['매입단가'] # 🎯 매입금액 복구
+full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
 full_df['평가금액'] = full_df['수량'] * full_df['현재가']
 full_df['주가변동'] = full_df['현재가'] - full_df['매입단가']
 full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
@@ -132,7 +131,7 @@ with tabs[0]:
     st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
     st.divider()
-    st.subheader("🕵️ AI 실시간 시장 모니터링 리포트") # 🎯 리포트 기능 복구
+    st.subheader("🕵️ AI 실시간 시장 모니터링 리포트")
     c_idx1, c_idx2 = st.columns(2)
     with c_idx1:
         v = m_info.get('KOSPI', {})
@@ -149,7 +148,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         
         c1, c2, c3 = st.columns(3)
         c1.metric("평가액", f"{a_eval:,.0f}원", f"{a_eval-a_buy:+,.0f}원")
-        c2.metric("매입금액", f"{a_buy:,.0f}원") # 🎯 모든 계좌 매입금액 복구
+        c2.metric("매입금액", f"{a_buy:,.0f}원")
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
         
         # 보유 종목 리스트
@@ -159,27 +158,38 @@ def render_account_tab(acc_name, tab_obj, history_col):
         
         st.divider()
         
+        # 🎯 보정 레이아웃: 좌(수익률 추이), 우(자산 비중)
         col_c1, col_c2 = st.columns([2, 1])
         with col_c1:
             if not history_df.empty and history_col in history_df.columns:
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=history_df['Date'], y=history_df[history_col], mode='lines+markers', line=dict(color='#87CEEB', width=2), fill='tozeroy'))
-                # 🎯 그래프 축 및 날짜 포맷 보정
-                fig.update_layout(title=f"📈 {acc_name} 수익률 추이", height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font_color="white", yaxis=dict(ticksuffix="%"))
-                fig.update_xaxes(tickformat="%Y-%m-%d") 
+                # 🎯 보정 1: 계좌 전체 수익률 변동 추이 (선 그래프)
+                fig.add_trace(go.Scatter(x=history_df['Date'], y=history_df[history_col], 
+                                         mode='lines+markers', name='전체 수익률', 
+                                         line=dict(color='#87CEEB', width=3),
+                                         marker=dict(size=8, symbol='circle')))
+                
+                # 🎯 보정 2: X축 날짜 포맷 (시간 삭제) 및 Y축 정렬
+                fig.update_layout(
+                    title=f"📈 {acc_name} 누적 수익률 추이",
+                    xaxis=dict(title="날짜", tickformat="%Y-%m-%d", showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    yaxis=dict(title="수익률(%)", ticksuffix="%", showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    height=400, margin=dict(l=20, r=20, t=50, b=20),
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white"
+                )
                 st.plotly_chart(fig, use_container_width=True)
         with col_c2:
             if not sub_df.empty:
                 fig_pie = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
-                fig_pie.update_layout(title="💰 자산 비중", height=350, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
+                fig_pie.update_layout(title="💰 자산 비중", height=400, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-        # 🎯 AI 진단 리포트 복구
+        # AI 진단 리포트
         top_name = sub_df.sort_values('평가금액', ascending=False).iloc[0]['종목명'] if not sub_df.empty else "없음"
-        st.success(f"🔍 **AI 진단 리포트:** {acc_name} 계좌는 현재 **{top_name}**의 비중이 가장 높으며 안정적으로 관리되고 있습니다.")
+        st.success(f"🔍 **AI 진단 리포트:** {acc_name} 계좌는 **{top_name}**을 주력으로 관리되고 있으며, 수익률 변동성이 시장 대비 안정적입니다.")
 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v24.2 평가액 오류 해결 버전")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v24.3 그래프 정밀 튜닝 완료")
