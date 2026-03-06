@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v26.4", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v27.0", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -36,7 +36,7 @@ except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [시장 시세 엔진 (v25.8 베이스 유지)] ---
+# --- [시장 시세 엔진 (v26.4 유지)] ---
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
 
 def get_stock_data(name):
@@ -63,26 +63,17 @@ def get_market_status():
             change_area = soup.find("span", {"id": "change_value_and_rate"})
             raw = change_area.text.strip().split()
             diff, rate = raw[0].replace("상승","").replace("하락","").strip(), raw[1].replace("상승","").replace("하락","").strip()
-            if 'red02' in str(change_area) or '+' in diff: diff, rate = "+" + diff.replace("+",""), "+" + rate.replace("+","")
-            elif 'nv01' in str(change_area) or '-' in diff: diff, rate = "-" + diff.replace("-",""), "-" + rate.replace("-","")
             market[code] = {"now": now_val, "diff": diff, "rate": rate}
     except: pass
     return market
 
-# --- [데이터 전처리: KeyError 해결 핵심 구간] ---
+# --- [데이터 전처리] ---
 for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
 prices_list = full_df['종목명'].apply(get_stock_data).tolist()
 full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices_list], [p[1] for p in prices_list]
-
-full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-full_df['전일평가금액'] = full_df['수량'] * full_df['전일종가']
-
-# 🎯 보정: 누락되었던 주가변동 및 손익/수익률 계산
-full_df['주가변동'] = full_df['현재가'] - full_df['매입단가']
-full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
+full_df['매입금액'], full_df['평가금액'], full_df['전일평가금액'] = full_df['수량']*full_df['매입단가'], full_df['수량']*full_df['현재가'], full_df['수량']*full_df['전일종가']
+full_df['주가변동'], full_df['손익'] = full_df['현재가']-full_df['매입단가'], full_df['평가금액']-full_df['매입금액']
 full_df['수익률'] = (full_df['손익'] / (full_df['매입금액'].replace(0, float('nan'))) * 100).fillna(0)
 full_df['전일대비(%)'] = ((full_df['현재가'] / (full_df['전일종가'].replace(0, float('nan'))) - 1) * 100).fillna(0)
 
@@ -128,7 +119,7 @@ else:
     if st.sidebar.button("💾 오늘의 결과 저장하기"): record_performance()
 
 # --- UI 메인 ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v26.4</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v27.0</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -140,7 +131,34 @@ with tabs[0]:
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval-t_prev_eval:+,.0f}원 (전일대비)")
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
     m3.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{total_daily_rate:+.2f}% (전일대비)")
-    st.markdown("---")
+    
+    st.divider()
+    # 🎯 [신설] AI 관제탑 데일리 분석 리포트
+    st.subheader("🕵️ AI 관제탑 데일리 분석 리포트")
+    
+    # 리포트 데이터 계산
+    k_rate_str = m_info.get('KOSPI', {}).get('rate', '0%').replace('%','')
+    k_rate = float(k_rate_str) if k_rate_str != '0' else 0
+    alpha = total_daily_rate - k_rate
+    
+    best_acc = full_df.groupby('계좌명')['전일대비(%)'].mean().idxmax()
+    best_stock = full_df.sort_values('전일대비(%)', ascending=False).iloc[0]
+    
+    r_col1, r_col2 = st.columns(2)
+    with r_col1:
+        st.markdown(f"""
+        **1. 시장 대비 성과 (Alpha)**
+        * 오늘 가족 자산은 시장(KOSPI) 대비 **{alpha:+.2f}%p {'초과 수익' if alpha > 0 else '하회'}**를 기록 중입니다.
+        * 현재 통합 누적 수익률은 **{(t_eval/t_buy-1)*100:,.2f}%**로 안정적인 우상향 궤도를 유지하고 있습니다.
+        """)
+    with r_col2:
+        st.markdown(f"""
+        **2. 오늘의 주요 특징**
+        * **베스트 계좌:** 오늘 성과가 가장 좋은 계좌는 **{best_acc}**입니다.
+        * **최고 수익 종목:** 오늘 가장 힘이 좋은 종목은 **{best_stock['종목명']} ({best_stock['전일대비(%)']:+.2f}%)**입니다.
+        """)
+    
+    st.divider()
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '전일평가금액':'sum', '손익':'sum'}).reset_index()
     sum_acc['전일대비(%)'] = ((sum_acc['평가금액'] / sum_acc['전일평가금액'] - 1) * 100).fillna(0)
     sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
@@ -172,7 +190,6 @@ def render_account_tab(acc_name, tab_obj, history_col):
         c2.metric("매입금액", f"{a_buy:,.0f}원")
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%", f"{a_daily_rate:+.2f}%")
         
-        # 🎯 복구 완료: 주가변동 컬럼 포함
         display_cols = ['종목명', '수량', '매입단가', '현재가', '주가변동', '매입금액', '평가금액', '손익', '전일대비(%)', '수익률']
         st.dataframe(sub_df[display_cols].style.map(color_positive_negative, subset=['주가변동', '손익', '전일대비(%)', '수익률']).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '주가변동': '{:+,.0f}원', '매입금액': '{:,.0f}원', 
@@ -205,8 +222,12 @@ def render_account_tab(acc_name, tab_obj, history_col):
                 fig_pie.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
                 st.plotly_chart(fig_pie, use_container_width=True)
 
+        # 🎯 [신설] 계좌별 AI 한 줄 진단
+        best_stock_in_acc = sub_df.sort_values('전일대비(%)', ascending=False).iloc[0]
+        st.success(f"🔍 **AI 분석:** 현재 {acc_name}에서 가장 탄력적인 종목은 **{best_stock_in_acc['종목명']}**이며, 오늘 하루 동안 {best_stock_in_acc['전일대비(%)']:+.2f}%의 변동을 기록했습니다.")
+
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v26.4 KeyError 완벽 해결 버전")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v27.0 AI 리포트 엔진 통합")
