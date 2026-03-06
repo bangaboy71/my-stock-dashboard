@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v24.8", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v24.9", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -67,7 +67,7 @@ def get_market_status():
     except: pass
     return market
 
-# --- [성과 기록 함수 (v24.5 확장 로직 포함)] ---
+# --- [성과 기록 함수] ---
 def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_info = get_market_status()
@@ -82,10 +82,10 @@ def record_performance(overwrite=False):
         "Date": today_str, "KOSPI": float(kospi_now), 
         "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)
     }
-    # 시트에 존재하는 종목 수익률 열을 자동 감지하여 기록 (확장성)
     for stock in STOCK_CODES.keys():
         new_row[f"서은_{stock}수익률"] = get_stock_yield('서은투자', stock)
         new_row[f"서희_{stock}수익률"] = get_stock_yield('서희투자', stock)
+        new_row[f"큰스님_{stock}수익률"] = get_stock_yield('큰스님투자', stock)
 
     try:
         updated_df = history_df[history_df['Date'].dt.strftime('%Y-%m-%d') != today_str].copy() if overwrite else history_df.copy()
@@ -107,7 +107,7 @@ full_df['수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).filln
 
 # 사이드바
 st.sidebar.header("🕹️ 관리 메뉴")
-if st.sidebar.button("🔄 실시간 데이터 갱신"):
+if st.sidebar.button("🔄 실시간 시세 갱신"):
     st.cache_data.clear(); st.rerun()
 st.sidebar.divider()
 today_str = now_kst.strftime('%Y-%m-%d')
@@ -179,7 +179,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         st.divider()
         col_c1, col_c2 = st.columns([2, 1])
         with col_c1:
-            # 🎯 고도화: 대조할 종목 선택 메뉴 (해당 계좌 보유 종목만 필터링)
+            # 🎯 고도화: 모든 계좌에 종목 선택 메뉴 적용
             available_stocks = sub_df['종목명'].unique().tolist()
             selected_stock = st.selectbox(f"📍 {acc_name} 대조 종목 선택", available_stocks, key=f"sel_{acc_name}")
             
@@ -187,7 +187,6 @@ def render_account_tab(acc_name, tab_obj, history_col):
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=history_df['Date'], y=history_df[history_col], mode='lines+markers', name='계좌 전체 수익률', line=dict(color='#87CEEB', width=3)))
                 
-                # 🎯 매칭 로직: 시트의 '서은_삼성전자수익률' 등과 대조
                 short_acc = acc_name.replace("투자", "")
                 history_stock_col = f"{short_acc}_{selected_stock.replace(' ', '')}수익률"
                 
@@ -209,4 +208,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v24.8 멀티 종목 대조 분석 지원")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v24.9 전 계좌 종목 분석 통합")
