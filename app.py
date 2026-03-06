@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v24.9", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v25.0", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -36,7 +36,7 @@ except Exception as e:
     st.error(f"데이터 로드 오류: {e}")
     st.stop()
 
-# --- [시장 지수 및 시세 엔진 (v24.2 베이스)] ---
+# --- [시장 지수 및 시세 엔진 (v24.2 베이스 유지)] ---
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
 
 def get_price(name):
@@ -179,21 +179,27 @@ def render_account_tab(acc_name, tab_obj, history_col):
         st.divider()
         col_c1, col_c2 = st.columns([2, 1])
         with col_c1:
-            # 🎯 고도화: 모든 계좌에 종목 선택 메뉴 적용
             available_stocks = sub_df['종목명'].unique().tolist()
             selected_stock = st.selectbox(f"📍 {acc_name} 대조 종목 선택", available_stocks, key=f"sel_{acc_name}")
             
             if not history_df.empty and history_col in history_df.columns:
                 fig = go.Figure()
+                # 1. 계좌 전체 수익률 (실선)
                 fig.add_trace(go.Scatter(x=history_df['Date'], y=history_df[history_col], mode='lines+markers', name='계좌 전체 수익률', line=dict(color='#87CEEB', width=3)))
                 
+                # 🎯 보정 3순위: KOSPI 벤치마크 수익률 추가 (회색 점선)
+                # 첫 기록 날짜의 KOSPI를 기준으로 변동률(%) 계산
+                bk_kospi = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
+                kospi_yield = ((history_df['KOSPI'] / bk_kospi) - 1) * 100
+                fig.add_trace(go.Scatter(x=history_df['Date'], y=kospi_yield, mode='lines', name='KOSPI 벤치마크', line=dict(color='gray', width=2, dash='dash')))
+                
+                # 2. 개별 종목 수익률 (빨간 점선)
                 short_acc = acc_name.replace("투자", "")
                 history_stock_col = f"{short_acc}_{selected_stock.replace(' ', '')}수익률"
-                
                 if history_stock_col in history_df.columns:
                     fig.add_trace(go.Scatter(x=history_df['Date'], y=history_df[history_stock_col], mode='lines', name=f'{selected_stock} 수익률', line=dict(color='#FF4B4B', width=2, dash='dot')))
                 
-                fig.update_layout(title=f"📈 {acc_name} 성과분석 레이더", xaxis=dict(tickformat="%Y-%m-%d"), yaxis=dict(ticksuffix="%"), height=400, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                fig.update_layout(title=f"📈 {acc_name} 성과분석 (vs KOSPI)", xaxis=dict(tickformat="%Y-%m-%d"), yaxis=dict(ticksuffix="%"), height=400, margin=dict(l=20, r=20, t=50, b=20), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig, use_container_width=True)
         with col_c2:
             if not sub_df.empty:
@@ -208,4 +214,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v24.9 전 계좌 종목 분석 통합")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v25.0 KOSPI 벤치마크 분석 탑재")
