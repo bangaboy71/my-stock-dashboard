@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v20.2", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v20.3", layout="wide")
 
 # --- [시트 탭 이름 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -68,62 +68,48 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# 데이터 가공 및 정수화
+# 데이터 가공 및 신규 컬럼 계산
 for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-full_df['현재가'] = full_df['종목명'].apply(get_stable_price)
-full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 
-# --- [성과 기록 엔진: 복구 완료] ---
+full_df['현재가'] = full_df['종목명'].apply(get_stable_price)
+full_df['주가변동'] = full_df['현재가'] - full_df['매입단가'] # 🎯 요청: 매입단가와 현재가간 변동액
+full_df['매입금액'] = full_df['수량'] * full_df['매입단가'] # 🎯 요청: 매입금액
+full_df['평가금액'] = full_df['수량'] * full_df['현재가']
+full_df['손익'] = full_df['평가금액'] - full_df['매입금액'] # 🎯 요청: 매입금액과 평가금액간 변동액
+full_df['수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).fillna(0)
+
+# --- [성과 기록 엔진] ---
 def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_data = get_market_data()
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-    
-    new_row = {
-        "Date": today_str, 
-        "KOSPI": m_data['kospi'], 
-        "서은수익률": acc_sum.get('서은투자', 0), 
-        "서희수익률": acc_sum.get('서희투자', 0), 
-        "큰스님수익률": acc_sum.get('큰스님투자', 0)
-    }
-    
+    new_row = {"Date": today_str, "KOSPI": m_data['kospi'], "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
     try:
-        if overwrite:
-            updated_df = history_df[history_df['Date'].astype(str) != today_str].copy()
-        else:
-            updated_df = history_df.copy()
-            
+        updated_df = history_df[history_df['Date'].astype(str) != today_str].copy() if overwrite else history_df.copy()
         updated_df = pd.concat([updated_df, pd.DataFrame([new_row])], ignore_index=True)
         conn.update(worksheet=TREND_SHEET, data=updated_df)
-        st.sidebar.success(f"✅ {today_str} 성과가 저장되었습니다!")
+        st.sidebar.success(f"✅ {today_str} 성과 저장 완료!")
         st.cache_data.clear()
         st.rerun()
-    except Exception as e:
-        st.sidebar.error(f"❌ 기록 실패: {e}")
+    except Exception as e: st.sidebar.error(f"❌ 기록 실패: {e}")
 
-# --- [사이드바 구성] ---
+# --- [사이드바] ---
 st.sidebar.header("🕹️ 관리 메뉴")
 m_data = get_market_data()
 today_str = now_kst.strftime('%Y-%m-%d')
 today_exists = today_str in history_df['Date'].astype(str).values if not history_df.empty else False
 
-if st.sidebar.button("🔄 실시간 시세 새로고침"):
+if st.sidebar.button("🔄 실시간 데이터 새로고침"):
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.divider()
-
-# 🎯 핵심: 기록하기 버튼 섹션 복구
 if today_exists:
     st.sidebar.warning(f"⚠️ 오늘은 이미 기록되었습니다.")
-    if st.sidebar.button("♻️ 오늘 데이터 덮어쓰기"):
-        record_performance(overwrite=True)
+    if st.sidebar.button("♻️ 오늘 데이터 덮어쓰기"): record_performance(overwrite=True)
 else:
-    if st.sidebar.button("💾 오늘의 결과 저장하기"):
-        record_performance(overwrite=False)
+    if st.sidebar.button("💾 오늘의 결과 저장하기"): record_performance(overwrite=False)
 
 # --- [AI 시장 분석 리포트] ---
 def render_ai_report(m_data, total_roi):
@@ -132,11 +118,11 @@ def render_ai_report(m_data, total_roi):
     st.divider()
     st.subheader("🕵️ AI 실시간 금융 통합 브리핑")
     if time_val < 900:
-        st.info(f"**🌅 장전 전략 리포트 ({now_kst.strftime('%H:%M')})**: 개장 전입니다. 전일 미 증시 동향을 반영하여 고배당 및 커버드콜 전략을 점검하세요.")
+        st.info(f"**🌅 장전 전략 리포트 ({now_kst.strftime('%H:%M')})**: 미 증시 동향 분석 및 개장 전 주요 섹터 대응 전략 수립 중입니다.")
     elif 900 <= time_val < 1530:
-        st.success(f"**📈 실시간 수급 진단 ({now_kst.strftime('%H:%M')})**: KOSPI **{m_data['kospi']:,}**. 외인({m_data['foreign']}), 기관({m_data['institutional']}) 수급 확인 중. 현재 통합 수익률 **{total_roi:.2f}%**.")
+        st.success(f"**📈 실시간 수급 진단 ({now_kst.strftime('%H:%M')})**: KOSPI **{m_data['kospi']:,}**. 외인({m_data['foreign']}), 기관({m_data['institutional']}) 동향 포착. 누적 수익률 **{total_roi:.2f}%**.")
     else:
-        st.warning(f"**📉 장 마감 종합 요약 ({now_kst.strftime('%H:%M')})**: 지수 **{m_data['kospi']:,}**로 마감. 오늘 하루도 수고하셨습니다.")
+        st.warning(f"**📉 장 마감 종합 요약 ({now_kst.strftime('%H:%M')})**: 지수 **{m_data['kospi']:,}**로 마감. 포트폴리오 성과를 점검하시기 바랍니다.")
 
 # --- UI 메인 섹션 ---
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
@@ -172,7 +158,7 @@ with tabs[0]:
                 if c in history_df.columns:
                     nv = 100 + history_df[c] - history_df[c].iloc[0]
                     fig_t.add_trace(go.Scatter(x=history_df['Date'], y=nv, name=c.replace('수익률',''), line=dict(color=clr, width=3), mode='lines+markers'))
-            fig_t.update_layout(title="수익률 추이", height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            fig_t.update_layout(title="수익률 추이", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig_t, use_container_width=True)
         with col_g2:
             fig_pie = go.Figure(data=[go.Pie(labels=sum_acc['계좌명'], values=sum_acc['평가금액'], hole=.3, marker_colors=['#FF4B4B', '#87CEEB', '#00FF00'], textinfo='percent+label')])
@@ -185,7 +171,6 @@ with tabs[0]:
 def render_account_tab(acc_name, tab_obj):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
-        sub_df['수익률'] = ((sub_df['평가금액'] / sub_df['매입금액'] - 1) * 100).fillna(0)
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         
         c1, c2, c3 = st.columns(3)
@@ -193,9 +178,17 @@ def render_account_tab(acc_name, tab_obj):
         c2.metric("매입금액", f"{a_buy:,.0f}원")
         c3.metric("누적 수익률", f"{(a_eval/a_buy-1)*100 if a_buy>0 else 0:.2f}%")
         
-        # [v19.8 레이아웃] 넓은 테이블 유지
-        st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '평가금액', '수익률']].style.map(color_positive_negative, subset=['수익률']).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '수익률': '{:+.2f}%'
+        # 🎯 [핵심] 컬럼 추가 및 레이아웃 최적화
+        display_cols = ['종목명', '수량', '매입단가', '현재가', '주가변동', '매입금액', '평가금액', '손익', '수익률']
+        st.dataframe(sub_df[display_cols].style.map(color_positive_negative, subset=['주가변동', '손익', '수익률']).format({
+            '수량': '{:,.0f}', 
+            '매입단가': '{:,.0f}원', 
+            '현재가': '{:,.0f}원', 
+            '주가변동': '{:+,.0f}원', 
+            '매입금액': '{:,.0f}원', 
+            '평가금액': '{:,.0f}원', 
+            '손익': '{:+,.0f}원', 
+            '수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
         
         st.divider()
@@ -208,10 +201,10 @@ def render_account_tab(acc_name, tab_obj):
         with col_low2:
             st.subheader(f"🔍 AI 맞춤 진단")
             top_stock = sub_df.sort_values('평가금액', ascending=False).iloc[0]['종목명'] if not sub_df.empty else "없음"
-            st.success(f"{acc_name} 계좌의 주력 종목은 **{top_stock}**이며, 안정적인 포트폴리오를 구성하고 있습니다.")
+            st.success(f"{acc_name} 계좌의 핵심 종목은 **{top_stock}**이며, 안정적인 포트폴리오를 유지 중입니다.")
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.2 기록 버튼 및 레이아웃 통합")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.3 상세 변동 지표 강화 버전")
