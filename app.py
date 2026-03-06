@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v21.1", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v21.3", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -19,12 +19,6 @@ def get_now_kst():
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- [헬퍼 함수: 색상 지정] ---
-def color_positive_negative(v):
-    if isinstance(v, (int, float)):
-        return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
-    return ''
-
 # --- [데이터 로드 엔진] ---
 try:
     full_df = conn.read(worksheet=STOCKS_SHEET, ttl="1m")
@@ -32,6 +26,12 @@ try:
 except Exception as e:
     st.error(f"데이터 로드 오류: 시트 확인 필요 ({e})")
     st.stop()
+
+# --- [헬퍼 함수: 색상 지정] ---
+def color_positive_negative(v):
+    if isinstance(v, (int, float)):
+        return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
+    return ''
 
 # --- [시장 지수 및 시세 엔진] ---
 STOCK_CODES = {
@@ -47,7 +47,7 @@ def get_stable_price(name):
     if not code: return 0
     url = f"https://finance.naver.com/item/main.naver?code={code}"
     try:
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, timeout=5)
         soup = BeautifulSoup(res.text, 'html.parser')
         return int(soup.find("div", {"class": "today"}).find("span", {"class": "blind"}).text.replace(",", ""))
     except: return 0
@@ -69,24 +69,33 @@ def get_market_status():
     except: pass
     return market
 
-# --- [수급 모니터링 엔진: 30분 캐시] ---
+# --- [🎯 수급 레이더 엔진: 우회 경로 강화] ---
 @st.cache_data(ttl=1800)
 def get_cached_investor_data():
     trades = {"외인매수": [], "기관매수": [], "외인매도": [], "기관매도": []}
     f_time = get_now_kst().strftime('%H:%M:%S')
+    
+    # 전략: PC용 페이지가 차단될 경우를 대비해 모바일 API 성격의 경로 시도
+    url = "https://finance.naver.com/sise/sise_deal_rank.naver"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+        'Referer': 'https://m.stock.naver.com/'
+    }
+    
     try:
-        url = "https://finance.naver.com/sise/sise_deal_rank.naver"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        res = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
         tables = soup.find_all("table", {"class": "type_5"})
         keys = ["외인매수", "기관매수", "외인매도", "기관매도"]
+        
         for i, table in enumerate(tables[:4]):
             stocks = [a.text for a in table.find_all("a", {"class": "tltle"})[:10]]
             trades[keys[i]] = stocks
-    except: pass
+    except:
+        pass
     return trades, f_time
 
-# --- [성과 기록 함수: 완전 복구] ---
+# --- [성과 기록 함수] ---
 def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_info = get_market_status()
@@ -111,17 +120,15 @@ full_df['평가금액'] = full_df['수량'] * full_df['현재가']
 full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 full_df['수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).fillna(0)
 
-# --- [사이드바 구성] ---
+# --- 사이드바 ---
 st.sidebar.header("🕹️ 관리 메뉴")
-m_status = get_market_status()
-if st.sidebar.button("🔄 실시간 데이터 새로고침"):
+if st.sidebar.button("🔄 즉시 새로고침 (캐시 무시)"):
     st.cache_data.clear(); st.rerun()
-
 st.sidebar.divider()
 today_str = now_kst.strftime('%Y-%m-%d')
 today_exists = today_str in history_df['Date'].astype(str).values if not history_df.empty else False
 if today_exists:
-    st.sidebar.warning("⚠️ 오늘은 이미 기록되었습니다.")
+    st.sidebar.warning("⚠️ 이미 기록됨")
     if st.sidebar.button("♻️ 오늘 데이터 덮어쓰기"): record_performance(overwrite=True)
 else:
     if st.sidebar.button("💾 오늘의 결과 저장하기"): record_performance(overwrite=False)
@@ -145,6 +152,7 @@ with tabs[0]:
     sum_acc['누적 수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
     st.dataframe(sum_acc[['계좌명', '매입금액', '평가금액', '손익', '누적 수익률']].style.map(color_positive_negative, subset=['손익', '누적 수익률']).format({'매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적 수익률': '{:+.2f}%'}), hide_index=True, use_container_width=True)
 
+    # 차트 섹션 (v19.8 스타일)
     if not history_df.empty:
         st.divider()
         col_g1, col_g2 = st.columns([2, 1])
@@ -159,27 +167,33 @@ with tabs[0]:
                 if c in history_df.columns:
                     nv = 100 + history_df[c] - history_df[c].iloc[0]
                     fig_t.add_trace(go.Scatter(x=history_df['Date'], y=nv, name=c.replace('수익률',''), line=dict(color=clr, width=3), mode='lines+markers'))
-            fig_t.update_layout(title="수익률 추이", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            fig_t.update_layout(title="수익률 추이", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
             st.plotly_chart(fig_t, use_container_width=True)
         with col_g2:
             fig_pie = go.Figure(data=[go.Pie(labels=sum_acc['계좌명'], values=sum_acc['평가금액'], hole=.3, marker_colors=['#FF4B4B', '#87CEEB', '#00FF00'], textinfo='percent+label')])
             fig_pie.update_layout(title="계좌 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- [수급 레이더 리포트 섹션] ---
+    # --- [수급 레이더 리포트] ---
     st.divider()
     trades, fetch_time = get_cached_investor_data()
     my_stocks = full_df['종목명'].unique()
-    st.subheader(f"🕵️ AI 실시간 수급 레이더 (데이터 수집 시점: {fetch_time})")
+    m_info = get_market_status()
+
+    st.subheader(f"🕵️ AI 실시간 수급 레이더 (수집 시점: {fetch_time})")
     
     c_r1, c_r2 = st.columns(2)
-    for i, (name, val) in enumerate(m_status.items()):
+    for i, (name, val) in enumerate(m_info.items()):
         col = c_r1 if i == 0 else c_r2
         color = "#FF4B4B" if "+" in val['rate'] else "#87CEEB"
         col.markdown(f"**{name}: {val['now']}** <span style='color:{color}; font-weight:bold;'>({val['diff']} {val['rate']})</span>", unsafe_allow_html=True)
 
-    def highlight_radar(top_list, my_stocks, color):
-        if not top_list: return "데이터 로딩 중..."
+    def highlight_radar(top_list, my_stocks, color, title):
+        if not top_list:
+            # 🎯 해결책: 데이터가 안 나올 경우 직접 링크 제공
+            st.warning(f"{title} 데이터를 가져오지 못했습니다.")
+            st.markdown(f"[👉 네이버 금융 수급 순위 직접 보기](https://finance.naver.com/sise/sise_deal_rank.naver)")
+            return ""
         res = []
         for i, s in enumerate(top_list):
             if s in my_stocks: res.append(f"{i+1}. <span style='color:{color}; font-weight:bold;'>{s} (보유)</span>")
@@ -187,10 +201,10 @@ with tabs[0]:
         return "<br>".join(res)
 
     col_t1, col_t2, col_t3, col_t4 = st.columns(4)
-    col_t1.write("🟢 **외인 매수**"); col_t1.markdown(highlight_radar(trades['외인매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
-    col_t2.write("🔵 **외인 매도**"); col_t2.markdown(highlight_radar(trades['외인매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
-    col_t3.write("🟢 **기관 매수**"); col_t3.markdown(highlight_radar(trades['기관매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
-    col_t4.write("🔵 **기관 매도**"); col_t4.markdown(highlight_radar(trades['기관매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
+    col_t1.write("🟢 **외인 매수 TOP 10**"); col_t1.markdown(highlight_radar(trades['외인매수'], my_stocks, "#FF4B4B", "외인매수"), unsafe_allow_html=True)
+    col_t2.write("🔵 **외인 매도 TOP 10**"); col_t2.markdown(highlight_radar(trades['외인매도'], my_stocks, "#87CEEB", "외인매도"), unsafe_allow_html=True)
+    col_t3.write("🟢 **기관 매수 TOP 10**"); col_t3.markdown(highlight_radar(trades['기관매수'], my_stocks, "#FF4B4B", "기관매수"), unsafe_allow_html=True)
+    col_t4.write("🔵 **기관 매도 TOP 10**"); col_t4.markdown(highlight_radar(trades['기관매도'], my_stocks, "#87CEEB", "기관매도"), unsafe_allow_html=True)
 
 # --- [계좌별 상세 분석 탭] ---
 def render_account_tab(acc_name, tab_obj):
@@ -223,4 +237,4 @@ render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v21.1 완전 복구 완료")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v21.3 수급 돌파 시도")
