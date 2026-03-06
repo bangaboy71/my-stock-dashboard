@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v25.8", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v25.9", layout="wide")
 
 # --- [시트 및 시간 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -85,7 +85,7 @@ full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
 full_df['수익률'] = (full_df['손익'] / (full_df['매입금액'].replace(0, float('nan'))) * 100).fillna(0)
 full_df['전일대비(%)'] = ((full_df['현재가'] / (full_df['전일종가'].replace(0, float('nan'))) - 1) * 100).fillna(0)
 
-# --- [성과 기록 함수] ---
+# --- [성과 기록 함수: 보정 완료] ---
 def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_info = get_market_status()
@@ -93,16 +93,27 @@ def record_performance(overwrite=False):
     
     def get_stock_yield(acc, stock):
         row = full_df[(full_df['계좌명']==acc) & (full_df['종목명'].str.replace(' ', '') == stock.replace(' ', ''))]
-        return row.iloc[0]['수익률'] if not row.empty else 0
+        return row.iloc[0]['수익률'] if not row.empty else None # 존재하지 않으면 None
 
     kospi_now = m_info.get('KOSPI', {}).get('now', '0').replace(',','')
     new_row = {"Date": today_str, "KOSPI": float(kospi_now), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
-    for stock in STOCK_CODES.keys():
-        for acc in ['서은', '서희', '큰스님']:
-            new_row[f"{acc}_{stock}수익률"] = get_stock_yield(f"{acc}투자", stock)
+    
+    # 🎯 핵심 보정: 시트에 이미 존재하는 열 이름(S열~AI열 방지)만 찾아서 데이터 매칭
+    for col in history_df.columns:
+        if "수익률" in col and "_" in col:
+            # 예: "서은_삼성전자수익률" -> acc: "서은투자", stock: "삼성전자"
+            parts = col.split("_")
+            acc_part = parts[0] + "투자"
+            stock_part = parts[1].replace("수익률", "")
+            
+            y = get_stock_yield(acc_part, stock_part)
+            if y is not None:
+                new_row[col] = y
 
     try:
         updated_df = pd.concat([history_df[history_df['Date'].dt.strftime('%Y-%m-%d') != today_str], pd.DataFrame([new_row])], ignore_index=True)
+        # 시트의 원래 열 순서 유지
+        updated_df = updated_df[history_df.columns]
         conn.update(worksheet=TREND_SHEET, data=updated_df)
         st.sidebar.success("✅ 저장 완료!"); st.cache_data.clear(); st.rerun()
     except Exception as e: st.sidebar.error(f"❌ 실패: {e}")
@@ -119,7 +130,7 @@ else:
     if st.sidebar.button("💾 오늘의 결과 저장하기"): record_performance(overwrite=False)
 
 # --- UI 메인 ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v25.8</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v25.9</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -141,28 +152,17 @@ with tabs[0]:
         '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(%)': '{:+.2f}%', '누적 수익률': '{:+.2f}%'
     }), hide_index=True, use_container_width=True)
 
-    # 🎯 고도화: 총괄 탭 수익률 추이 그래프 (수익률 축 및 벤치마크 통일)
     if not history_df.empty:
         st.divider()
-        col_g1, col_g2 = st.columns([2, 1])
-        with col_g1:
-            fig_t = go.Figure()
-            # 1. KOSPI 벤치마크 수익률 (회색 점선)
-            bk_kospi = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
-            kospi_yield = ((history_df['KOSPI'] / bk_kospi) - 1) * 100
-            fig_t.add_trace(go.Scatter(x=history_df['Date'], y=kospi_yield, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
-            
-            # 2. 계좌별 누적 수익률 (실선)
-            for col, color in {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}.items():
-                if col in history_df.columns:
-                    fig_t.add_trace(go.Scatter(x=history_df['Date'], y=history_df[col], name=col.replace('수익률',''), line=dict(color=color, width=3)))
-            
-            fig_t.update_layout(title="📈 가족 자산 통합 수익률 추이 (vs KOSPI)", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", xaxis=dict(tickformat="%Y-%m-%d"), yaxis=dict(ticksuffix="%"))
-            st.plotly_chart(fig_t, use_container_width=True)
-        with col_g2:
-            fig_pie = go.Figure(data=[go.Pie(labels=sum_acc['계좌명'], values=sum_acc['평가금액'], hole=.3, marker_colors=['#FF4B4B', '#87CEEB', '#00FF00'], textinfo='percent+label')])
-            fig_pie.update_layout(title="💰 계좌별 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
-            st.plotly_chart(fig_pie, use_container_width=True)
+        fig_t = go.Figure()
+        bk_kospi = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
+        kospi_yield = ((history_df['KOSPI'] / bk_kospi) - 1) * 100
+        fig_t.add_trace(go.Scatter(x=history_df['Date'], y=kospi_yield, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+        for col, color in {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}.items():
+            if col in history_df.columns:
+                fig_t.add_trace(go.Scatter(x=history_df['Date'], y=history_df[col], name=col.replace('수익률',''), line=dict(color=color, width=3)))
+        fig_t.update_layout(title="📈 가족 자산 통합 수익률 추이 (vs KOSPI)", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", xaxis=dict(tickformat="%Y-%m-%d"), yaxis=dict(ticksuffix="%"))
+        st.plotly_chart(fig_t, use_container_width=True)
 
 # [계좌별 상세 분석 탭]
 def render_account_tab(acc_name, tab_obj, history_col):
@@ -217,4 +217,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v25.8 통합 수익률 축 및 벤치마크 동기화 완료")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v25.9 불필요 컬럼 생성 원천 차단")
