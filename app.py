@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v20.7", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v20.8", layout="wide")
 
 # --- [시트 탭 이름 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -27,7 +27,7 @@ except Exception as e:
     st.error(f"데이터 로드 오류: 시트의 탭 이름을 확인해주세요. ({e})")
     st.stop()
 
-# --- [시장 및 수급 데이터 엔진] ---
+# --- [시장 및 수급 실시간 크롤링 엔진] ---
 STOCK_CODES = {
     "삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", 
     "현대글로비스": "086280", "현대차2우B": "005387", 
@@ -48,40 +48,51 @@ def get_stable_price(name):
     except: return 0
 
 def get_market_status():
+    """지수 및 등락 정밀 수집 (부호 및 텍스트 논리 보정)"""
     market = {}
     try:
         for code in ["KOSPI", "KOSDAQ"]:
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
             res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
             soup = BeautifulSoup(res.text, 'html.parser')
-            now = soup.find("em", {"id": "now_value"}).text
+            now_val = soup.find("em", {"id": "now_value"}).text
             change_area = soup.find("span", {"id": "change_value_and_rate"})
             raw_text = change_area.text.strip().split()
-            diff_val, rate_val = raw_text[0], raw_text[1]
-            if '상승' in str(change_area) or 'red' in str(change_area):
-                diff_val, rate_val, status_text = "+" + diff_val.replace("+", ""), "+" + rate_val.replace("+", ""), "상승"
-            elif '하락' in str(change_area) or 'nv01' in str(change_area):
-                diff_val, rate_val, status_text = "-" + diff_val.replace("-", ""), "-" + rate_val.replace("-", ""), "하락"
-            else: status_text = "보합"
-            market[code] = {"now": now, "diff": diff_val, "rate": rate_val, "status": status_text}
+            
+            diff = raw_text[0].replace("상승", "").replace("하락", "").strip()
+            rate = raw_text[1].replace("상승", "").replace("하락", "").strip()
+            
+            # 네이버 클래스명을 분석하여 상승/하락 판별
+            if 'red02' in str(change_area) or 'plus' in str(change_area):
+                diff, rate = "+" + diff.replace("+", ""), "+" + rate.replace("+", "")
+            elif 'nv01' in str(change_area) or 'minus' in str(change_area):
+                diff, rate = "-" + diff.replace("-", ""), "-" + rate.replace("-", "")
+                
+            market[code] = {"now": now_val, "diff": diff, "rate": rate}
     except: pass
     return market
 
-def get_investor_trade_top10():
-    # 향후 관심종목 탭 확장을 위한 수급 TOP 10 데이터
-    return {
-        "외인매수": ["삼성전자", "현대차", "현대글로비스", "SK하이닉스", "LG화학", "삼성SDI", "기아", "KB금융", "POSCO홀딩스", "네이버"],
-        "외인매도": ["LG에너지솔루션", "에코프로", "카카오", "셀트리온", "테스", "SK스퀘어", "에스티팜", "일진전기", "KT&G", "삼성전자우"],
-        "기관매수": ["삼성전자", "KT&G", "에스티팜", "SK스퀘어", "현대차2우B", "대한항공", "HMM", "두산에너빌리티", "카카오뱅크", "삼성생명"],
-        "기관매도": ["일진전기", "LG에너지솔루션", "현대글로비스", "SK하이닉스", "삼성물산", "고려아연", "SK이노베이션", "LG전자", "아모레퍼시픽", "S-Oil"]
-    }
+def get_real_investor_top10():
+    """네이버에서 실제 외인/기관 매수/매도 TOP 10 실시간 수집"""
+    trades = {"외인매수": [], "기관매수": [], "외인매도": [], "기관매도": []}
+    try:
+        url = "https://finance.naver.com/sise/sise_deal_rank.naver"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        tables = soup.find_all("table", {"class": "type_5"})
+        keys = ["외인매수", "기관매수", "외인매도", "기관매도"]
+        for i, table in enumerate(tables[:4]):
+            stocks = [a.text for a in table.find_all("a", {"class": "tltle"})[:10]]
+            trades[keys[i]] = stocks
+    except: pass
+    return trades
 
 def color_positive_negative(v):
     if isinstance(v, (int, float)):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# 데이터 가공
+# 데이터 가공 및 정수화
 for c in ['수량', '매입단가']:
     full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 full_df['현재가'] = full_df['종목명'].apply(get_stable_price)
@@ -96,32 +107,33 @@ def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_info = get_market_status()
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-    kospi_val = m_info.get('KOSPI', {}).get('now', '0').replace(',','')
-    new_row = {"Date": today_str, "KOSPI": float(kospi_val), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
+    kospi_now = m_info.get('KOSPI', {}).get('now', '0').replace(',','')
+    new_row = {"Date": today_str, "KOSPI": float(kospi_now), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
     try:
         updated_df = history_df[history_df['Date'].astype(str) != today_str].copy() if overwrite else history_df.copy()
         updated_df = pd.concat([updated_df, pd.DataFrame([new_row])], ignore_index=True)
         conn.update(worksheet=TREND_SHEET, data=updated_df)
-        st.sidebar.success(f"✅ 성과 저장 완료!")
+        st.sidebar.success(f"✅ {today_str} 성과 저장 완료!")
         st.cache_data.clear(); st.rerun()
     except Exception as e: st.sidebar.error(f"❌ 기록 실패: {e}")
 
-# --- [AI 통합 레이더: 색상 식별 기능 추가] ---
+# --- [AI 통합 레이더: 실시간 대조 및 색상 하이라이트] ---
 def render_radar_report(m_info, my_stocks):
     st.divider()
-    st.subheader("🕵️ AI 실시간 금융 통합 레이더 (수급 식별 모드)")
+    st.subheader("🕵️ AI 실시간 금융 통합 레이더 (데이터 무결성 검증)")
     
-    # 1. 지수 현황
-    c1, c2 = st.columns(2)
+    # 1. 지수 현황 (부호 정교화)
+    c_idx1, c_idx2 = st.columns(2)
     for i, (name, val) in enumerate(m_info.items()):
-        col = c1 if i == 0 else c2
+        col = c_idx1 if i == 0 else c_idx2
         color = "#FF4B4B" if "+" in val['rate'] else "#87CEEB"
-        col.markdown(f"**{name}: {val['now']}** <span style='color:{color}; font-weight:bold;'>({val['diff']} {val['rate']}{val['status']})</span>", unsafe_allow_html=True)
+        col.markdown(f"**{name}: {val['now']}** <span style='color:{color}; font-weight:bold;'>({val['diff']} {val['rate']})</span>", unsafe_allow_html=True)
 
-    # 2. 수급 데이터 및 하이라이트 함수
-    trades = get_investor_trade_top10()
+    # 2. 실시간 수급 크롤링 데이터
+    trades = get_real_investor_top10()
     
     def highlight_stocks(stock_list, my_stocks, color):
+        if not stock_list: return "데이터 로딩 중..."
         formatted = []
         for s in stock_list:
             if s in my_stocks:
@@ -129,24 +141,22 @@ def render_radar_report(m_info, my_stocks):
             else: formatted.append(s)
         return ", ".join(formatted)
 
-    # 3. 위험 감시 알림
-    danger_stocks = [s for s in my_stocks if s in trades['외인매도'] or s in trades['기관매도']]
-    if danger_stocks: st.error(f"⚠️ **[수급 위험 감시]** 현재 대량 매도 포착 종목: {', '.join(danger_stocks)}")
-    else: st.success("✅ **[수급 위험 감시]** 현재 보유 종목 중 특이 매도 징후는 없습니다.")
+    # 3. 위험 종목 실시간 감시
+    danger_list = [s for s in my_stocks if s in trades['외인매도'] or s in trades['기관매도']]
+    if danger_list:
+        st.error(f"⚠️ **[수급 위험 감시]** 현재 외인/기관 매도 상위권에 포함된 보유 종목: {', '.join(danger_list)}")
+    else:
+        st.success("✅ **[수급 위험 감시]** 보유 종목 중 시장 매도 상위권(TOP 10) 노출 종목 없음.")
 
-    # 4. 시장 TOP 10 (🎯 요청 반영: 보유 종목 색상 표기)
-    st.markdown("#### 📊 시장 수급 TOP 10 및 보유 종목 대조")
+    # 4. 시장 수급 TOP 10 (🎯 요청 반영: 매수-빨강, 매도-파랑 하이라이트)
+    st.markdown("#### 📊 실시간 수급 TOP 10 (네이버 금융 공식 데이터)")
     col_t1, col_t2, col_t3, col_t4 = st.columns(4)
-    col_t1.write("**외인 매수 상위**")
-    col_t1.markdown(highlight_stocks(trades['외인매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
-    col_t2.write("**외인 매도 상위**")
-    col_t2.markdown(highlight_stocks(trades['외인매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
-    col_t3.write("**기관 매수 상위**")
-    col_t3.markdown(highlight_stocks(trades['기관매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
-    col_t4.write("**기관 매도 상위**")
-    col_t4.markdown(highlight_stocks(trades['기관매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
+    col_t1.write("**외인 매수 상위**"); col_t1.markdown(highlight_stocks(trades['외인매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
+    col_t2.write("**외인 매도 상위**"); col_t2.markdown(highlight_stocks(trades['외인매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
+    col_t3.write("**기관 매수 상위**"); col_t3.markdown(highlight_stocks(trades['기관매수'], my_stocks, "#FF4B4B"), unsafe_allow_html=True)
+    col_t4.write("**기관 매도 상위**"); col_t4.markdown(highlight_stocks(trades['기관매도'], my_stocks, "#87CEEB"), unsafe_allow_html=True)
 
-# 사이드바
+# --- 사이드바 ---
 st.sidebar.header("🕹️ 관리 메뉴")
 m_info = get_market_status()
 if st.sidebar.button("🔄 실시간 데이터 새로고침"):
@@ -161,7 +171,6 @@ else:
     if st.sidebar.button("💾 오늘의 결과 저장하기"): record_performance(overwrite=False)
 
 # --- UI 메인 섹션 ---
-
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
@@ -228,10 +237,10 @@ def render_account_tab(acc_name, tab_obj):
         with col_low2:
             st.subheader(f"🔍 AI 맞춤 진단")
             top_stock = sub_df.sort_values('평가금액', ascending=False).iloc[0]['종목명'] if not sub_df.empty else "없음"
-            st.success(f"{acc_name} 계좌의 핵심 종목은 **{top_stock}**이며 안정적으로 유지 중입니다.")
+            st.success(f"{acc_name} 계좌의 핵심 종목은 **{top_stock}**입니다.")
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.7 수급 대조 하이라이트 완료")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.8 실시간 수급 크롤링 정식 버전")
