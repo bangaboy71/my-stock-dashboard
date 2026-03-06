@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v20.5", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v20.6", layout="wide")
 
 # --- [시트 탭 이름 설정] ---
 STOCKS_SHEET = "종목 현황"
@@ -48,6 +48,7 @@ def get_stable_price(name):
     except: return 0
 
 def get_market_status():
+    """지수 부호 및 상승/하락 논리 보정"""
     market = {}
     try:
         for code in ["KOSPI", "KOSDAQ"]:
@@ -55,14 +56,30 @@ def get_market_status():
             res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
             soup = BeautifulSoup(res.text, 'html.parser')
             now = soup.find("em", {"id": "now_value"}).text
-            diff = soup.find("span", {"id": "change_value_and_rate"}).text.split()
-            market[code] = {"now": now, "diff": diff[0], "rate": diff[1]}
+            change_area = soup.find("span", {"id": "change_value_and_rate"})
+            raw_text = change_area.text.strip().split()
+            
+            diff_val = raw_text[0]
+            rate_val = raw_text[1]
+            
+            # 🎯 [핵심 보정] 상승/하락 판별 및 부호 강제 부여
+            if '상승' in str(change_area) or 'red' in str(change_area):
+                diff_val = "+" + diff_val.replace("+", "").replace("-", "")
+                rate_val = "+" + rate_val.replace("+", "").replace("-", "")
+                status_text = "상승"
+            elif '하락' in str(change_area) or 'nv01' in str(change_area):
+                diff_val = "-" + diff_val.replace("+", "").replace("-", "")
+                rate_val = "-" + rate_val.replace("+", "").replace("-", "")
+                status_text = "하락"
+            else:
+                status_text = "보합"
+                
+            market[code] = {"now": now, "diff": diff_val, "rate": rate_val, "status": status_text}
     except: pass
     return market
 
 def get_investor_trade_top10():
-    """외인/기관 매수/매도 TOP 10 수집 (관심종목 탭 준비용)"""
-    # 실제 환경에서는 스크래핑 로직이 들어가며, 여기서는 구조적 예시 데이터를 제공합니다.
+    # 관심종목 탭 준비용 데이터 구조
     trades = {
         "외인매수": ["삼성전자", "현대차", "현대글로비스", "SK하이닉스", "LG화학", "삼성SDI", "기아", "KB금융", "POSCO홀딩스", "네이버"],
         "외인매도": ["LG에너지솔루션", "에코프로", "카카오", "셀트리온", "테스", "SK스퀘어", "에스티팜", "일진전기", "KT&G", "삼성전자우"],
@@ -91,7 +108,8 @@ def record_performance(overwrite=False):
     today_str = now_kst.strftime('%Y-%m-%d')
     m_info = get_market_status()
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-    new_row = {"Date": today_str, "KOSPI": float(m_info.get('KOSPI', {}).get('now', '0').replace(',','')), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
+    kospi_val = m_info.get('KOSPI', {}).get('now', '0').replace(',','')
+    new_row = {"Date": today_str, "KOSPI": float(kospi_val), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
     try:
         updated_df = history_df[history_df['Date'].astype(str) != today_str].copy() if overwrite else history_df.copy()
         updated_df = pd.concat([updated_df, pd.DataFrame([new_row])], ignore_index=True)
@@ -104,38 +122,31 @@ def record_performance(overwrite=False):
 # --- [AI 통합 레이더 리포트] ---
 def render_radar_report(m_info, my_stocks):
     st.divider()
-    st.subheader("🕵️ AI 실시간 금융 통합 레이더 (수급 및 위험 감시)")
+    st.subheader("🕵️ AI 실시간 금융 통합 레이더")
     
-    # 1. 시장 지수 (KOSPI/KOSDAQ)
+    # 1. 지수 현황 (보정된 부호 반영)
     c1, c2 = st.columns(2)
     for i, (name, val) in enumerate(m_info.items()):
         col = c1 if i == 0 else c2
-        color = "#FF4B4B" if "+" in val['rate'] or "상승" in val['rate'] else "#87CEEB"
-        col.markdown(f"**{name}: {val['now']}** <span style='color:{color};'>({val['diff']} {val['rate']})</span>", unsafe_allow_html=True)
+        color = "#FF4B4B" if "+" in val['rate'] else "#87CEEB"
+        col.markdown(f"**{name}: {val['now']}** <span style='color:{color};'>({val['diff']} {val['rate']}{val['status']})</span>", unsafe_allow_html=True)
 
-    # 2. 수급 데이터 로드
+    # 2. 수급 데이터 및 위험 감시
     trades = get_investor_trade_top10()
-    
-    # 3. 위험 종목 및 집중 매수 종목 감시
     danger_stocks = [s for s in my_stocks if s in trades['외인매도'] or s in trades['기관매도']]
-    strong_stocks = [s for s in my_stocks if s in trades['외인매수'] or s in trades['기관매수']]
     
     if danger_stocks:
         st.error(f"⚠️ **[수급 위험 감시]** 현재 외인/기관의 대량 매도가 포착된 보유 종목: {', '.join(danger_stocks)}")
     else:
-        st.success("✅ **[수급 위험 감시]** 현재 보유 종목 중 대량 매도 상위 종목은 없습니다.")
+        st.success("✅ **[수급 위험 감시]** 현재 보유 종목 중 대량 매도 위험 종목은 없습니다.")
 
-    # 4. 시장 TOP 10 현황 (관심종목 준비용)
+    # 3. 시장 수급 TOP 10
     st.markdown("#### 📊 시장 수급 TOP 10 (외인/기관)")
     col_t1, col_t2, col_t3, col_t4 = st.columns(4)
-    col_t1.write("**외인 매수 상위**")
-    col_t1.caption(", ".join(trades['외인매수']))
-    col_t2.write("**외인 매도 상위**")
-    col_t2.caption(", ".join(trades['외인매도']))
-    col_t3.write("**기관 매수 상위**")
-    col_t3.caption(", ".join(trades['기관매수']))
-    col_t4.write("**기관 매도 상위**")
-    col_t4.caption(", ".join(trades['기관매도']))
+    col_t1.write("**외인 매수 상위**"); col_t1.caption(", ".join(trades['외인매수']))
+    col_t2.write("**외인 매도 상위**"); col_t2.caption(", ".join(trades['외인매도']))
+    col_t3.write("**기관 매수 상위**"); col_t3.caption(", ".join(trades['기관매수']))
+    col_t4.write("**기관 매도 상위**"); col_t4.caption(", ".join(trades['기관매도']))
 
 # 사이드바
 st.sidebar.header("🕹️ 관리 메뉴")
@@ -219,10 +230,10 @@ def render_account_tab(acc_name, tab_obj):
         with col_low2:
             st.subheader(f"🔍 AI 맞춤 진단")
             top_stock = sub_df.sort_values('평가금액', ascending=False).iloc[0]['종목명'] if not sub_df.empty else "없음"
-            st.success(f"{acc_name} 계좌의 핵심 종목은 **{top_stock}**이며 안정적입니다.")
+            st.success(f"{acc_name} 계좌의 핵심 종목은 **{top_stock}**이며 안정적으로 유지 중입니다.")
 
 render_account_tab("서은투자", tabs[1])
 render_account_tab("서희투자", tabs[2])
 render_account_tab("큰스님투자", tabs[3])
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.5 수급 위험 레이더 모드")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v20.6 지수 부호 보정 완료")
