@@ -9,7 +9,7 @@ import time
 import re
 
 # 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v30.9", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v31.6", layout="wide")
 
 # --- [CSS: v30.9 스타일 100% 복구] ---
 st.markdown("""
@@ -31,17 +31,17 @@ st.markdown("""
     .news-link { text-decoration: none; color: inherit; transition: 0.3s; }
     .news-link:hover { color: #FFD700 !important; text-decoration: underline; cursor: pointer; }
 
-    /* 🎯 딥다이브 카드 (정밀 튜닝) */
-    .insight-card { background: rgba(135,206,235,0.03); padding: 20px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.2); margin-bottom: 15px; }
+    /* 🎯 딥다이브 카드 스타일 고도화 */
+    .insight-card { background: rgba(135,206,235,0.03); padding: 22px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.2); margin-bottom: 20px; }
     .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.15rem; margin-bottom: 10px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 8px; }
-    .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px; }
     .insight-label { color: rgba(255,255,255,0.5); font-size: 0.85rem; }
     .insight-value { color: #FFFFFF; font-weight: bold; font-size: 1rem; }
     .target-price { color: #FFD700; font-size: 1.15rem; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [데이터 엔진 및 시간 설정: v30.9] ---
+# --- [데이터 엔진 및 시간 설정: v30.9와 100% 동일] ---
 STOCKS_SHEET = "종목 현황"
 TREND_SHEET = "trend"
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
@@ -59,7 +59,7 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# --- [🎯 딥다이브 엔진: 정밀 타격 (N/A 해결)] ---
+# --- [🎯 딥다이브 엔진: N/A 문제 완벽 해결을 위한 정밀 로직] ---
 def get_stock_intelligence(name):
     code = STOCK_CODES.get(name.replace(" ", ""))
     if not code: return None
@@ -68,34 +68,40 @@ def get_stock_intelligence(name):
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        desc = "기업 정보를 불러올 수 없습니다."
-        summary_info = soup.find("div", {"class": "summary_info"})
-        if summary_info:
-            p_tag = summary_info.find("p")
+        # 1. 기업 개요 추출 (Stock vs ETF 대응)
+        desc = "정보 분석 중..."
+        summary = soup.find("div", {"id": "summary_info"})
+        if not summary: summary = soup.find("div", {"class": "summary_info"})
+        if summary:
+            p_tag = summary.find("p")
             if p_tag: desc = p_tag.text.strip().split(".")[0] + "."
 
         tp, per, pbr, div = "N/A", "N/A", "N/A", "N/A"
+        
+        # 2. 리서치 목표가 (expect 영역 정밀 타격)
+        expect_div = soup.find("div", {"class": "expect"})
+        if expect_div:
+            tp_em = expect_div.find("em")
+            if tp_em: tp = tp_em.text + "원"
+        
+        # 3. 재무 지표 (aside 테이블의 th/td 쌍을 정확히 매칭)
         aside = soup.find("div", {"class": "aside"})
         if aside:
-            # 목표가
-            tp_em = aside.find("em", {"class": "c_rate"})
-            if tp_em: tp = tp_em.text + "원"
-            
-            # 재무 수치 (N/A 해결을 위해 tr을 직접 순회하며 th 텍스트 대조)
-            trs = aside.find_all("tr")
-            for tr in trs:
+            for tr in aside.find_all("tr"):
                 th = tr.find("th")
                 if th:
-                    txt = th.text
-                    val = tr.find("em").text if tr.find("em") else "N/A"
-                    if "PER" in txt: per = val + "배"
-                    elif "PBR" in txt: pbr = val + "배"
-                    elif "배당수익률" in txt: div = val + "%"
+                    th_txt = th.text
+                    td_em = tr.find("em")
+                    if td_em:
+                        val = td_em.text
+                        if "PER" in th_txt and "배" in tr.text: per = val + "배"
+                        elif "PBR" in th_txt and "배" in tr.text: pbr = val + "배"
+                        elif "배당수익률" in th_txt: div = val + "%"
         
         return {"desc": desc, "tp": tp, "per": per, "pbr": pbr, "div": div}
     except: return None
 
-# --- [v30.9 공시/지수/가격 파싱 엔진] ---
+# --- [v30.9 공시/지수/가격 파싱 엔진 원형 복구] ---
 def get_acc_news(stocks):
     news_list = []
     try:
@@ -177,8 +183,8 @@ if st.sidebar.button("🧹 과거 데이터 정제 (중복 제거)"):
     history_df['Date'] = pd.to_datetime(history_df['Date']).dt.strftime('%Y-%m-%d')
     conn.update(worksheet=TREND_SHEET, data=history_df.drop_duplicates(subset=['Date'], keep='last')); st.sidebar.success("정제 완료"); st.rerun()
 
-# --- UI 메인 ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v30.9</h1>", unsafe_allow_html=True)
+# --- UI 메인 (버전 표시 수정) ---
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v31.6</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황 (v30.9 레이아웃 100% 사수)
@@ -223,7 +229,7 @@ with tabs[0]:
         st.markdown(f"""<div class='report-box'>
             <h4 style='color: #87CEEB;'>🇰🇷 국내 시장 심층 분석 리포트</h4>
             <div class='market-tag'>데일리 시장 총평</div>
-            <p>2026년 3월 7일 현재, 국내 증시는 <b>KOSPI 5,000선</b> 돌파 이후 역사적 변곡점에 있습니다. 사용자님 지적대로 초강세장을 유지 중입니다.</p>
+            <p>2026년 3월 7일 현재, 국내 증시는 <b>KOSPI 5,000선</b> 돌파 이후 안착을 위한 강력한 수급 공방이 이어지는 역사적 변곡점에 있습니다.</p>
             <div class='market-tag'>KOSPI 시장 분석</div>
             <p>삼성전자와 SK하이닉스 등 시총 상위주가 지수 성장을 주도하고 있습니다.</p>
             <div class='market-tag'>KOSDAQ 시장 분석</div>
@@ -233,7 +239,7 @@ with tabs[0]:
         st.markdown(f"""<div class='report-box'>
             <h4 style='color: #FF4B4B;'>🌍 글로벌 시장 및 매크로 분석</h4>
             <div class='market-tag'>미국 증시 및 환율 상황</div>
-            <p>나스닥은 기술주 중심의 랠리를 지속하고 있으며, 환율은 <b>1,400원 중후반대</b>를 유지하고 있습니다.</p>
+            <p>나스닥은 기술주 중심의 랠리를 지속 중이며, 환율은 <b>1,400원 중후반대</b>를 유지하고 있습니다.</p>
             <div class='market-tag'>2026 미 중간선거 변수</div>
             <p>올해 하반기 미국 중간선거는 섹터별 대응 전략이 필수적인 핵심 변수입니다.</p>
         </div>""", unsafe_allow_html=True)
@@ -242,18 +248,18 @@ with tabs[0]:
     st.subheader("📊 관심 섹터별 인텔리전스")
     sec_cols = st.columns(3)
     sectors = {
-        "반도체 / IT": {"주도주": "삼성전자, SK하이닉스", "시황": "AI 칩 수요 폭발.", "전망": "하반기 실적 급증 예상."},
-        "전력 / ESS": {"주도주": "LS ELECTRIC, 일진전기", "시황": "북미 인프라 교체 수혜.", "전망": "슈퍼 사이클 진입."},
-        "배터리 / 에너지": {"주도주": "LG에너지솔루션, 에코프로", "시황": "전고체 기술 기대감.", "전망": "기술력 중심 재편."},
-        "바이오 / 헬스케어": {"주도주": "삼성바이오, 알테오젠", "시황": "기술 수출 기대감.", "전망": "시가총액 재평가 가속."},
-        "모빌리티 / 로봇": {"주도주": "현대차, 두산로보틱스", "시황": "휴머노이드 상용화.", "전망": "스마트 팩토리 시장 개화."},
-        "소비재 / 뷰티": {"주도주": "아모레퍼시픽, 브이티", "시황": "북미 점유율 폭증.", "전망": "최대 실적 달성 지속."}
+        "반도체 / IT": {"주도주": "삼성전자, SK하이닉스", "전망": "AI 칩 수요 폭발."},
+        "전력 / ESS": {"주도주": "LS ELECTRIC, 일진전기", "전망": "북미 인프라 교체 수혜."},
+        "배터리 / 에너지": {"주도주": "LG에너솔루션, 에코프로", "전망": "전고체 기술 기대감."},
+        "바이오 / 헬스케어": {"주도주": "삼성바이오, 알테오젠", "전망": "기술 수출 모멘텀."},
+        "모빌리티 / 로봇": {"주도주": "현대차, 두산로보틱스", "전망": "휴머노이드 시장 개화."},
+        "소비재 / 뷰티": {"주도주": "아모레퍼시픽, 브이티", "전망": "북미 점유율 폭증."}
     }
     for i, (n, d) in enumerate(sectors.items()):
         with sec_cols[i % 3]:
-            st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><div class='leader-tag'>👑 주도주: {d['주도주']}</div><p style='font-size: 0.85em;'><b>🌡️ 시황:</b> {d['시황']}<br><b style='color:#FFD700;'>🔭 전망:</b> {d['전망']}</p></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><div class='leader-tag'>👑 주도주: {d['주도주']}</div><p style='font-size: 0.85em;'><b>🔭 전망:</b> {d['전망']}</p></div>", unsafe_allow_html=True)
 
-# [계좌별 상세 분석 탭: v30.9 레이아웃 100% 사수]
+# [계좌별 상세 분석 탭: v30.9 레이아웃 + 딥다이브 정상화]
 def render_account_tab(acc_name, tab_obj, history_col):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
@@ -273,11 +279,10 @@ def render_account_tab(acc_name, tab_obj, history_col):
         st.divider()
         g1, g2 = st.columns([2, 1])
         with g1:
-            # 🎯 [🎯 종목 대조 및 추이 그래프: v30.9 형식 복구]
             stk_list = sub_df['종목명'].unique().tolist()
             sel = st.selectbox(f"📍 {acc_name} 종목 분석 및 대조", stk_list, key=f"sel_{acc_name}")
             
-            # [신규] 딥다이브 카드 (데이터 표출 보강)
+            # 🎯 [신규] 인텔리전스 딥다이브 카드 (데이터 표출 정상화)
             intel = get_stock_intelligence(sel)
             if intel:
                 st.markdown(f"""
@@ -297,7 +302,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
                 fig = go.Figure()
                 h_dt = history_df['Date'].astype(str)
                 fig.add_trace(go.Scatter(x=h_dt, y=history_df[history_col], mode='lines+markers', name='계좌 수익률', line=dict(color='#87CEEB', width=4)))
-                # 🎯 종목별 개별 추이 대조 복구
+                # 🎯 종목별 개별 추이 대조 (v30.9 형식)
                 s_c = next((c for c in history_df.columns if acc_name[:2] in c and sel.replace(' ','') in c.replace(' ','')), "")
                 if s_c: fig.add_trace(go.Scatter(x=h_dt, y=history_df[s_c], mode='lines', name=f'{sel} 수익률', line=dict(color='#FF4B4B', width=2, dash='dot')))
                 fig.update_layout(title=f"📈 {acc_name} 성과 추이", height=400, xaxis=dict(type='category'), yaxis=dict(ticksuffix="%"), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
@@ -310,7 +315,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         st.divider()
         st.subheader(f"🕵️ {acc_name} 데일리 인텔리전스 리포트")
         ar_l, ar_r = st.columns(2)
-        with ar_l: st.markdown(f"<div class='report-box' style='height:250px;'><h4 style='color: #87CEEB;'>📋 계좌 총평</h4><p>현재 {acc_name} 계좌는 안정적인 흐름을 유지하고 있습니다.</p></div>", unsafe_allow_html=True)
+        with ar_l: st.markdown(f"<div class='report-box' style='height:250px;'><h4 style='color: #87CEEB;'>📋 계좌 총평</h4><p>현재 계좌는 주도주를 바탕으로 안정적인 흐름을 유지하고 있습니다.</p></div>", unsafe_allow_html=True)
         with ar_r: st.markdown(f"<div class='report-box' style='height:250px;'><h4 style='color: #FF4B4B;'>🌍 업황 대응 전략</h4><p>고환율 실적 효과를 모니터링 중입니다.</p></div>", unsafe_allow_html=True)
 
         # 🎯 하이퍼링크 공시 알림 (v30.9 유지)
@@ -324,4 +329,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v31.6 파이널 가디언")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v31.6 파이널 레졸루션")
