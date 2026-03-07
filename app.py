@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import re
 
 # 1. 설정 및 연결 (v31.6 원형 100% 사수)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v35.4", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v35.5", layout="wide")
 
 # --- [CSS: v31.6 스타일 및 렌더링 무결성 패치] ---
 st.markdown("""
@@ -18,20 +18,16 @@ st.markdown("""
     .report-box { padding: 25px; border-radius: 12px; height: 750px; overflow-y: auto; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.15); background-color: rgba(255,255,255,0.02); line-height: 1.8; }
     .sector-box { padding: 20px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background-color: rgba(255,255,255,0.04); min-height: 500px; margin-bottom: 20px; }
     .sector-title { font-size: 1.3rem; font-weight: bold; border-bottom: 4px solid #87CEEB; padding-bottom: 12px; margin-bottom: 15px; color: #87CEEB; }
-    .market-tag { background-color: rgba(135,206,235,0.2); padding: 5px 12px; border-radius: 6px; color: #87CEEB; font-weight: bold; margin-bottom: 10px; display: inline-block; font-size: 0.9em; }
-    .leader-tag { background-color: rgba(255,215,0,0.15); border: 1px solid rgba(255,215,0,0.4); padding: 6px 12px; border-radius: 6px; color: #FFD700; font-weight: bold; margin-bottom: 12px; display: inline-block; font-size: 0.9em; }
-    .index-indicator { padding: 15px 30px; border-radius: 12px; font-weight: bold; font-size: 1.2rem; border: 2px solid; text-align: center; box-shadow: 4px 4px 15px rgba(0,0,0,0.3); background-color: rgba(0,0,0,0.2); }
-    .up-style { color: #FF4B4B; border-color: #FF4B4B; background-color: rgba(255, 75, 75, 0.05); }
-    .down-style { color: #87CEEB; border-color: #87CEEB; background-color: rgba(135, 206, 235, 0.05); }
+    .index-indicator { padding: 15px 30px; border-radius: 12px; font-weight: bold; font-size: 1.2rem; border: 2px solid; text-align: center; background-color: rgba(0,0,0,0.2); }
+    .up-style { color: #FF4B4B; border-color: #FF4B4B; }
+    .down-style { color: #87CEEB; border-color: #87CEEB; }
     
     .acc-flash-container { background: rgba(255,215,0,0.05); padding: 15px; border-radius: 10px; border: 1px dashed #FFD700; margin-top: 20px; }
-    .acc-flash-item { font-size: 0.88rem; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; }
-    .acc-flash-stock { color: #87CEEB; font-weight: bold; margin-right: 8px; }
-    .news-link { text-decoration: none; color: inherit; transition: 0.3s; }
-    .news-link:hover { color: #FFD700 !important; text-decoration: underline; cursor: pointer; }
+    .news-link:hover { color: #FFD700 !important; text-decoration: underline; }
 
     .insight-card { background: rgba(135,206,235,0.03); padding: 22px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.2); margin-bottom: 20px; color: white; }
     .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.15rem; margin-bottom: 15px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 8px; }
+    .insight-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px; }
     .insight-label { color: rgba(255,255,255,0.5); font-size: 0.85rem; }
     .insight-value { color: #FFFFFF; font-weight: bold; font-size: 1.2rem; }
     </style>
@@ -66,25 +62,9 @@ def get_dividend_intelligence(name):
                 th = tr.find("th")
                 if th and ("배당수익률" in th.text or "분배율" in th.text):
                     val_em = tr.find("em")
-                    if val_em:
-                        val = val_em.text
-                        if float(val.replace(",","")) < 30: info["div"] = val + "%"
+                    if val_em and float(val_em.text.replace(",","")) < 30: info["div"] = val_em.text + "%"
         return info
     except: return None
-
-def get_acc_news(stocks):
-    news_list = []
-    try:
-        for s in stocks:
-            code = STOCK_CODES.get(s.replace(" ", ""))
-            if not code: continue
-            soup = BeautifulSoup(requests.get(f"https://finance.naver.com/item/main.naver?code={code}", headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
-            news_sec = soup.find("div", {"class": "news_section"})
-            if news_sec:
-                tag = news_sec.find("li").find("a")
-                news_list.append({"name": s, "title": tag.text.strip(), "url": tag['href'] if tag['href'].startswith("http") else f"https://finance.naver.com{tag['href']}"})
-    except: pass
-    return news_list
 
 def get_market_indices():
     market = {}
@@ -141,7 +121,7 @@ if st.sidebar.button("💾 오늘의 결과 저장/덮어쓰기"):
     st.sidebar.success(f"✅ 저장 완료"); st.rerun()
 
 # --- [UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v35.4</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v35.5</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -149,10 +129,10 @@ with tabs[0]:
     t_eval, t_buy, t_prev = full_df['평가금액'].sum(), full_df['매입금액'].sum(), full_df['전일평가금액'].sum()
     d_rate = ((t_eval / t_prev - 1) * 100) if t_prev > 0 else 0
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원") # 🎯 [해결] 전일 대비 변동 삭제
+    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원")
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    m3.metric("총 손익", f"{t_eval-t_buy:+,.0f}원", f"{t_eval-t_prev:+,.0f}원") # 🎯 변동 유지
-    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{d_rate:+.2f}%") # 🎯 변동 유지
+    m3.metric("총 손익", f"{t_eval-t_buy:+,.0f}원", f"{t_eval-t_prev:+,.0f}원")
+    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{d_rate:+.2f}%")
     
     st.markdown("---")
     if not history_df.empty:
@@ -167,24 +147,6 @@ with tabs[0]:
         fig.update_layout(title="📈 가족 자산 통합 수익률 추이 (vs KOSPI)", xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white", height=450)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.divider()
-    st.subheader("🕵️ AI 관제탑 데일리 심층 리포트 (v31.6)")
-    m_idx = get_market_indices()
-    idx_l, idx_r = st.columns(2)
-    idx_l.markdown(f"<div class='index-indicator {m_idx['KOSPI']['style']}'>KOSPI: {m_idx['KOSPI']['now']} ({m_idx['KOSPI']['diff']}, {m_idx['KOSPI']['rate']})</div>", unsafe_allow_html=True)
-    idx_r.markdown(f"<div class='index-indicator {m_idx['KOSDAQ']['style']}'>KOSDAQ: {m_idx['KOSDAQ']['now']} ({m_idx['KOSDAQ']['diff']}, {m_idx['KOSDAQ']['rate']})</div>", unsafe_allow_html=True)
-    
-    rep_l, rep_r = st.columns(2)
-    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>국내 증시는 강력한 펀더멘털을 보이고 있습니다.</p></div>", unsafe_allow_html=True)
-    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>나스닥 AI 랠리가 수출 대형주 실적에 우호적으로 작용 중입니다.</p></div>", unsafe_allow_html=True)
-
-    st.divider()
-    st.subheader("📊 관심 섹터별 인텔리전스 (6대 섹터)")
-    s_cols = st.columns(3)
-    sectors = {"반도체 / IT": "AI 수요 폭발 수혜.", "전력 / ESS": "북미 인프라 교체 주기.", "배터리": "전고체 기술 기대감.", "바이오": "기술 수출 모멘텀.", "모빌리티": "휴머노이드 상용화.", "뷰티": "글로벌 점유율 확대."}
-    for i, (n, d) in enumerate(sectors.items()):
-        with s_cols[i % 3]: st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><p>{d}</p></div>", unsafe_allow_html=True)
-
 # [계좌별 상세 분석 탭]
 def render_account_tab(acc_name, tab_obj, history_col):
     with tab_obj:
@@ -195,31 +157,34 @@ def render_account_tab(acc_name, tab_obj, history_col):
         a_daily_rate = ((a_eval / a_prev - 1) * 100) if a_prev > 0 else 0
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("평가액", f"{a_eval:,.0f}원") # 🎯 [해결] 계좌별 평가액 하단 변동 삭제
+        c1.metric("평가액", f"{a_eval:,.0f}원")
         c2.metric("매입원금", f"{a_buy:,.0f}원")
-        c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원") # 🎯 변동 유지
-        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{a_daily_rate:+.2f}%") # 🎯 변동 유지
+        c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원")
+        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{a_daily_rate:+.2f}%")
         
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '손익', '수익률']].style.map(color_positive_negative, subset=['손익', '수익률']).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
 
         st.divider()
-        g1, g2 = st.columns([2, 1])
-        with g1:
-            sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
-            intel = get_dividend_intelligence(sel)
-            if intel:
-                st.markdown(f"""
-                <div class='insight-card'>
-                    <div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div>
-                    <p style='font-size: 0.9rem; color: rgba(255,255,255,0.8);'>{intel['desc']}</p>
-                    <div class='insight-grid'>
-                        <div><span class='insight-label'>{"분배금 수익률" if intel['type']=="ETF" else "예상 배당수익률"}</span><br><span class='insight-value'>{intel['div']}</span></div>
-                    </div>
+        
+        # 🎯 [레이아웃 조정] 분석 카드를 상단 가로 전체로 배치
+        sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+        intel = get_dividend_intelligence(sel)
+        if intel:
+            st.markdown(f"""
+            <div class='insight-card'>
+                <div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div>
+                <p style='font-size: 0.9rem; color: rgba(255,255,255,0.8);'>{intel['desc']}</p>
+                <div class='insight-grid'>
+                    <div><span class='insight-label'>{"분배금 수익률" if intel['type']=="ETF" else "예상 배당수익률"}</span><br><span class='insight-value'>{intel['div']}</span></div>
                 </div>
-                """, unsafe_allow_html=True)
-            
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 🎯 [레이아웃 조정] 추이 그래프 우측에 비중 그래프 위치
+        g_left, g_right = st.columns([2, 1])
+        with g_left:
             if not history_df.empty and history_col in history_df.columns:
                 fig_acc = go.Figure()
                 h_dt = history_df['Date'].dt.date.astype(str)
@@ -227,26 +192,16 @@ def render_account_tab(acc_name, tab_obj, history_col):
                 if len(sub_df) > 1:
                     s_c = next((c for c in history_df.columns if acc_name[:2] in c and sel.replace(' ','') in c.replace(' ','')), "")
                     if s_c: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_c], mode='lines', name=f'{sel} 수익률', line=dict(color='#FF4B4B', width=2, dash='dot')))
-                fig_acc.update_layout(height=400, xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", height=400, xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig_acc, use_container_width=True)
 
-        with g2:
+        with g_right:
             fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
-            fig_p.update_layout(height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
+            fig_p.update_layout(title="💰 자산 비중", height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
-
-        st.divider()
-        ar_l, ar_r = st.columns(2)
-        with ar_l: st.markdown("<div class='report-box' style='height:250px;'><h4 style='color:#87CEEB;'>📋 계좌 총평</h4><p>안정적인 흐름을 유지 중입니다.</p></div>", unsafe_allow_html=True)
-        with ar_r: st.markdown("<div class='report-box' style='height:250px;'><h4 style='color:#FF4B4B;'>🌍 대응 전략</h4><p>변동성을 방어하며 추가 수익을 창출합니다.</p></div>", unsafe_allow_html=True)
-
-        acc_news = get_acc_news(sub_df['종목명'].unique().tolist())
-        if acc_news:
-            news_html = " ".join([f"<div class='acc-flash-item'><span class='acc-flash-stock'>[{n['name']}]</span> <a href='{n['url']}' target='_blank' class='news-link'>{n['title']} ↗️</a></div>" for n in acc_news])
-            st.markdown(f"<div class='acc-flash-container'><div style='font-weight: bold; color: #FFD700; margin-bottom: 10px;'>🔔 최신 공시/뉴스 (새 창 이동)</div>{news_html}</div>", unsafe_allow_html=True)
 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v35.4 클린 메트릭")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v35.5 레이아웃 마스터")
