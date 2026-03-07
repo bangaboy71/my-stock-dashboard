@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import re
 
 # 1. 설정 및 연결 (v31.6 원형 100% 사수)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v35.3", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v35.4", layout="wide")
 
 # --- [CSS: v31.6 스타일 및 렌더링 무결성 패치] ---
 st.markdown("""
@@ -30,7 +30,6 @@ st.markdown("""
     .news-link { text-decoration: none; color: inherit; transition: 0.3s; }
     .news-link:hover { color: #FFD700 !important; text-decoration: underline; cursor: pointer; }
 
-    /* 🎯 딥다이브: 배당/분배율 집중형 UI */
     .insight-card { background: rgba(135,206,235,0.03); padding: 22px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.2); margin-bottom: 20px; color: white; }
     .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.15rem; margin-bottom: 15px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 8px; }
     .insight-label { color: rgba(255,255,255,0.5); font-size: 0.85rem; }
@@ -50,7 +49,6 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# --- [🎯 딥다이브 엔진] ---
 @st.cache_data(ttl="30m")
 def get_dividend_intelligence(name):
     code = STOCK_CODES.get(name.replace(" ", ""))
@@ -143,7 +141,7 @@ if st.sidebar.button("💾 오늘의 결과 저장/덮어쓰기"):
     st.sidebar.success(f"✅ 저장 완료"); st.rerun()
 
 # --- [UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v35.3</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v35.4</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -151,10 +149,10 @@ with tabs[0]:
     t_eval, t_buy, t_prev = full_df['평가금액'].sum(), full_df['매입금액'].sum(), full_df['전일평가금액'].sum()
     d_rate = ((t_eval / t_prev - 1) * 100) if t_prev > 0 else 0
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval-t_prev:+,.0f}원")
+    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원") # 🎯 [해결] 전일 대비 변동 삭제
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    m3.metric("총 손익", f"{t_eval-t_buy:+,.0f}원", f"{t_eval-t_prev:+,.0f}원")
-    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{d_rate:+.2f}%")
+    m3.metric("총 손익", f"{t_eval-t_buy:+,.0f}원", f"{t_eval-t_prev:+,.0f}원") # 🎯 변동 유지
+    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{d_rate:+.2f}%") # 🎯 변동 유지
     
     st.markdown("---")
     if not history_df.empty:
@@ -177,8 +175,8 @@ with tabs[0]:
     idx_r.markdown(f"<div class='index-indicator {m_idx['KOSDAQ']['style']}'>KOSDAQ: {m_idx['KOSDAQ']['now']} ({m_idx['KOSDAQ']['diff']}, {m_idx['KOSDAQ']['rate']})</div>", unsafe_allow_html=True)
     
     rep_l, rep_r = st.columns(2)
-    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>국내 증시는 코스피 5,000선 시대에 접어들며 강력한 펀더멘털을 보이고 있습니다.</p></div>", unsafe_allow_html=True)
-    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>나스닥 AI 랠리와 고환율 환경이 수출 대형주 실적에 우호적으로 작용 중입니다.</p></div>", unsafe_allow_html=True)
+    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>국내 증시는 강력한 펀더멘털을 보이고 있습니다.</p></div>", unsafe_allow_html=True)
+    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>나스닥 AI 랠리가 수출 대형주 실적에 우호적으로 작용 중입니다.</p></div>", unsafe_allow_html=True)
 
     st.divider()
     st.subheader("📊 관심 섹터별 인텔리전스 (6대 섹터)")
@@ -193,15 +191,14 @@ def render_account_tab(acc_name, tab_obj, history_col):
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        # 🎯 [해결] 계좌별 상단 지표에 변동률(Delta) 병기
         a_buy, a_eval, a_prev = sub_df['매입금액'].sum(), sub_df['평가금액'].sum(), sub_df['전일평가금액'].sum()
         a_daily_rate = ((a_eval / a_prev - 1) * 100) if a_prev > 0 else 0
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("평가액", f"{a_eval:,.0f}원", f"{a_eval-a_prev:+,.0f}원")
+        c1.metric("평가액", f"{a_eval:,.0f}원") # 🎯 [해결] 계좌별 평가액 하단 변동 삭제
         c2.metric("매입원금", f"{a_buy:,.0f}원")
-        c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원") # 🎯 전일 대비 변동액 병기
-        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{a_daily_rate:+.2f}%") # 🎯 전일 대비 변동률 병기
+        c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원") # 🎯 변동 유지
+        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{a_daily_rate:+.2f}%") # 🎯 변동 유지
         
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '손익', '수익률']].style.map(color_positive_negative, subset=['손익', '수익률']).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'
@@ -252,4 +249,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v35.3 델타 싱크")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v35.4 클린 메트릭")
