@@ -1,39 +1,3 @@
-import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timezone, timedelta
-import plotly.graph_objects as go
-import time
-import re
-
-# 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v31.0", layout="wide")
-
-# --- [CSS: v30.9 스타일 완벽 유지 및 딥다이브 카드 효과 추가] ---
-st.markdown("""
-    <style>
-    [data-testid="stMetricValue"] { font-size: 1.6rem !important; }
-    [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
-    .report-box { padding: 25px; border-radius: 12px; height: 750px; overflow-y: auto; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.15); background-color: rgba(255,255,255,0.02); line-height: 1.8; }
-    .sector-box { padding: 20px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background-color: rgba(255,255,255,0.04); min-height: 500px; margin-bottom: 20px; }
-    .sector-title { font-size: 1.3rem; font-weight: bold; border-bottom: 4px solid #87CEEB; padding-bottom: 12px; margin-bottom: 15px; color: #87CEEB; }
-    .market-tag { background-color: rgba(135,206,235,0.2); padding: 5px 12px; border-radius: 6px; color: #87CEEB; font-weight: bold; margin-bottom: 10px; display: inline-block; font-size: 0.9em; }
-    .leader-tag { background-color: rgba(255,215,0,0.15); border: 1px solid rgba(255,215,0,0.4); padding: 6px 12px; border-radius: 6px; color: #FFD700; font-weight: bold; margin-bottom: 12px; display: inline-block; font-size: 0.9em; }
-    .index-indicator { padding: 15px 30px; border-radius: 12px; font-weight: bold; font-size: 1.2rem; border: 2px solid; text-align: center; box-shadow: 4px 4px 15px rgba(0,0,0,0.3); background-color: rgba(0,0,0,0.2); }
-    .up-style { color: #FF4B4B; border-color: #FF4B4B; background-color: rgba(255, 75, 75, 0.05); }
-    .down-style { color: #87CEEB; border-color: #87CEEB; background-color: rgba(135, 206, 235, 0.05); }
-    
-    .acc-flash-container { background: rgba(255,215,0,0.05); padding: 15px; border-radius: 10px; border: 1px dashed #FFD700; margin-top: 20px; }
-    .acc-flash-item { font-size: 0.88rem; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; }
-    .acc-flash-stock { color: #87CEEB; font-weight: bold; margin-right: 8px; }
-    
-    .news-link { text-decoration: none; color: inherit; transition: 0.3s; }
-    .news-link:hover { color: #FFD700 !important; text-decoration: underline; cursor: pointer; }
-
-    /* 🎯 인텔리전스 딥다이브 카드 스타일 */
-    .insight-card { background: rgba(135,206,235,0.03); padding: 22px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.25); margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
     .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.15rem; margin-bottom: 12px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 8px; display: flex; align-items: center; gap: 8px; }
     .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 15px; }
     .insight-label { color: rgba(255,255,255,0.5); font-size: 0.8rem; }
@@ -301,3 +265,4 @@ render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
 st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v31.0 인프라 완결 버전")
+
