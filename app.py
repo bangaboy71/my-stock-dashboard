@@ -5,13 +5,18 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
-import yfinance as yf
 import re
 
-# 1. 설정 및 연결
-st.set_page_config(page_title="가족 자산 성장 관제탑 v31.8", layout="wide")
+# 🎯 yfinance를 안전하게 불러오기 (설치 전 오류 방지)
+try:
+    import yfinance as yf
+except ImportError:
+    yf = None
 
-# --- [CSS: v30.9 스타일 100% 복구 및 딥다이브 카드 강화] ---
+# 1. 설정 및 연결 (v30.9 원형)
+st.set_page_config(page_title="가족 자산 성장 관제탑 v31.9", layout="wide")
+
+# --- [CSS: v30.9 스타일 100% 복구] ---
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; }
@@ -29,17 +34,17 @@ st.markdown("""
     .news-link { text-decoration: none; color: inherit; transition: 0.3s; }
     .news-link:hover { color: #FFD700 !important; text-decoration: underline; cursor: pointer; }
 
-    /* 🎯 딥다이브 카드: 시각적 인텔리전스 강화 */
-    .insight-card { background: linear-gradient(135deg, rgba(135,206,235,0.05) 0%, rgba(0,0,0,0.1) 100%); padding: 22px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.25); margin-bottom: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-    .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.15rem; margin-bottom: 12px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 8px; }
+    /* 🎯 딥다이브 카드 스타일 */
+    .insight-card { background: rgba(135,206,235,0.03); padding: 22px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.2); margin-bottom: 15px; }
+    .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.15rem; margin-bottom: 10px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 8px; }
     .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px; }
     .insight-label { color: rgba(255,255,255,0.5); font-size: 0.85rem; }
     .insight-value { color: #FFFFFF; font-weight: bold; font-size: 1rem; }
-    .target-price { color: #FFD700; font-size: 1.1rem; font-weight: bold; }
+    .target-price { color: #FFD700; font-size: 1.15rem; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [데이터 엔진 및 시간 설정: v30.9와 동일] ---
+# --- [데이터 엔진 및 시간 설정: v30.9 원형] ---
 STOCKS_SHEET = "종목 현황"
 TREND_SHEET = "trend"
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
@@ -53,46 +58,50 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# --- [🎯 하이브리드 인텔리전스 엔진: yfinance + Naver] ---
+# --- [🎯 딥다이브 엔진: 에셋 타겟팅 + yfinance 하이브리드] ---
 @st.cache_data(ttl="1h")
 def get_stock_intelligence(name):
+    if yf is None: return None
     code = STOCK_CODES.get(name.replace(" ", ""))
     if not code: return None
     
-    # 야후 파이낸스 티커 변환 (.KS 또는 .KQ)
-    # 종목 코드 기반으로 코스피/코스닥 자동 판별 (간이 로직)
-    yahoo_code = f"{code}.KS" if int(code) < 300000 else f"{code}.KQ"
+    # 1. 종목 성격 판별
+    is_etf = any(kw in name for kw in ["KODEX", "TIGER", "ETF"])
+    is_pref = "우" in name and "B" in name
+    
+    # 2. 야후 티커 설정
+    yahoo_code = f"{code}.KS" if int(code) < 300000 or is_etf else f"{code}.KQ"
     
     try:
         ticker = yf.Ticker(yahoo_code)
         info = ticker.info
         
-        # 기본 데이터 (yfinance 기반)
-        res = {
-            "type": "STOCK",
-            "desc": info.get("longBusinessSummary", "정보를 불러올 수 없습니다.")[:120] + "...",
-            "per": f"{info.get('trailingPE', 'N/A'):.2f}배" if info.get('trailingPE') else "N/A",
-            "pbr": f"{info.get('priceToBook', 'N/A'):.2f}배" if info.get('priceToBook') else "N/A",
-            "div": f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else "N/A",
-            "tp": "N/A"
-        }
+        res = {"type": "STOCK", "desc": "정보 분석 중...", "per": "N/A", "pbr": "N/A", "div": "N/A", "tp": "N/A"}
         
-        # ETF/우선주 판별
-        if any(kw in name for kw in ["KODEX", "TIGER", "ETF"]): res["type"] = "ETF"
-        elif "우" in name: res["type"] = "PREF"
+        # 기업 개요 (영문 기반 번역 생략하고 핵심만)
+        res["desc"] = info.get("longBusinessSummary", "정보를 불러올 수 없습니다.")[:120] + "..."
         
-        # 목표주가 및 한국어 상세 요약은 네이버에서 보완 (Scraping 최소화)
-        if res["type"] == "STOCK":
+        if is_etf:
+            res["type"] = "ETF"
+            res["div"] = f"{info.get('trailingAnnualDividendYield', 0)*100:.2f}%" if info.get('trailingAnnualDividendYield') else "N/A"
+        else:
+            res["per"] = f"{info.get('trailingPE'):.2f}배" if info.get('trailingPE') else "N/A"
+            res["pbr"] = f"{info.get('priceToBook'):.2f}배" if info.get('priceToBook') else "N/A"
+            res["div"] = f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else "N/A"
+            if is_pref: res["type"] = "PREF"
+            
+            # 목표가 및 한국어 상세 요약은 네이버에서 보완
             n_url = f"https://finance.naver.com/item/main.naver?code={code}"
-            n_res = requests.get(n_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3)
-            soup = BeautifulSoup(n_res.text, 'html.parser')
+            soup = BeautifulSoup(requests.get(n_url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
             tp_tag = soup.select_one(".aside .expect em")
             if tp_tag: res["tp"] = tp_tag.text + "원"
+            summary = soup.find("div", {"id": "summary_info"})
+            if summary: res["desc"] = summary.text.strip().split(".")[0] + "."
             
         return res
     except: return None
 
-# (get_market_indices, get_stock_data, get_acc_news 등 v30.9 원형 엔진 유지)
+# (get_market_indices, get_stock_data, get_acc_news 등 v30.9 원형 유지)
 def get_market_indices():
     market = {}
     try:
@@ -129,15 +138,12 @@ def get_acc_news(stocks):
             soup = BeautifulSoup(res.text, 'html.parser')
             news_sec = soup.find("div", {"class": "news_section"})
             if news_sec:
-                top_tag = news_sec.find("li").find("a")
-                if top_tag:
-                    href = top_tag['href']
-                    full_link = href if href.startswith("http") else f"https://finance.naver.com{href}"
-                    news_list.append({"name": s, "title": top_tag.text.strip(), "url": full_link})
+                tag = news_sec.find("li").find("a")
+                news_list.append({"name": s, "title": tag.text.strip(), "url": tag['href'] if tag['href'].startswith("http") else f"https://finance.naver.com{tag['href']}"})
     except: pass
     return news_list
 
-# --- [데이터 전처리: v30.9 정수 기반 무결성] ---
+# --- [데이터 로드 및 전처리: v30.9 무결성] ---
 full_df = conn.read(worksheet=STOCKS_SHEET, ttl="1m")
 history_df = conn.read(worksheet=TREND_SHEET, ttl=0)
 
@@ -158,22 +164,18 @@ if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], format='mixed', errors='coerce').dt.date
     history_df = history_df.dropna(subset=['Date']).sort_values('Date')
 
-# (사이드바 메뉴 로직 v30.9 유지)
-st.sidebar.header("🕹️ 관제탑 마스터 메뉴")
-if st.sidebar.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
-
-# --- UI 메인 (v30.9 레이아웃 사수) ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v31.8</h1>", unsafe_allow_html=True)
+# --- UI 메인 ---
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v31.9</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황 (v30.9 레이아웃 100% 사수)
 with tabs[0]:
     t_buy, t_eval, t_prev_eval = full_df['매입금액'].sum(), full_df['평가금액'].sum(), full_df['전일평가금액'].sum()
-    total_profit, daily_rate = t_eval - t_buy, ((t_eval / t_prev_eval - 1) * 100) if t_prev_eval > 0 else 0
+    daily_rate = ((t_eval / t_prev_eval - 1) * 100) if t_prev_eval > 0 else 0
     m1, m2, m_profit, m3 = st.columns(4)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval-t_prev_eval:+,.0f}원")
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    m_profit.metric("총 손익", f"{total_profit:,.0f}원")
+    m_profit.metric("총 손익", f"{t_eval-t_buy:+,.0f}원")
     m3.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{daily_rate:+.2f}%")
     
     st.markdown("---")
@@ -188,27 +190,20 @@ with tabs[0]:
         st.markdown("<br>", unsafe_allow_html=True)
         fig_t = go.Figure()
         h_dates = history_df['Date'].astype(str)
-        bk_k = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
-        k_yield = ((history_df['KOSPI'] / bk_k) - 1) * 100
-        fig_t.add_trace(go.Scatter(x=h_dates, y=k_yield, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+        fig_t.add_trace(go.Scatter(x=h_dates, y=((history_df['KOSPI']/history_df['KOSPI'].iloc[0])-1)*100, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
         for col, color in {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}.items():
             if col in history_df.columns: fig_t.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col.replace('수익률',''), line=dict(color=color, width=3)))
         fig_t.update_layout(title="📈 가족 자산 통합 수익률 추이 (vs KOSPI)", height=450, xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig_t, use_container_width=True)
 
-    # 심층 리포트 및 6대 섹터 (v30.9 양식 유지)
     st.divider()
     st.subheader("🕵️ AI 관제탑 데일리 심층 리포트")
     m_idx = get_market_indices()
     idx_l, idx_r = st.columns(2)
     idx_l.markdown(f"<div class='index-indicator {m_idx['KOSPI']['style']}'>KOSPI: {m_idx['KOSPI']['now']} ({m_idx['KOSPI']['diff']}, {m_idx['KOSPI']['rate']})</div>", unsafe_allow_html=True)
     idx_r.markdown(f"<div class='index-indicator {m_idx['KOSDAQ']['style']}'>KOSDAQ: {m_idx['KOSDAQ']['now']} ({m_idx['KOSDAQ']['diff']}, {m_idx['KOSDAQ']['rate']})</div>", unsafe_allow_html=True)
-    
-    rep_l, rep_r = st.columns(2)
-    with rep_l: st.markdown(f"<div class='report-box'><h4 style='color: #87CEEB;'>🇰🇷 국내 시장 분석</h4><p>2026년 3월 7일 현재, KOSPI 5,000선 시대의 강력한 우상향 기조가 이어지고 있습니다.</p></div>", unsafe_allow_html=True)
-    with rep_r: st.markdown(f"<div class='report-box'><h4 style='color: #FF4B4B;'>🌍 글로벌 매크로</h4><p>나스닥 AI 랠리와 1,400원대 중후반 고환율 국면이 공존합니다.</p></div>", unsafe_allow_html=True)
 
-# [계좌별 상세 분석 탭: v30.9 레이아웃 + yfinance 딥다이브]
+# [계좌별 상세 분석 탭: v30.9 레이아웃 + 딥다이브 카드]
 def render_account_tab(acc_name, tab_obj, history_col):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
@@ -231,15 +226,15 @@ def render_account_tab(acc_name, tab_obj, history_col):
             stk_list = sub_df['종목명'].unique().tolist()
             sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", stk_list, key=f"sel_{acc_name}")
             
-            # 🎯 [하이브리드] yfinance 기반 딥다이브 카드
+            # 🎯 [하이브리드] yfinance 기반 딥다이브 카드 표출
             intel = get_stock_intelligence(sel)
             if intel:
                 st.markdown(f"""
                 <div class='insight-card'>
-                    <div class='insight-title'>🔍 {sel} 인텔리전스 (yFinance 엔진)</div>
-                    <p style='font-size: 0.85rem; color: rgba(255,255,255,0.7);'>{intel['desc']}</p>
+                    <div class='insight-title'>🔍 {sel} 인텔리전스 (Hybrid 엔진)</div>
+                    <p style='font-size: 0.88rem; color: rgba(255,255,255,0.8);'>{intel['desc']}</p>
                     <div class='insight-grid'>
-                        <div><span class='insight-label'>배당수익률</span><br><span class='insight-value'>{intel['div']}</span></div>
+                        <div><span class='insight-label'>배당/분배수익률</span><br><span class='insight-value'>{intel['div']}</span></div>
                         <div><span class='insight-label'>리서치 목표가</span><br><span class='target-price'>{intel['tp']}</span></div>
                         <div><span class='insight-label'>PER</span><br><span class='insight-value'>{intel['per']}</span></div>
                         <div><span class='insight-label'>PBR</span><br><span class='insight-value'>{intel['pbr']}</span></div>
@@ -270,4 +265,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v31.8 하이브리드 인텔리전스")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v31.9 하이브리드 엔진 & 예외처리 강화")
