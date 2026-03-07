@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import re
 
 # 1. 설정 및 연결 (v31.6 원형 100% 사수)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v35.2", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v35.3", layout="wide")
 
 # --- [CSS: v31.6 스타일 및 렌더링 무결성 패치] ---
 st.markdown("""
@@ -50,7 +50,7 @@ def color_positive_negative(v):
         return f"color: {'#FF4B4B' if v > 0 else '#87CEEB' if v < 0 else '#FFFFFF'}"
     return ''
 
-# --- [🎯 딥다이브 엔진: 배당/분배금 집중 & 태그 오류 해결] ---
+# --- [🎯 딥다이브 엔진] ---
 @st.cache_data(ttl="30m")
 def get_dividend_intelligence(name):
     code = STOCK_CODES.get(name.replace(" ", ""))
@@ -74,7 +74,6 @@ def get_dividend_intelligence(name):
         return info
     except: return None
 
-# --- [파싱 엔진 복구] ---
 def get_acc_news(stocks):
     news_list = []
     try:
@@ -127,50 +126,34 @@ if not full_df.empty:
     full_df['전일평가금액'] = full_df['수량'] * full_df['전일종가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
     full_df['수익률'] = (full_df['손익'] / (full_df['매입금액'].replace(0, float('nan'))) * 100).fillna(0)
-    full_df['전일대비(%)'] = ((full_df['현재가'] / (full_df['전일종가'].replace(0, float('nan'))) - 1) * 100).fillna(0)
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
     history_df = history_df.dropna(subset=['Date']).sort_values('Date')
 
-# --- [🎯 사이드바 메뉴 100% 복구] ---
-def record_performance():
-    today = now_kst.date()
-    m_info = get_market_indices()
-    # 계좌별 누적 수익률 계산
-    acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-    new_row = {
-        "Date": today, 
-        "KOSPI": float(m_info['KOSPI']['now'].replace(',','')), 
-        "서은수익률": acc_sum.get('서은투자', 0), 
-        "서희수익률": acc_sum.get('서희투자', 0), 
-        "큰스님수익률": acc_sum.get('큰스님투자', 0)
-    }
-    # 오늘의 데이터 업데이트 (기존 오늘 데이터가 있으면 덮어쓰기)
-    updated_history = pd.concat([history_df[history_df['Date'] != today], pd.DataFrame([new_row])]).sort_values('Date')
-    conn.update(worksheet="trend", data=updated_history)
-    st.sidebar.success(f"✅ {today} 결과 저장 완료!"); st.cache_data.clear(); st.rerun()
-
+# --- [사이드바 메뉴] ---
 st.sidebar.header("🕹️ 관제탑 마스터 메뉴")
 if st.sidebar.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
-if st.sidebar.button("💾 오늘의 결과 저장/덮어쓰기"): record_performance()
-if st.sidebar.button("🧹 과거 데이터 정제 (중복 제거)"):
-    clean_history = history_df.drop_duplicates(subset=['Date'], keep='last')
-    conn.update(worksheet="trend", data=clean_history)
-    st.sidebar.success("✅ 중복 데이터 정제 완료!"); st.rerun()
+if st.sidebar.button("💾 오늘의 결과 저장/덮어쓰기"):
+    today = now_kst.date()
+    m_info = get_market_indices()
+    acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
+    new_row = {"Date": today, "KOSPI": float(m_info['KOSPI']['now'].replace(',','')), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
+    conn.update(worksheet="trend", data=pd.concat([history_df[history_df['Date']!=today], pd.DataFrame([new_row])]).sort_values('Date'))
+    st.sidebar.success(f"✅ 저장 완료"); st.rerun()
 
 # --- [UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v35.2</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v35.3</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 (v31.6 원형 복구)
+# [Tab 0] 총괄 현황
 with tabs[0]:
     t_eval, t_buy, t_prev = full_df['평가금액'].sum(), full_df['매입금액'].sum(), full_df['전일평가금액'].sum()
     d_rate = ((t_eval / t_prev - 1) * 100) if t_prev > 0 else 0
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval-t_prev:+,.0f}원")
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    m3.metric("총 손익", f"{t_eval-t_buy:+,.0f}원")
+    m3.metric("총 손익", f"{t_eval-t_buy:+,.0f}원", f"{t_eval-t_prev:+,.0f}원")
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{d_rate:+.2f}%")
     
     st.markdown("---")
@@ -210,13 +193,15 @@ def render_account_tab(acc_name, tab_obj, history_col):
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        # 계좌별 상단 지표 복구
+        # 🎯 [해결] 계좌별 상단 지표에 변동률(Delta) 병기
         a_buy, a_eval, a_prev = sub_df['매입금액'].sum(), sub_df['평가금액'].sum(), sub_df['전일평가금액'].sum()
+        a_daily_rate = ((a_eval / a_prev - 1) * 100) if a_prev > 0 else 0
+        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("평가액", f"{a_eval:,.0f}원", f"{a_eval-a_prev:+,.0f}원")
         c2.metric("매입원금", f"{a_buy:,.0f}원")
-        c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원")
-        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%")
+        c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원") # 🎯 전일 대비 변동액 병기
+        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{a_daily_rate:+.2f}%") # 🎯 전일 대비 변동률 병기
         
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '손익', '수익률']].style.map(color_positive_negative, subset=['손익', '수익률']).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'
@@ -267,4 +252,4 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v35.2 완전체 복구")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v35.3 델타 싱크")
