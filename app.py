@@ -168,29 +168,67 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# render_account_tab 함수 내부 지표 수정 (누적손익 변동 삭제)
-def render_account_tab(acc_name, tab_obj):
+# [교체] render_account_tab 함수 전체 (인자 3개로 복구하여 에러 해결)
+def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
+        # 지표 계산용 데이터 준비
         a_buy = sub_df['매입금액'].sum()
         a_eval = sub_df['평가금액'].sum()
-        # 해당 계좌의 전일 평가액 합계
+        # 해당 계좌의 종목별 전일 평가액 합계
         a_prev_eval = (sub_df['수량'] * sub_df['전일종가']).sum()
         
-        # 계좌별 전일 대비 변동치
+        # 전일 대비 변동치 계산
         a_change_amt = a_eval - a_prev_eval
         a_change_pct = (a_change_amt / a_prev_eval * 100) if a_prev_eval != 0 else 0
         
+        # 🎯 상단 4대 핵심 지표 (v36.41 지침 반영)
         c1, c2, c3, c4 = st.columns(4)
-        # 평가금액: 전일비 변동액과 비율 병기
-        c1.metric("평가액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
-        c2.metric("매입액", f"{a_buy:,.0f}원")
-        # 누적손익: 변동액 표기 삭제 (원칙 반영)
-        c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
-        # 누적수익률: 전일비 변동폭(%p) 병기
+        # 1. 평가금액: 변동액과 비율 병기
+        c1.metric("평가금액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
+        # 2. 매입금액: 고정
+        c2.metric("매입금액", f"{a_buy:,.0f}원")
+        # 3. 누적손익: 변동 표기 삭제 (사용자 원칙)
+        c3.metric("누적손익", f"{a_eval-a_buy:+,.0f}원")
+        # 4. 누적수익률: 변동폭(%p) 병기
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_change_pct:+.2f}%p")
+        
+        # --- 이하 기존 코드 유지 (데이터프레임 및 그래프 렌더링) ---
+        st.dataframe(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '누적수익률']].style.apply(
+            lambda row: ['' if i != 5 else ('color: #FF4B4B' if row[5]>row[3] else 'color: #87CEEB') for i, v in enumerate(row)], axis=1
+        ).format({
+            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '누적수익률': '{:+.2f}%'
+        }), hide_index=True, use_container_width=True)
+
+        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+        
+        res = RESEARCH_DATA.get(sel.replace(" ", ""))
+        if res:
+            rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
+            st.markdown(f"<div class='insight-card'><div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div><div class='insight-flex'><div class='insight-left'><table class='research-table'><thead><tr><th>지표</th><th>25년 추정</th><th>26년 Target</th></tr></thead><tbody>{rows}</tbody></table></div><div class='insight-right'>💡 {res['implications'][0]}</div></div></div>", unsafe_allow_html=True)
+
+        g_left, g_right = st.columns([2, 1])
+        with g_left:
+            if not history_df.empty:
+                fig_acc = go.Figure()
+                h_dt = history_df['Date'].dt.date.astype(str)
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
+                acc_col = find_matching_col(history_df, acc_name)
+                if acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 실제수익률', line=dict(width=4)))
+                s_col = find_matching_col(history_df, acc_name, sel)
+                if s_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', name=f'{sel} 실제수익률', line=dict(width=2, dash='dot')))
+                fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                st.plotly_chart(fig_acc, use_container_width=True)
+        with g_right:
+            fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
+            fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
+            st.plotly_chart(fig_p, use_container_width=True)
+
+        st.divider(); r_l, r_r = st.columns(2)
+        with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 계좌 총평</h4><p>Target 달성 보유 지속.</p></div>", unsafe_allow_html=True)
+        with r_r: st.markdown("<div class='report-box'><h4>🌍 업황 대응 전략</h4><p>시장 변동성 모니터링.</p></div>", unsafe_allow_html=True)
         
         # 🎯 정수 포맷 고정
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '누적수익률']].style.apply(lambda row: ['' if i != 5 else ('color: #FF4B4B' if row[5]>row[3] else 'color: #87CEEB') for i, v in enumerate(row)], axis=1).format({
@@ -232,5 +270,6 @@ render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
 st.caption(f"v36.39 가디언 프리시전 제로-디펙트 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
