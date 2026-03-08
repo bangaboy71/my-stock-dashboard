@@ -6,8 +6,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
-# 1. 설정 및 UI 스타일 (v36.5 원형 복구)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v36.24", layout="wide")
+# 1. 설정 및 UI 스타일 (v36.5 베이스라인 완벽 복구)
+st.set_page_config(page_title="가족 자산 성장 관제탑 v36.26", layout="wide")
 
 st.markdown("""
     <style>
@@ -94,15 +94,14 @@ if not full_df.empty:
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-    # 🎯 사실 근거 렌더링 (가상 행 제거로 날짜 밀림 차단)
+    # 🎯 사실 근거 정렬 및 중복 제거
     history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
-    
     base_date = pd.Timestamp("2026-03-03")
     base_row = history_df[history_df['Date'] == base_date]
     if not base_row.empty:
         history_df['KOSPI_Relative'] = (history_df['KOSPI'] / base_row['KOSPI'].values[0] - 1) * 100
     else:
-        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / history_df['KOSPI'].iloc[0] - 1) * 100
+        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / (history_df['KOSPI'].iloc[0] if not history_df['KOSPI'].empty else 1) - 1) * 100
 
 # --- [4. 정밀 색채 스타일] ---
 def style_summary(df):
@@ -121,73 +120,104 @@ def style_holdings(df):
         return ['', '', '', '', price_c, '', d_c, d_c, t_c]
     return df.style.apply(apply_color, axis=1)
 
-# --- [5. 사이드바 및 열 중복 방지 저장 로직] ---
-st.sidebar.header("🕹️ 관제탑 마스터 메뉴")
-if st.sidebar.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
-if st.sidebar.button("💾 오늘의 결과 저장"):
-    today = pd.Timestamp(now_kst.date())
-    m_info = get_market_indices()
-    acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-    stock_sum = full_df.groupby('종목명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
+# --- [5. 사이드바 관리 메뉴 (영구 기능 고정)] ---
+with st.sidebar:
+    st.header("⚙️ 관리 메뉴")
+    if st.button("🔄 실시간 데이터 갱신"): st.cache_data.clear(); st.rerun()
     
-    # 🎯 [해결] 시트 헤더와 정확히 매칭하여 새 열 생성 방지
-    new_row = {c: None for c in history_df.columns}
-    new_row.update({"Date": today, "KOSPI": float(m_info['KOSPI']['now'].replace(',','')), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)})
-    for s_name, s_yield in stock_sum.items():
-        # 시트 열 이름 중 종목명이 포함된 열을 찾아 매칭
-        match_col = next((c for c in history_df.columns if s_name.replace(' ','') in c.replace(' ','')), None)
-        if match_col: new_row[match_col] = s_yield
-    
-    update_df = pd.concat([history_df[history_df['Date'] != today], pd.DataFrame([new_row])]).sort_values('Date')
-    conn.update(worksheet="trend", data=update_df)
-    st.cache_data.clear(); st.sidebar.success("✅ 저장 완료!"); st.rerun()
+    st.divider()
+    st.subheader("💾 데이터 저장/덮어쓰기")
+    if st.button("오늘의 결과 확정 및 저장"):
+        today = pd.Timestamp(now_kst.date())
+        m_info = get_market_indices()
+        new_row = {c: None for c in history_df.columns}
+        new_row.update({"Date": today, "KOSPI": float(m_info['KOSPI']['now'].replace(',',''))})
+        
+        acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
+        for acc in ['서은투자', '서희투자', '큰스님투자']:
+            new_row[f"{acc}수익률"] = acc_sum.get(acc, 0)
+        
+        for _, row in full_df.iterrows():
+            target_key = f"{row['계좌명']}_{row['종목명']}수익률".replace(" ", "")
+            match_col = next((c for c in history_df.columns if target_key in c.replace(" ", "")), None)
+            if match_col: new_row[match_col] = row['누적수익률']
+            
+        update_df = pd.concat([history_df[history_df['Date'] != today], pd.DataFrame([new_row])]).sort_values('Date')
+        conn.update(worksheet="trend", data=update_df)
+        st.success("✅ 저장/덮어쓰기 완료!"); st.rerun()
+        
+    st.divider()
+    st.subheader("🧹 과거 데이터 정제")
+    if not history_df.empty:
+        clean_date = st.selectbox("삭제할 날짜 선택", history_df['Date'].dt.date.unique())
+        if st.button("해당 날짜 데이터 삭제"):
+            new_trend = history_df[history_df['Date'].dt.date != clean_date]
+            conn.update(worksheet="trend", data=new_trend)
+            st.warning(f"🗑️ {clean_date} 데이터가 삭제되었습니다."); st.rerun()
 
 # --- [6. UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.24</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.26</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-with tabs[0]: # [Tab 0] 총괄 현황
+# [Tab 0] 총괄 현황
+with tabs[0]:
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
-    st.columns(4)[0].metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval-t_buy:+,.0f}원")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원")
+    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
+    m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
+    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%")
     
     st.divider()
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
     sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
     sum_acc['전일대비변동률'] = (sum_acc['전일대비손익'] / (sum_acc['평가금액'] - sum_acc['전일대비손익']).replace(0, float('nan')) * 100).fillna(0)
     sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동률', '누적수익률']]
-    st.dataframe(style_summary(sum_acc).format({'평가금액':'{:,.0f}원', '누적수익률':'{:+.2f}%', '전일대비변동률':'{:+.2f}%'}), use_container_width=True, hide_index=True)
+    st.dataframe(style_summary(sum_acc).format({'매입금액':'{:,.0f}원', '평가금액':'{:,.0f}원', '손익':'{:+,.0f}원', '전일대비손익':'{:+,.0f}원', '전일대비변동률':'{:+.2f}%', '누적수익률':'{:+.2f}%'}), use_container_width=True, hide_index=True)
 
     if not history_df.empty:
         fig = go.Figure()
         h_dates = history_df['Date'].dt.date.astype(str)
-        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
-        for col, color in {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}.items():
-            if col in history_df.columns: fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col, line=dict(color=color, width=3)))
-        fig.update_layout(title="📈 통합 수익률 추이 (상대비교)", yaxis_title="누적수익률 상대비교지표", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (상대지표)', line=dict(dash='dash', color='gray')))
+        for col, color in {'서은투자수익률': '#FF4B4B', '서희투자수익률': '#87CEEB', '큰스님투자수익률': '#00FF00'}.items():
+            if col in history_df.columns:
+                fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col, line=dict(color=color, width=3)))
+        fig.update_layout(title="📈 통합 실재 수익률 추이", yaxis_title="누적수익률 상대비교지표", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider(); st.subheader("📊 관심 섹터별 인텔리전스")
     s_cols = st.columns(3)
-    sectors = {"반도체 / IT": "HBM 수요 폭발.", "전력 / ESS": "북미 인프라 교체.", "배터리 / 에너지": "전고체 기술 점유율 확대."}
+    sectors = {"반도체 / IT": "HBM 수요 폭발 및 AI 서버 증설 수혜.", "전력 / ESS": "북미 인프라 교체 및 데이터센터 가동 수혜.", "배터리 / 에너지": "전고체 기술 점유율 확대."}
     for i, (n, d) in enumerate(sectors.items()):
         with s_cols[i % 3]: st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><p>{d}</p></div>", unsafe_allow_html=True)
 
+# [투자 주체별 상세 탭]
 def render_account_tab(acc_name, tab_obj, history_col):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
-        a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
-        st.columns(4)[0].metric(f"{acc_name} 평가액", f"{a_eval:,.0f}원", f"{a_eval-a_buy:+,.0f}원")
         
-        st.dataframe(style_holdings(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '전일대비손익', '전일대비변동률', '누적수익률']]).format({'평가금액':'{:,.0f}원', '누적수익률':'{:+.2f}%'}), hide_index=True, use_container_width=True)
+        # 🎯 4대 핵심 지표 복구 (Metric Card)
+        a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("평가금액", f"{a_eval:,.0f}원")
+        c2.metric("매입금액", f"{a_buy:,.0f}원")
+        c3.metric("누적손익", f"{a_eval-a_buy:+,.0f}원")
+        c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%")
+        
+        # 🎯 데이터 포맷 정밀 교환 (소수점 제거)
+        st.dataframe(style_holdings(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '전일대비손익', '전일대비변동률', '누적수익률']]).format({
+            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
+            '평가금액': '{:,.0f}원', '전일대비손익': '{:+,.0f}원', '전일대비변동률': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+        }), hide_index=True, use_container_width=True)
 
         st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
         
-        # 🎯 [복구] 기업 딥다이브
+        # 🎯 기업 딥다이브 복구
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
             rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
-            st.markdown(f"<div class='insight-card'><div class='insight-title'>🔍 {sel} 딥다이브</div><div class='insight-flex'><div class='insight-left'><table class='research-table'><thead><tr><th>지표</th><th>25년 추정</th><th>26년 Target</th></tr></thead><tbody>{rows}</tbody></table></div><div class='insight-right'>💡 {res['implications'][0]}</div></div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='insight-card'><div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div><div class='insight-flex'><div class='insight-left'><table class='research-table'><thead><tr><th>지표</th><th>25년 추정</th><th>26년 Target</th></tr></thead><tbody>{rows}</tbody></table></div><div class='insight-right'>💡 {res['implications'][0]}</div></div></div>", unsafe_allow_html=True)
 
         g_left, g_right = st.columns([2, 1])
         with g_left:
@@ -195,9 +225,11 @@ def render_account_tab(acc_name, tab_obj, history_col):
                 fig_acc = go.Figure()
                 h_dt = history_df['Date'].dt.date.astype(str)
                 fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[history_col], mode='lines+markers', name=f'{acc_name} 실재수익률', line=dict(color='#87CEEB', width=4)))
-                s_c = next((c for c in history_df.columns if sel.replace(' ','') in c.replace(' ','')), "")
-                if s_c and s_c != history_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_c], mode='lines', name=f'{sel} 실재수익률', line=dict(color='#FF4B4B', width=2, dash='dot')))
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[history_col], mode='lines+markers', name=f'{acc_name} 실제수익률', line=dict(color='#87CEEB', width=4)))
+                s_key = f"{acc_name}_{sel}수익률".replace(" ", "")
+                s_c = next((c for c in history_df.columns if s_key in c.replace(" ", "")), "")
+                if s_c and s_c != history_col:
+                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_c], mode='lines', name=f'{sel} 실재수익률', line=dict(color='#FF4B4B', width=2, dash='dot')))
                 fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", yaxis_title="누적수익률(%)", xaxis=dict(type='category'), height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig_acc, use_container_width=True)
         with g_right:
@@ -205,16 +237,18 @@ def render_account_tab(acc_name, tab_obj, history_col):
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
 
-        # 🎯 [복구] 하단 리포트 박스
+        # 🎯 하단 리포트 박스 및 뉴스 복구
         st.divider(); r_l, r_r = st.columns(2)
-        with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 총평</h4><p>견조한 흐름 유지 중입니다.</p></div>", unsafe_allow_html=True)
-        with r_r: st.markdown("<div class='report-box'><h4>🌍 업황 전략</h4><p>Target 달성 보유 지속.</p></div>", unsafe_allow_html=True)
+        with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 계좌 총평</h4><p>견조한 흐름을 유지 중이며, 중장기 Target 달성을 목표로 보유 전략을 지속합니다.</p></div>", unsafe_allow_html=True)
+        with r_r: st.markdown("<div class='report-box'><h4>🌍 업황 대응 전략</h4><p>거시 경제 변동성에 따른 비중 조절을 검토 중입니다.</p></div>", unsafe_allow_html=True)
 
         acc_news = get_acc_news(sub_df['종목명'].unique().tolist())
         if acc_news:
-            news_html = " ".join([f"<div style='margin-bottom:8px;'>[{n['name']}] <a href='{n['url']}' target='_blank' style='color:white;'>{n['title']} ↗️</a></div>" for n in acc_news])
+            news_html = " ".join([f"<div style='margin-bottom:8px;'>[{n['name']}] <a href='{n['url']}' target='_blank' style='color:white; text-decoration:none;'>{n['title']} ↗️</a></div>" for n in acc_news])
             st.markdown(f"<div class='acc-flash-container'>🔔 실시간 뉴스: {news_html}</div>", unsafe_allow_html=True)
 
-render_account_tab("서은투자", tabs[1], "서은수익률")
-render_account_tab("서희투자", tabs[2], "서희수익률")
-render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
+render_account_tab("서은투자", tabs[1], "서은투자수익률")
+render_account_tab("서희투자", tabs[2], "서희투자수익률")
+render_account_tab("큰스님투자", tabs[3], "큰스님투자수익률")
+
+st.caption(f"v36.26 가디언 프리시전 아카이브 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
