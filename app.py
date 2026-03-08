@@ -130,7 +130,7 @@ with st.sidebar:
 st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.39</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 내 지표 교체
+# [Tab 0] 총괄 현황 내 지표 수정 (누적손익 변동 삭제)
 with tabs[0]:
     t_eval = full_df['평가금액'].sum()
     t_buy = full_df['매입금액'].sum()
@@ -142,9 +142,12 @@ with tabs[0]:
     t_change_pct = (t_change_amt / t_prev_eval * 100) if t_prev_eval != 0 else 0
     
     m1, m2, m3, m4 = st.columns(4)
+    # 평가금액: 전일비 변동액과 비율 병기
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", delta=f"{t_change_amt:+,.0f}원 ({t_change_pct:+.2f}%)")
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원", delta=f"전일비 {t_change_amt:+,.0f}원", delta_color="normal")
+    # 누적손익: 변동액 표기 삭제 (원칙 반영)
+    m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
+    # 누적수익률: 전일비 변동폭(%p) 병기
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
     st.divider()
@@ -165,8 +168,8 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# render_account_tab 함수 내부 지표 교체
-def render_account_tab(acc_name, tab_obj, history_col_key):
+# render_account_tab 함수 내부 지표 수정 (누적손익 변동 삭제)
+def render_account_tab(acc_name, tab_obj):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
@@ -181,9 +184,12 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         a_change_pct = (a_change_amt / a_prev_eval * 100) if a_prev_eval != 0 else 0
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("평가금액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
-        c2.metric("매입금액", f"{a_buy:,.0f}원")
-        c3.metric("누적손익", f"{a_eval-a_buy:+,.0f}원", delta=f"전일비 {a_change_amt:+,.0f}원")
+        # 평가금액: 전일비 변동액과 비율 병기
+        c1.metric("평가액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
+        c2.metric("매입액", f"{a_buy:,.0f}원")
+        # 누적손익: 변동액 표기 삭제 (원칙 반영)
+        c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
+        # 누적수익률: 전일비 변동폭(%p) 병기
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_change_pct:+.2f}%p")
         
         # 🎯 정수 포맷 고정
@@ -226,4 +232,5 @@ render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
 st.caption(f"v36.39 가디언 프리시전 제로-디펙트 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
