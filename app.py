@@ -57,13 +57,22 @@ def get_stock_data(name):
 full_df = conn.read(worksheet="종목 현황", ttl="1m")
 history_df = conn.read(worksheet="trend", ttl=0)
 
+# --- [3. 데이터 로드 및 정제 부문 교체] ---
 if not full_df.empty:
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
-    full_df['매입금액'], full_df['평가금액'] = full_df['수량'] * full_df['매입단가'], full_df['수량'] * full_df['현재가']
+    
+    # 기초 금액 계산
+    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
+    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
+    
+    # 🎯 [KeyError 해결 핵심] 전일대비 손익 열을 여기서 미리 생성합니다.
+    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
+    
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
 
 if not history_df.empty:
@@ -132,11 +141,10 @@ st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통
 # 탭 생성 (총 4개)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 내 계좌별 요약 테이블 교체 코드
+# --- [6. UI 메인 구성: Tabs[0] 내부 테이블 부문 교체] ---
 with tabs[0]:
-    # 1. 지표 계산 (상단 메트릭)
-    t_eval = full_df['평가금액'].sum()
-    t_buy = full_df['매입금액'].sum()
+    # 상단 지표 (v36.43/44 로직 유지)
+    t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
     t_change_pct = (t_change_amt / t_prev_eval * 100) if t_prev_eval != 0 else 0
@@ -149,40 +157,32 @@ with tabs[0]:
     
     st.divider()
     
-    # 2. 계좌별 요약 데이터 구성 (열 추가 및 순서 조정)
+    # 계좌별 요약 테이블 구성
     sum_acc = full_df.groupby('계좌명').agg({
         '매입금액': 'sum',
         '평가금액': 'sum',
         '손익': 'sum',
-        '전일대비손익': 'sum'  # 전일 대비 손익 합계
+        '전일대비손익': 'sum'
     }).reset_index()
     
-    # 전일대비 변동율 및 누적수익률 계산
+    # 추가 지표 계산
     sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
-    sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'] * 100).fillna(0)
-    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
+    sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     
-    # 열 순서: 계좌명, 매입금액, 평가금액, 손익, 전일대비손익, 전일대비변동율, 누적수익률
+    # 🎯 열 순서 조정: 손익과 누적수익률 사이에 전일 지표 삽입
     sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']]
     
-    # 3. 음양 색채 기준 적용 함수 (빨간색/파란색)
-    def style_diff_color(val):
-        color = '#FF4B4B' if val > 0 else '#87CEEB' if val < 0 else 'white'
-        return f'color: {color}'
-
-    # 4. 테이블 출력 (스타일 및 포맷 적용)
+    # 음양 색채 적용 스타일링
     st.dataframe(
-        sum_acc.style.applymap(style_diff_color, subset=['손익', '전일대비손익', '전일대비변동율', '누적수익률'])
-        .format({
-            '매입금액': '{:,.0f}원',
-            '평가금액': '{:,.0f}원',
-            '손익': '{:+,.0f}원',
-            '전일대비손익': '{:+,.0f}원',
-            '전일대비변동율': '{:+.2f}%',
-            '누적수익률': '{:+.2f}%'
+        sum_acc.style.apply(lambda x: [
+            'color: #FF4B4B' if (i >= 3 and val > 0) else 'color: #87CEEB' if (i >= 3 and val < 0) else '' 
+            for i, val in enumerate(x)
+        ], axis=1).format({
+            '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원',
+            '전일대비손익': '{:+,.0f}원', '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
         }),
-        use_container_width=True,
-        hide_index=True
+        use_container_width=True, hide_index=True
     )
     
     # --- 이하 그래프 코드는 기존 v36.43 유지 ---
@@ -262,6 +262,7 @@ render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
 st.caption(f"v36.43 가디언 프리시전 클린-업 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
