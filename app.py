@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
 # 1. 설정 및 UI 스타일 (v36.5 베이스라인 완벽 복구)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v36.33", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v36.34", layout="wide")
 
 st.markdown("""
     <style>
@@ -21,7 +21,6 @@ st.markdown("""
     .research-table th { text-align: left; padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); }
     .research-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); }
     .target-val { color: #FFD700; font-weight: bold; }
-    .acc-flash-container { background: rgba(255,215,0,0.05); padding: 20px; border-radius: 10px; border: 1px dashed #FFD700; margin-top: 25px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -71,17 +70,15 @@ if not full_df.empty:
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-    # 🎯 [해결] 시트에 저장된 실제 날짜만 사용 (가상 행 제거)
+    # 🎯 [해결] 시트에 저장된 실제 날짜만 필터링 (가상 행 추가 절대 금지)
     history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
     
-    # KOSPI 3/3 기준 정규화 (그래프 오버레이용)
     base_date = pd.Timestamp("2026-03-03")
     base_row = history_df[history_df['Date'] == base_date]
     if not base_row.empty:
-        k_base = base_row['KOSPI'].values[0]
-        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / k_base - 1) * 100
+        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / base_row['KOSPI'].values[0] - 1) * 100
     else:
-        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / history_df['KOSPI'].iloc[0] - 1) * 100
+        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / (history_df['KOSPI'].iloc[0] if not history_df.empty else 1) - 1) * 100
 
 # --- [4. 정밀 열 매칭 세이프가드] ---
 def get_col_safe(df, key):
@@ -90,17 +87,17 @@ def get_col_safe(df, key):
         if target in str(col).replace(" ", "").replace("_", ""): return col
     return None
 
-# --- [5. 사이드바 관리 메뉴 (영구 고정)] ---
+# --- [5. 사이드바 관리 메뉴 (기능 고정)] ---
 with st.sidebar:
     st.header("⚙️ 관리 메뉴")
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
     st.divider()
     st.subheader("💾 데이터 저장 (날짜 선택)")
-    sel_date = st.date_input("저장/확정할 날짜 선택", value=now_kst.date())
+    sel_date = st.date_input("결과를 저장할 날짜 선택", value=now_kst.date())
     if st.button(f"{sel_date} 결과 확정 저장"):
         save_ts = pd.Timestamp(sel_date)
         m_info = get_market_indices()
-        # 🎯 [해결] 시트의 원래 헤더로만 데이터프레임 구성하여 KOSPI_Rel 생성 방지
+        # 🎯 [해결] 시트의 원래 헤더로만 필터링하여 불필요한 열 생성 원천 차단
         original_cols = [c for c in history_df.columns if c != 'KOSPI_Relative']
         new_row = pd.Series(index=original_cols, dtype='object')
         new_row['Date'] = save_ts
@@ -121,7 +118,7 @@ with st.sidebar:
         st.cache_data.clear(); st.success(f"✅ {sel_date} 저장 완료!"); st.rerun()
 
 # --- [6. UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.33</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.34</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -142,8 +139,9 @@ with tabs[0]:
 
     if not history_df.empty:
         fig = go.Figure()
+        # 🎯 [해결] 가로축을 Category로 설정하여 시트에 없는 3/8 날짜 강제 제거
         h_dates = history_df['Date'].dt.date.astype(str)
-        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (상대비교)', line=dict(dash='dash', color='gray')))
+        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
         for acc in ['서은투자수익률', '서희투자수익률', '큰스님투자수익률']:
             col = get_col_safe(history_df, acc)
             if col: fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col))
@@ -156,7 +154,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        # 🎯 4대 핵심 지표 및 정수 포맷
+        # 🎯 4대 핵심 지표 (v36.5 레이아웃 복구)
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("평가금액", f"{a_eval:,.0f}원")
@@ -164,6 +162,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         c3.metric("누적손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%")
         
+        # 🎯 정수 포맷 고정
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '누적수익률']].style.apply(lambda row: ['' if i != 5 else ('color: #FF4B4B' if row[5]>row[3] else 'color: #87CEEB') for i, v in enumerate(row)], axis=1).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '누적수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
@@ -181,7 +180,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             if not history_df.empty:
                 fig_acc = go.Figure()
                 h_dt = history_df['Date'].dt.date.astype(str)
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI (상대비교)', line=dict(dash='dash', color='gray')))
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
                 
                 acc_col = get_col_safe(history_df, history_col_key)
                 if acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 실제수익률', line=dict(width=4)))
@@ -201,4 +200,4 @@ render_account_tab("서은투자", tabs[1], "서은투자수익률")
 render_account_tab("서희투자", tabs[2], "서희투자수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님투자수익률")
 
-st.caption(f"v36.33 가디언 프리시전 제로 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"v36.34 가디언 제로-톨러런스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
