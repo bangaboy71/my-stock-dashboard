@@ -38,14 +38,35 @@ STOCK_CODES = {
     "SK스퀘어": "402340"
 }
 
-# 🎯 시장 지수 및 종목 가격 크롤링 함수
-def get_market_indices():
-    try:
-        url = "https://finance.naver.com/sise/sise_index.naver?code=KOSPI"
-        soup = BeautifulSoup(requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
-        val = soup.find("em", {"id": "now_value"}).text
-        return float(val.replace(',', ''))
-    except: return 0.0
+# --- [2. 엔진 및 헬퍼 함수 내 지수 함수 교체] ---
+def get_market_status():
+    market_data = {}
+    indices = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ"}
+    for name, code in indices.items():
+        try:
+            url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
+            soup = BeautifulSoup(requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
+            
+            now_val = soup.find("em", {"id": "now_value"}).text
+            # 네이버 금융 특유의 "상승 12.34 +0.50%" 형태 파싱
+            change_raw = soup.find("span", {"id": "change_value_and_rate"}).text.split()
+            
+            direction = change_raw[0] # '상승', '하락', '보합'
+            change_amt = change_raw[1]
+            change_pct = change_raw[2]
+            
+            color = "#FF4B4B" if "상승" in direction else "#87CEEB" if "하락" in direction else "white"
+            sign = "+" if "상승" in direction else "-" if "하락" in direction else ""
+            
+            market_data[name] = {
+                "val": now_val,
+                "diff": f"{sign}{change_amt}",
+                "pct": change_pct,
+                "color": color
+            }
+        except:
+            market_data[name] = {"val": "-", "diff": "-", "pct": "-", "color": "white"}
+    return market_data
 
 def get_stock_data(name):
     # STOCK_CODES가 위에서 정의되었으므로 이제 정상 작동합니다.
@@ -183,8 +204,36 @@ with st.sidebar:
         conn.update(worksheet="trend", data=final_history)
         st.cache_data.clear(); st.success(f"✅ {sel_date} 수익률이 시트에 저장되었습니다!"); st.rerun()
 
-# --- [6. UI 메인 구성: 총괄 탭 및 개별 탭 호출] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.43</h1>", unsafe_allow_html=True)
+# --- [6. UI 메인 구성: 타이틀 및 실시간 지수 HUD] ---
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.49</h1>", unsafe_allow_html=True)
+
+# 🎯 시장 지수 실시간 데이터 호출
+m_status = get_market_status()
+
+# 지수 표시 레이아웃 (2열 구성)
+idx_col1, idx_col2 = st.columns(2)
+
+with idx_col1:
+    kpi = m_status['KOSPI']
+    st.markdown(f"""
+        <div style='text-align: center; padding: 10px; border-radius: 10px; background: rgba(255,255,255,0.05); border: 1px solid {kpi['color']}33;'>
+            <span style='color: white; font-size: 1.1rem;'>KOSPI</span><br>
+            <span style='color: {kpi['color']}; font-size: 1.6rem; font-weight: bold;'>{kpi['val']}</span>
+            <span style='color: {kpi['color']}; font-size: 1rem;'> ({kpi['diff']}, {kpi['pct']})</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+with idx_col2:
+    kdq = m_status['KOSDAQ']
+    st.markdown(f"""
+        <div style='text-align: center; padding: 10px; border-radius: 10px; background: rgba(255,255,255,0.05); border: 1px solid {kdq['color']}33;'>
+            <span style='color: white; font-size: 1.1rem;'>KOSDAQ</span><br>
+            <span style='color: {kdq['color']}; font-size: 1.6rem; font-weight: bold;'>{kdq['val']}</span>
+            <span style='color: {kdq['color']}; font-size: 1rem;'> ({kdq['diff']}, {kdq['pct']})</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+st.write("") # 간격 조절
 
 # 탭 생성 (총 4개)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
@@ -327,6 +376,7 @@ render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
 st.caption(f"v36.43 가디언 프리시전 클린-업 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
