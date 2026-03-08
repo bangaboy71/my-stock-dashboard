@@ -65,15 +65,19 @@ if not full_df.empty:
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     
-    # 기초 금액 계산
-    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-    full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    
-    # 🎯 [KeyError 해결 핵심] 전일대비 손익 열을 여기서 미리 생성합니다.
-    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
-    
-    full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
+    # [실행 순서 준수]
+# 1. 기초 값 산출 (매입/평가금액이 먼저 계산되어야 합니다)
+full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
+full_df['평가금액'] = full_df['수량'] * full_df['현재가']
+full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
+
+# 2. 일일 변동 지표 산출
+full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
+full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
+full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+
+# 3. 누적 성과 지표 산출
+full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
@@ -218,13 +222,30 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         c3.metric("손익", f"{a_eval-a_buy:+,.0f}원") # 변동 표기 삭제
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_change_pct:+.2f}%p")
         
-        # 보유 종목 리스트
-        st.dataframe(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '누적수익률']].style.apply(
-            lambda row: ['' if i != 5 else ('color: #FF4B4B' if row[5]>row[3] else 'color: #87CEEB') for i, v in enumerate(row)], axis=1
-        ).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '누적수익률': '{:+.2f}%'
-        }), hide_index=True, use_container_width=True)
-
+       # --- [7. render_account_tab 함수 내 테이블 출력 부문 교체] ---
+        # 🎯 열 순서: 평가금액과 누적수익률 사이에 손익, 전일대비손익, 전일대비변동율 삽입
+        display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']
+        
+        # 음양 색채 적용 스타일링 (손익 관련 4개 열)
+        st.dataframe(
+            sub_df[display_cols].style.apply(lambda x: [
+                'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+                for i, val in enumerate(x)
+            ], axis=1).format({
+                '수량': '{:,.0f}', 
+                '매입단가': '{:,.0f}원', 
+                '매입금액': '{:,.0f}원', 
+                '현재가': '{:,.0f}원', 
+                '평가금액': '{:,.0f}원', 
+                '손익': '{:+,.0f}원',
+                '전일대비손익': '{:+,.0f}원', 
+                '전일대비변동율': '{:+.2f}%', 
+                '누적수익률': '{:+.2f}%'
+            }), 
+            hide_index=True, 
+            use_container_width=True
+        )
+        
         st.divider()
         # 🎯 중복 키 방지를 위해 key에 acc_name 반영
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_widget_{acc_name}")
@@ -262,6 +283,7 @@ render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
 st.caption(f"v36.43 가디언 프리시전 클린-업 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
