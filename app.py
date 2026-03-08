@@ -43,21 +43,44 @@ RESEARCH_DATA = {
 STOCK_CODES = {k: v for k, v in zip(RESEARCH_DATA.keys(), ["005930", "033780", "237690", "373220", "086280", "005387", "498400", "237690", "103590", "402340"])}
 # (기존 get_market_status, get_stock_data, find_matching_col 함수들이 이 아래에 위치해야 합니다.)
 
+# --- [2. 엔진 및 헬퍼 함수: 지수 크롤링 정밀화] ---
 def get_market_status():
     market_data = {}
     indices = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ"}
+    
     for name, code in indices.items():
         try:
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
-            soup = BeautifulSoup(requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
-            now_val = soup.find("em", {"id": "now_value"}).text
-            change_raw = soup.find("span", {"id": "change_value_and_rate"}).text.split()
-            direction, change_amt, change_pct = change_raw[0], change_raw[1], change_raw[2]
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}, timeout=5)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # 1. 현재 지수 값 (더 확실한 선택자 사용)
+            now_val = soup.select_one("#now_value").get_text(strip=True)
+            
+            # 2. 변동 내용 (상승/하락 여부 및 수치)
+            change_area = soup.select_one("#change_value_and_rate")
+            change_text = change_area.get_text(strip=True).split() # ['상승', '12.34', '+0.50%'] 형태
+            
+            # 3. 데이터 분리 및 안전 장치
+            direction = change_text[0] if len(change_text) > 0 else "보합"
+            diff_val = change_text[1] if len(change_text) > 1 else "0.00"
+            rate_val = change_text[2] if len(change_text) > 2 else "0.00%"
+            
+            # 4. 색상 및 기호 결정
             color = "#FF4B4B" if "상승" in direction else "#87CEEB" if "하락" in direction else "white"
             sign = "+" if "상승" in direction else "-" if "하락" in direction else ""
-            market_data[name] = {"val": now_val, "diff": f"{sign}{change_amt}", "pct": change_pct, "color": color}
-        except:
-            market_data[name] = {"val": "-", "diff": "-", "pct": "-", "color": "white"}
+            
+            market_data[name] = {
+                "val": now_val,
+                "diff": f"{sign}{diff_val}",
+                "pct": rate_val,
+                "color": color
+            }
+        except Exception as e:
+            # 에러 발생 시 로그를 남기고 빈 데이터 반환 (UI 깨짐 방지)
+            print(f"Index Error ({name}): {e}")
+            market_data[name] = {"val": "연결중..", "diff": "0.00", "pct": "0.00%", "color": "white"}
+            
     return market_data
 
 def get_stock_data(name):
@@ -113,18 +136,21 @@ if not history_df.empty:
     base_row = history_df[history_df['Date'] == base_date]
     history_df['KOSPI_Relative'] = (history_df['KOSPI'] / (base_row['KOSPI'].values[0] if not base_row.empty else history_df['KOSPI'].iloc[0]) - 1) * 100
 
-# --- [4. UI 메인 구성: 타이틀 및 지수 HUD] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.50</h1>", unsafe_allow_html=True)
+# --- [6. UI 타이틀 및 지수 HUD 부문] ---
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.53</h1>", unsafe_allow_html=True)
 
 m_status = get_market_status()
 idx_col1, idx_col2 = st.columns(2)
+
 for i, (name, d) in enumerate(m_status.items()):
     with [idx_col1, idx_col2][i]:
-        st.markdown(f"""<div style='text-align: center; padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid {d['color']}44;'>
-            <span style='color: #aaa; font-size: 0.9rem;'>{name}</span><br>
-            <span style='color: {d['color']}; font-size: 1.6rem; font-weight: bold;'>{d['val']}</span>
-            <span style='color: {d['color']}; font-size: 1.1rem;'> ({d['diff']}, {d['pct']})</span></div>""", unsafe_allow_html=True)
-
+        st.markdown(f"""
+            <div style='text-align: center; padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid {d['color']}44;'>
+                <span style='color: #aaa; font-size: 0.95rem; font-weight: bold;'>{name} MARKET</span><br>
+                <span style='color: {d['color']}; font-size: 1.8rem; font-weight: bold;'>{d['val']}</span><br>
+                <span style='color: {d['color']}; font-size: 1.1rem;'>{d['diff']} ({d['pct']})</span>
+            </div>
+        """, unsafe_allow_html=True)
 st.write("")
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
@@ -259,4 +285,5 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
