@@ -6,8 +6,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
-# 1. 설정 및 UI 스타일 (v36.5 베이스라인 완벽 복구)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v36.30", layout="wide")
+# 1. 설정 및 UI 스타일 (v36.5 원형 레이아웃 100% 복구)
+st.set_page_config(page_title="가족 자산 성장 관제탑 v36.31", layout="wide")
 
 st.markdown("""
     <style>
@@ -38,14 +38,12 @@ now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_market_indices():
-    market = {}
     try:
         url = "https://finance.naver.com/sise/sise_index.naver?code=KOSPI"
         soup = BeautifulSoup(requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
         val = soup.find("em", {"id": "now_value"}).text
-        market["KOSPI"] = {"now": val}
-    except: market["KOSPI"] = {"now": "0"}
-    return market
+        return {"KOSPI": {"now": val}}
+    except: return {"KOSPI": {"now": "0"}}
 
 def get_stock_data(name):
     code = STOCK_CODES.get(str(name).replace(" ", ""))
@@ -57,20 +55,6 @@ def get_stock_data(name):
         prev_p = int(soup.find("td", {"class": "first"}).find("span", {"class": "blind"}).text.replace(",", ""))
         return now_p, prev_p
     except: return 0, 0
-
-def get_acc_news(stocks):
-    news_list = []
-    try:
-        for s in stocks:
-            code = STOCK_CODES.get(s.replace(" ", ""))
-            if not code: continue
-            soup = BeautifulSoup(requests.get(f"https://finance.naver.com/item/main.naver?code={code}", headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
-            news_sec = soup.find("div", {"class": "news_section"})
-            if news_sec:
-                tag = news_sec.find("li").find("a")
-                news_list.append({"name": s, "title": tag.text.strip(), "url": tag['href'] if tag['href'].startswith("http") else f"https://finance.naver.com{tag['href']}"})
-    except: pass
-    return news_list
 
 # --- [3. 데이터 로드 및 정제] ---
 full_df = conn.read(worksheet="종목 현황", ttl="1m")
@@ -88,7 +72,7 @@ if not full_df.empty:
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-    # 🎯 시트 데이터만 표기 (가상 행 제거로 날짜 왜곡 원천 차단)
+    # 🎯 시트 데이터만 표기 (가상 오늘 날짜 추가 로직 삭제)
     history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
     
     # KOSPI 상대비교 (3/3 기준 0)
@@ -99,21 +83,20 @@ if not history_df.empty:
     else:
         history_df['KOSPI_Rel'] = (history_df['KOSPI'] / (history_df['KOSPI'].iloc[0] if not history_df.empty else 1) - 1) * 100
 
-# --- [4. 유연한 열 매칭 세이프가드] ---
+# --- [4. 정밀 열 매칭 세이프가드] ---
 def get_col_safe(df, key):
     target = str(key).replace(" ", "").replace("_", "")
     for col in df.columns:
-        if target in str(col).replace(" ", "").replace("_", ""):
-            return col
+        if target in str(col).replace(" ", "").replace("_", ""): return col
     return None
 
-# --- [5. 사이드바 관리 메뉴 (영구 기능 고정)] ---
+# --- [5. 사이드바 영구 관리 메뉴 (기능 고정)] ---
 with st.sidebar:
     st.header("⚙️ 관리 메뉴")
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
     st.divider()
     st.subheader("💾 데이터 저장 (날짜 선택)")
-    sel_date = st.date_input("저장할 날짜 확정", value=now_kst.date())
+    sel_date = st.date_input("결과를 저장할 날짜 확정", value=now_kst.date())
     if st.button(f"{sel_date} 결과 확정 저장"):
         save_ts = pd.Timestamp(sel_date)
         m_info = get_market_indices()
@@ -131,19 +114,20 @@ with st.sidebar:
             col = get_col_safe(history_df, key)
             if col: new_row[col] = row['누적수익률']
             
+        # 🎯 데이터프레임 전체 업데이트 (Update 신뢰성 확보)
         final_history = pd.concat([history_df[history_df['Date'] != save_ts], pd.DataFrame([new_row])]).sort_values('Date').reset_index(drop=True)
         conn.update(worksheet="trend", data=final_history)
-        st.cache_data.clear(); st.success(f"✅ {sel_date} 저장 완료!"); st.rerun()
+        st.cache_data.clear(); st.success(f"✅ {sel_date} 시트에 정상 저장되었습니다!"); st.rerun()
 
     st.divider()
     if not history_df.empty:
         del_date = st.selectbox("삭제할 날짜 선택", history_df['Date'].dt.date.unique())
         if st.button("해당 날짜 데이터 삭제"):
             conn.update(worksheet="trend", data=history_df[history_df['Date'].dt.date != del_date])
-            st.cache_data.clear(); st.warning(f"🗑️ {del_date} 삭제됨."); st.rerun()
+            st.cache_data.clear(); st.warning(f"🗑️ {del_date} 삭제 완료"); st.rerun()
 
 # --- [6. UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.30</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.31</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -166,15 +150,15 @@ with tabs[0]:
     if not history_df.empty:
         fig = go.Figure()
         h_dates = history_df['Date'].dt.date.astype(str)
-        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Rel'], name='KOSPI (상대지표)', line=dict(dash='dash', color='gray')))
+        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Rel'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
         for acc in ['서은투자수익률', '서희투자수익률', '큰스님투자수익률']:
             col = get_col_safe(history_df, acc)
             if col: fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col))
-        fig.update_layout(title="📈 통합 실재 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+        fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider(); s_cols = st.columns(3)
-    sectors = {"반도체 / IT": "HBM 수요 폭발 및 AI 서버 증설.", "전력 / ESS": "북미 인프라 교체 및 데이터센터 가동.", "배터리 / 에너지": "전고체 기술 점유율 확대."}
+    sectors = {"반도체 / IT": "HBM 수요 폭발 및 AI 서버 증설.", "전력 / ESS": "북미 인프라 교체 및 데이터센터.", "배터리 / 에너지": "전고체 기술 점유율 확대."}
     for i, (n, d) in enumerate(sectors.items()):
         with s_cols[i % 3]: st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><p>{d}</p></div>", unsafe_allow_html=True)
 
@@ -184,7 +168,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        # 🎯 4대 핵심 지표 (v36.5 레이아웃)
+        # 🎯 4대 핵심 지표 복구
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("평가금액", f"{a_eval:,.0f}원")
@@ -197,9 +181,9 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '전일대비손익': '{:+,.0f}원', '누적수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
 
-        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
         
-        # 🎯 기업 딥다이브 리서치 카드
+        # 🎯 기업 딥다이브 리서치 카드 복구
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
             rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
@@ -213,7 +197,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                 fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Rel'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
                 
                 acc_col = get_col_safe(history_df, history_col_key)
-                if acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 실제수익률', line=dict(width=4)))
+                if acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 실제수익률'))
                 
                 s_key = f"{acc_name}_{sel}수익률"
                 s_col = get_col_safe(history_df, s_key)
@@ -226,17 +210,13 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
 
+        # 🎯 하단 리포트 박스 복구
         st.divider(); r_l, r_r = st.columns(2)
-        with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 계좌 총평</h4><p>Target 달성 보유 지속.</p></div>", unsafe_allow_html=True)
+        with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 계좌 총평</h4><p>목표 달성을 위한 전략적 보유 유지.</p></div>", unsafe_allow_html=True)
         with r_r: st.markdown("<div class='report-box'><h4>🌍 업황 대응 전략</h4><p>시장 변동성 모니터링 중.</p></div>", unsafe_allow_html=True)
-
-        acc_news = get_acc_news(sub_df['종목명'].unique().tolist())
-        if acc_news:
-            news_html = " ".join([f"<div style='margin-bottom:8px;'>[{n['name']}] <a href='{n['url']}' target='_blank' style='color:white; text-decoration:none;'>{n['title']} ↗️</a></div>" for n in acc_news])
-            st.markdown(f"<div class='acc-flash-container'>🔔 실시간 뉴스: {news_html}</div>", unsafe_allow_html=True)
 
 render_account_tab("서은투자", tabs[1], "서은투자수익률")
 render_account_tab("서희투자", tabs[2], "서희투자수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님투자수익률")
 
-st.caption(f"v36.30 가디언 프리시전 파이널-싱크 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"v36.31 가디언 프리시전 파이널 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
