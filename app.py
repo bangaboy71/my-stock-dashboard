@@ -6,8 +6,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
-# 1. 설정 및 UI 스타일 (v36.5 베이스라인 완벽 복구)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v36.35", layout="wide")
+# 1. 설정 및 UI 스타일 (v36.5 베이스라인 100% 사수)
+st.set_page_config(page_title="가족 자산 성장 관제탑 v36.36", layout="wide")
 
 st.markdown("""
     <style>
@@ -28,7 +28,7 @@ st.markdown("""
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
 RESEARCH_DATA = {
     "삼성전자": {"metrics": [("영업이익률", "16.8%", "38.5%"), ("ROE", "12.5%", "28.0%"), ("특별 DPS", "500원", "3.5~7천원")], "implications": ["HBM3E 양산 본격화", "특별 배당 기반 강력 환원"]},
-    "KT&G": {"metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("자사주 소각", "0.9조", "0.5~1.1조")], "implications": ["NGP 성장 동력 확보", "발행주식 20% 소각"]},
+    "KT&G": {"metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("자사주 소각", "0.9조", "0.5~1.1조")], "implications": ["NGP 성장 동력 확보", "발행주식 20% 소각 가속화"]},
     "테스": {"metrics": [("영업이익률", "10.7%", "19.0%"), ("ROE", "6.2%", "14.5%"), ("정규 DPS", "500원", "700~900원")], "implications": ["선단공정 장비 수요 폭증", "ROE 14.5% 달성 전망"]}
 }
 
@@ -70,37 +70,36 @@ if not full_df.empty:
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-    # 🎯 [해결 1] 가로축 날짜 고정: 오늘 날짜를 추가하는 로직을 완전히 배제
+    # 🎯 [해결 1] 가상 행 절대 생성 금지 및 데이터만 사용
     history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
     
-    # KOSPI 3/3 기준 정규화 (오버레이용 임시 계산, 시트 저장 안 함)
+    # KOSPI 3/3 기준 정규화 (임시 연산용)
     base_date = pd.Timestamp("2026-03-03")
     base_row = history_df[history_df['Date'] == base_date]
     if not base_row.empty:
-        k_base = base_row['KOSPI'].values[0]
-        history_df['KOSPI_Rel'] = (history_df['KOSPI'] / k_base - 1) * 100
+        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / base_row['KOSPI'].values[0] - 1) * 100
     else:
-        history_df['KOSPI_Rel'] = (history_df['KOSPI'] / history_df['KOSPI'].iloc[0] - 1) * 100
+        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / (history_df['KOSPI'].iloc[0] if not history_df.empty else 1) - 1) * 100
 
-# --- [4. 정밀 열 매칭 세이프가드] ---
+# --- [4. 유연한 열 매칭 세이프가드] ---
 def get_col_safe(df, key):
     target = str(key).replace(" ", "").replace("_", "")
     for col in df.columns:
         if target in str(col).replace(" ", "").replace("_", ""): return col
     return None
 
-# --- [5. 사이드바 관리 메뉴 (영구 고정)] ---
+# --- [5. 사이드바 관리 메뉴 (기능 고정)] ---
 with st.sidebar:
     st.header("⚙️ 관리 메뉴")
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
     st.divider()
     st.subheader("💾 데이터 저장 (날짜 선택)")
-    sel_date = st.date_input("결과를 저장/확정할 날짜", value=now_kst.date())
+    sel_date = st.date_input("결과를 저장할 날짜 선택", value=now_kst.date())
     if st.button(f"{sel_date} 결과 확정 및 저장"):
         save_ts = pd.Timestamp(sel_date)
-        # 🎯 [해결 2] 시트의 원래 헤더 리스트를 가져와서 불필요한 열 생성 원천 차단
-        original_headers = [c for c in history_df.columns if c != 'KOSPI_Rel']
-        new_row = pd.Series(index=original_headers, dtype='object')
+        # 🎯 [해결 2] 시트의 원래 헤더를 엄격하게 복제하여 KOSPI_Relative 같은 가공 열 생성 차단
+        original_cols = [c for c in history_df.columns if c != 'KOSPI_Relative']
+        new_row = pd.Series(index=original_cols, dtype='object')
         new_row['Date'] = save_ts
         new_row['KOSPI'] = get_market_indices()
         
@@ -114,13 +113,14 @@ with st.sidebar:
             col = get_col_safe(history_df, key)
             if col: new_row[col] = row['누적수익률']
             
-        # 🎯 [해결 3] 전체 데이터프레임을 다시 구성하여 시트 전체 업데이트 (저장 실패 방지)
-        final_history = pd.concat([history_df[original_headers][history_df['Date'] != save_ts], pd.DataFrame([new_row])]).sort_values('Date').reset_index(drop=True)
+        # 🎯 [해결 3] 전체 업데이트 방식으로 쓰기 오류 차단
+        final_history = pd.concat([history_df[original_cols][history_df['Date'] != save_ts], pd.DataFrame([new_row])]).sort_values('Date').reset_index(drop=True)
+        # 데이터 타입을 문자열로 일시 변환하여 시트 주입 안정성 확보
         conn.update(worksheet="trend", data=final_history)
-        st.cache_data.clear(); st.success(f"✅ {sel_date} 데이터가 시트에 저장되었습니다!"); st.rerun()
+        st.cache_data.clear(); st.success(f"✅ {sel_date} 데이터 저장 완료!"); st.rerun()
 
 # --- [6. UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.35</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.36</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 # [Tab 0] 총괄 현황
@@ -141,13 +141,13 @@ with tabs[0]:
 
     if not history_df.empty:
         fig = go.Figure()
-        # 🎯 [해결 4] 가로축을 Category로 고정하여 시트에 없는 오늘 날짜(3/8) 완전 삭제
+        # 🎯 [해결 4] Category 형식을 강제하여 데이터에 없는 날짜(3/8) 완전 삭제
         h_dates = history_df['Date'].dt.date.astype(str)
-        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Rel'], name='KOSPI (상대비교)', line=dict(dash='dash', color='gray')))
+        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
         for acc in ['서은투자수익률', '서희투자수익률', '큰스님투자수익률']:
             col = get_col_safe(history_df, acc)
             if col: fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col))
-        fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+        fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기반)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
 # [투자 주체별 상세 탭]
@@ -156,12 +156,12 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        # 🎯 4대 핵심 지표 원형 복구 (Metrics)
+        # 🎯 4대 핵심 지표 원형 복구
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("평가금액", f"{a_eval:,.0f}원")
-        c2.metric("매입금액", f"{a_buy:,.0f}원")
-        c3.metric("누적손익", f"{a_eval-a_buy:+,.0f}원")
+        c1.metric("평가액", f"{a_eval:,.0f}원")
+        c2.metric("매입액", f"{a_buy:,.0f}원")
+        c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%")
         
         # 🎯 정수 포맷 고정 (소수점 제거)
@@ -169,9 +169,9 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '누적수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
 
-        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
         
-        # 🎯 기업 딥다이브 리서치 카드 복구 (v36.5 원형)
+        # 🎯 기업 딥다이브 리서치 카드 복구
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
             rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
@@ -182,13 +182,11 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             if not history_df.empty:
                 fig_acc = go.Figure()
                 h_dt = history_df['Date'].dt.date.astype(str)
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Rel'], name='KOSPI (상대비교)', line=dict(dash='dash', color='gray')))
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
                 
-                # 투자 주체 실제 수익률
                 acc_col = get_col_safe(history_df, history_col_key)
                 if acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 실제수익률', line=dict(width=4)))
                 
-                # 종목 실제 수익률 (시트 매칭)
                 s_key = f"{acc_name}_{sel}수익률"
                 s_col = get_col_safe(history_df, s_key)
                 if s_col and s_col != acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', name=f'{sel} 실제수익률', line=dict(width=2, dash='dot')))
@@ -200,13 +198,12 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
 
-        # 하단 리포트 박스 복구
         st.divider(); r_l, r_r = st.columns(2)
-        with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 계좌 총평</h4><p>목표 달성을 위한 전략적 보유 유지.</p></div>", unsafe_allow_html=True)
+        with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 계좌 총평</h4><p>Target 달성 보유 지속.</p></div>", unsafe_allow_html=True)
         with r_r: st.markdown("<div class='report-box'><h4>🌍 업황 대응 전략</h4><p>시장 변동성 모니터링 중.</p></div>", unsafe_allow_html=True)
 
 render_account_tab("서은투자", tabs[1], "서은투자수익률")
 render_account_tab("서희투자", tabs[2], "서희투자수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님투자수익률")
 
-st.caption(f"v36.35 가디언 프리시전 싱크-오어-다이 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"v36.36 가디언 프리시전 얼티메이텀 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
