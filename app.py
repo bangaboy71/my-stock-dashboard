@@ -5,41 +5,68 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
+import re
 
-# 1. 설정 및 UI 스타일 (v36.5 원형 레이아웃 100% 복구)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v36.22", layout="wide")
+# 1. 설정 및 연결 (v31.6 원형 100% 사수)
+st.set_page_config(page_title="가족 자산 성장 관제탑 v36.5", layout="wide")
 
+# --- [CSS: 수익표 색채 및 6대 섹터 박스 스타일] ---
 st.markdown("""
     <style>
-    [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: bold !important; }
-    .report-box { padding: 25px; border-radius: 12px; height: 350px; overflow-y: auto; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.15); background-color: rgba(255,255,255,0.02); line-height: 1.8; }
-    .sector-box { padding: 20px; border-radius: 10px; border: 1px solid rgba(135,206,235,0.2); background-color: rgba(135,206,235,0.03); min-height: 250px; margin-bottom: 20px; }
-    .sector-title { font-size: 1.2rem; font-weight: bold; border-bottom: 3px solid #87CEEB; padding-bottom: 10px; margin-bottom: 15px; color: #87CEEB; }
+    [data-testid="stMetricValue"] { font-size: 1.6rem !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
+    .report-box { padding: 25px; border-radius: 12px; height: 750px; overflow-y: auto; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.15); background-color: rgba(255,255,255,0.02); line-height: 1.8; }
+    .sector-box { padding: 20px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background-color: rgba(255,255,255,0.04); min-height: 300px; margin-bottom: 20px; }
+    .sector-title { font-size: 1.3rem; font-weight: bold; border-bottom: 4px solid #87CEEB; padding-bottom: 12px; margin-bottom: 15px; color: #87CEEB; }
+    .leader-tag { background-color: rgba(255,215,0,0.15); border: 1px solid rgba(255,215,0,0.4); padding: 6px 12px; border-radius: 6px; color: #FFD700; font-weight: bold; margin-bottom: 12px; display: inline-block; font-size: 0.8em; }
+    
+    /* 🎯 딥다이브 카드: 2열 레이아웃 (좌: 수치, 우: 시사점) */
     .insight-card { background: rgba(135,206,235,0.03); padding: 25px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.25); margin-bottom: 25px; color: white; }
-    .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.3rem; margin-bottom: 20px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 12px; }
+    .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.25rem; margin-bottom: 15px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 10px; }
     .insight-flex { display: flex; gap: 30px; align-items: flex-start; }
-    .insight-left { flex: 1.3; }
-    .insight-right { flex: 1; background: rgba(255,215,0,0.04); padding: 20px; border-radius: 10px; border-left: 5px solid #FFD700; }
-    .research-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
-    .research-table th { text-align: left; padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); }
-    .research-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .insight-left { flex: 1.2; }
+    .insight-right { flex: 1; background: rgba(255,215,0,0.03); padding: 20px; border-radius: 10px; border-left: 5px solid #FFD700; }
+    
+    .research-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    .research-table th { text-align: left; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); }
+    .research-table td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }
     .target-val { color: #FFD700; font-weight: bold; }
-    .acc-flash-container { background: rgba(255,215,0,0.05); padding: 20px; border-radius: 10px; border: 1px dashed #FFD700; margin-top: 25px; }
+    
+    .index-indicator { padding: 15px 30px; border-radius: 12px; font-weight: bold; font-size: 1.2rem; border: 2px solid; text-align: center; background-color: rgba(0,0,0,0.2); }
+    .up-style { color: #FF4B4B; border-color: #FF4B4B; background-color: rgba(255, 75, 75, 0.05); }
+    .down-style { color: #87CEEB; border-color: #87CEEB; background-color: rgba(135, 206, 235, 0.05); }
+    
+    .acc-flash-container { background: rgba(255,215,0,0.05); padding: 15px; border-radius: 10px; border: 1px dashed #FFD700; margin-top: 20px; }
     .news-link:hover { color: #FFD700 !important; text-decoration: underline; cursor: pointer; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [2. 엔진 및 연구 데이터베이스] ---
+# --- [2. 연구 데이터베이스 통합 (전 종목 완결)] ---
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
+
 RESEARCH_DATA = {
-    "삼성전자": {"metrics": [("영업이익률", "16.8%", "38.5%"), ("ROE", "12.5%", "28.0%"), ("특별 DPS", "500원", "3.5~7천원")], "implications": ["HBM3E 양산 본격화", "특별 배당 기반 강력 환원"]},
-    "KT&G": {"metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("자사주 소각", "0.9조", "0.5~1.1조")], "implications": ["NGP 성장 동력 확보", "발행주식 20% 소각 가속화"]},
-    "테스": {"metrics": [("영업이익률", "10.7%", "19.0%"), ("ROE", "6.2%", "14.5%"), ("정규 DPS", "500원", "700~900원")], "implications": ["선단공정 장비 수요 폭증", "ROE 14.5% 달성 전망"]}
+    "삼성전자": {"desc": "2026년 영업이익 185조원 목표의 압도적 모멘텀.", "metrics": [("영업이익률", "16.8%", "38.5%"), ("ROE", "12.5%", "28.0%"), ("PER", "15.2배", "9.1배"), ("시가배당률", "1.9%", "4.5~6.0%")], "implications": ["HBM3E 양산 및 파운드리 수율 개선을 통한 수익 극대화", "특별 배당 포함 시 시가배당률 최대 6.0% 기대", "AI 서버용 메모리 수요 폭증에 따른 고마진 전환"]},
+    "KT&G": {"desc": "ROE 15% 달성 목표 및 3개년 주주환원 정책 선도.", "metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("PBR", "1.25배", "1.40배"), ("정규 DPS", "6,000원", "6,400~6,600원")], "implications": ["NGP(전자담배) 및 해외 궐련 매출 비중 확대", "2027년까지 발행주식 20% 소각을 통한 가치 제고", "카자흐스탄/인도네시아 공장 가동 효과 본격화"]},
+    "테스": {"desc": "반도체 선단공정 장비 국산화 수혜 및 이익률 점프.", "metrics": [("영업이익률", "10.7%", "19.0%"), ("ROE", "6.2%", "14.5%"), ("PER", "18.5배", "11.2배"), ("정규 DPS", "500원", "700~900원")], "implications": ["메모리 선단 공정 전환에 따른 장비 수요 폭증", "2026년 ROE 14.5% 달성 전망의 성장 가치주", "업황 회복에 따른 가동률 상승 및 현금흐름 개선"]},
+    "현대차2우B": {"desc": "은퇴 포트폴리오의 강력한 캐시카우 및 고배당주.", "metrics": [("영업이익률", "6.2%", "7.0%"), ("ROE", "13.0%", "15.5%"), ("시가배당률", "5.7%", "6.4%"), ("정규 DPS", "13,600원", "14,5~15.5천원")], "implications": ["SUV/제네시스 중심 믹스 개선 및 수익 가이드라인 준수", "본주 대비 높은 할인율로 저평가 매력 극대화", "분기 배당 및 자사주 소각 등 주주 친화 정책 강화"]},
+    "KODEX200타겟위클리커버드콜": {"desc": "연 15% 분배를 지향하는 은퇴 특화 인컴 도구.", "metrics": [("옵션 프리미엄", "연 15%", "연 15%"), ("월 분배금", "110원", "120원"), ("수익 구조", "인컴+상승분", "타겟 프리미엄"), ("시가분배율", "연 12.5%", "연 15.0%")], "implications": ["박스권 시장에서 콜옵션 매도 수익을 통한 인컴 창출", "은퇴 후 생활비 마련을 위한 월 분배금 최적화", "지수 상승 일부 참여 및 하방 방어력 보유"]},
+    "일진전기": {"desc": "북미 전력 인프라 교체 주기에 따른 장기 수혜.", "metrics": [("영업이익률", "6.2%", "8.6%"), ("ROE", "15.2%", "22.5%"), ("PER", "18.0배", "12.5배"), ("시가배당률", "1.5%", "2.0~2.5%")], "implications": ["북미 인프라 교체 및 데이터센터 증설의 직접적 수혜", "수주 잔고 기반 2026년 영업이익 0.16조원 목표", "전력 효율화 및 ESS 시장 확대에 따른 추가 모멘텀"]},
+    "에스티팜": {"desc": "RNA 치료제 CDMO 선두주자 및 고성장 모멘텀.", "metrics": [("영업이익률", "14.3%", "20.7%"), ("ROE", "8.5%", "18.2%"), ("PER", "45.0배", "22.5배"), ("시가배당률", "0.5%", "0.8~1.2%")], "implications": ["올리고 핵산 생산 시설 가동률 상승에 따른 수익 개선", "글로벌 제약사와의 대규모 계약 확대 기대", "기술적 진입 장벽을 통한 독점적 지위 강화"]},
+    "현대글로비스": {"desc": "물류 효율화 및 배당 증액을 통한 가치 제고.", "metrics": [("영업이익률", "6.2%", "6.7%"), ("ROE", "12.8%", "14.5%"), ("PER", "9.2배", "8.1배"), ("정규 DPS", "6,300원", "7.5~8.0천원")], "implications": ["자동차 운반선(PCTC) 공급 부족에 따른 운임 방어", "해외 거점 확보를 통한 비계열사 매출 확대", "적극적 배당 정책을 통한 밸류업 기조 확인"]},
+    "LG에너지솔루션": {"desc": "이차전지 수익성 개선 및 영업이익 4.8조 타겟.", "metrics": [("영업이익률", "6.5%", "10.6%"), ("ROE", "5.2%", "11.5%"), ("PER", "65.0배", "32.0배"), ("시가배당률", "0.35%", "0.5~0.8%")], "implications": ["북미 합작 공장(JV) 가동 본격화 및 점유율 확대", "차세대 배터리 양산 기술 우위를 통한 격차 확보", "전기차 시장 회복 시 이익 가시성 대폭 개선"]},
+    "SK스퀘어": {"desc": "지주사 할인율 해소 및 강력한 자사주 소각 추진.", "metrics": [("ROE", "4.5%", "9.8%"), ("PBR", "0.45배", "0.65배"), ("NAV 할인율", "65.0%", "45.0%"), ("자사주 소각", "0.2조", "0.5~0.8조")], "implications": ["하이닉스 배당 수익 기반의 적극적 환원 기조", "포트폴리오 자산 가치 재평가 및 IPO 모멘텀", "밸류업 가이드라인 준수를 통한 저평가 탈피"]}
 }
 
+# --- [3. 데이터 엔진 및 파싱 함수] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
+
+def color_neg_red_pos_blue(val):
+    if isinstance(val, (int, float)):
+        color = '#FF4B4B' if val > 0 else '#87CEEB' if val < 0 else 'white'
+        return f'color: {color}'
+    return ''
 
 def get_market_indices():
     market = {}
@@ -50,7 +77,7 @@ def get_market_indices():
             val = soup.find("em", {"id": "now_value"}).text
             raw = soup.find("span", {"id": "change_value_and_rate"}).text.strip().split()
             market[code] = {"now": val, "diff": raw[0].replace("상승","+").replace("하락","-"), "rate": raw[1], "style": "up-style" if "+" in raw[0] or "상승" in raw[0] else "down-style"}
-    except: market = {"KOSPI": {"now": "-", "diff": "-", "rate": "-", "style": ""}}
+    except: market = {"KOSPI": {"now": "-", "diff": "-", "rate": "-", "style": ""}, "KOSDAQ": {"now": "-", "diff": "-", "rate": "-", "style": ""}}
     return market
 
 def get_stock_data(name):
@@ -78,7 +105,7 @@ def get_acc_news(stocks):
     except: pass
     return news_list
 
-# --- [3. 데이터 로드 및 정밀 정규화 엔진] ---
+# --- [4. 데이터 로드 및 전처리] ---
 full_df = conn.read(worksheet="종목 현황", ttl="1m")
 history_df = conn.read(worksheet="trend", ttl=0)
 
@@ -88,146 +115,163 @@ if not full_df.empty:
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     full_df['매입금액'], full_df['평가금액'] = full_df['수량'] * full_df['매입단가'], full_df['수량'] * full_df['현재가']
+    full_df['전일평가금액'] = full_df['수량'] * full_df['전일종가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
-    full_df['전일대비변동률'] = (full_df['전일대비손익'] / (full_df['수량'] * full_df['전일종가']).replace(0, float('nan')) * 100).fillna(0)
+    full_df['수익률'] = (full_df['손익'] / (full_df['매입금액'].replace(0, float('nan'))) * 100).fillna(0)
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-    # 🎯 중복 제거 및 사실 기반 정렬 (3/6 데이터 밀림 방지)
-    history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
-    
-    # 🎯 [정규화] 3월 3일 기준 0% 보정 로직
-    base_date = pd.Timestamp("2026-03-03")
-    base_row = history_df[history_df['Date'] == base_date]
-    if not base_row.empty:
-        k_base = base_row['KOSPI'].values[0]
-        history_df['KOSPI_Norm'] = (history_df['KOSPI'] / k_base - 1) * 100
-        for col in ['서은수익률', '서희수익률', '큰스님수익률']:
-            if col in history_df.columns:
-                s_base = base_row[col].values[0]
-                history_df[f'{col}_Norm'] = history_df[col] - s_base
-    else:
-        history_df['KOSPI_Norm'] = (history_df['KOSPI'] / (history_df['KOSPI'].iloc[0] if not history_df.empty else 1) - 1) * 100
+    history_df = history_df.dropna(subset=['Date']).sort_values('Date')
 
-# --- [4. 정밀 스타일 엔진] ---
-def style_summary(df):
-    def apply_color(row):
-        eval_c = 'color: #FF4B4B' if row['평가금액'] > row['매입금액'] else 'color: #87CEEB' if row['평가금액'] < row['매입금액'] else ''
-        p_c = 'color: #FF4B4B' if row['손익'] > 0 else 'color: #87CEEB' if row['손익'] < 0 else ''
-        d_c = 'color: #FF4B4B' if row['전일대비손익'] > 0 else 'color: #87CEEB' if row['전일대비손익'] < 0 else ''
-        return ['', '', eval_c, p_c, d_c, d_c, p_c]
-    return df.style.apply(apply_color, axis=1)
-
-def style_holdings(df):
-    def apply_color(row):
-        price_c = 'color: #FF4B4B' if row['현재가'] > row['매입단가'] else 'color: #87CEEB' if row['현재가'] < row['매입단가'] else ''
-        d_c = 'color: #FF4B4B' if row['전일대비손익'] > 0 else 'color: #87CEEB' if row['전일대비손익'] < 0 else ''
-        t_c = 'color: #FF4B4B' if row['누적수익률'] > 0 else 'color: #87CEEB' if row['누적수익률'] < 0 else ''
-        return ['', '', '', '', price_c, '', d_c, d_c, t_c]
-    return df.style.apply(apply_color, axis=1)
-
-# --- [5. 사이드바 관리 메뉴 및 정밀 저장] ---
+# --- [5. 사이드바 마스터 메뉴 (복구)] ---
 st.sidebar.header("🕹️ 관제탑 마스터 메뉴")
 if st.sidebar.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
-
-if st.sidebar.button("💾 오늘의 결과 저장"):
-    today = pd.Timestamp(now_kst.date())
+if st.sidebar.button("💾 오늘의 결과 저장/덮어쓰기"):
+    today = now_kst.date()
     m_info = get_market_indices()
-    # 계좌 수익률 및 종목 수익률 동시 저장 로직
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-    stock_sum = full_df.groupby('종목명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
-    
     new_row = {"Date": today, "KOSPI": float(m_info['KOSPI']['now'].replace(',','')), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
-    for s_name, s_yield in stock_sum.items():
-        new_row[s_name.replace(' ', '')] = s_yield
-        
-    update_df = pd.concat([history_df[history_df['Date'] != today], pd.DataFrame([new_row])]).sort_values('Date')
-    conn.update(worksheet="trend", data=update_df)
-    st.cache_data.clear(); st.sidebar.success("✅ 저장 완료!"); st.rerun()
+    conn.update(worksheet="trend", data=pd.concat([history_df[history_df['Date']!=today], pd.DataFrame([new_row])]).sort_values('Date'))
+    st.sidebar.success(f"✅ {today} 저장 완료"); st.rerun()
+if st.sidebar.button("🧹 과거 데이터 정제 (중복 제거)"):
+    conn.update(worksheet="trend", data=history_df.drop_duplicates(subset=['Date'], keep='last'))
+    st.sidebar.success("정제 완료"); st.rerun()
 
-# --- [6. UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.22</h1>", unsafe_allow_html=True)
+# --- [UI 메인 구성] ---
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.5</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황
+# [Tab 0] 총괄 현황 (복구 및 섹터 리포트 추가)
 with tabs[0]:
-    t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
-    st.columns(4)[0].metric("가족 총 평가액", f"{t_eval:,.0f}원", f"{t_eval-t_buy:+,.0f}원")
+    t_eval, t_buy, t_prev = full_df['평가금액'].sum(), full_df['매입금액'].sum(), full_df['전일평가금액'].sum()
+    d_rate = ((t_eval / t_prev - 1) * 100) if t_prev > 0 else 0
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원")
+    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
+    m3.metric("총 손익", f"{t_eval-t_buy:+,.0f}원", f"{t_eval-t_prev:+,.0f}원")
+    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{d_rate:+.2f}%")
     
-    st.divider()
-    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
-    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
-    sum_acc['전일대비변동률'] = (sum_acc['전일대비손익'] / (sum_acc['평가금액'] - sum_acc['전일대비손익']).replace(0, float('nan')) * 100).fillna(0)
-    sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동률', '누적수익률']]
-    st.dataframe(style_summary(sum_acc).format({'매입금액':'{:,.0f}원', '평가금액':'{:,.0f}원', '손익':'{:+,.0f}원', '전일대비손익':'{:+,.0f}원', '전일대비변동률':'{:+.2f}%', '누적수익률':'{:+.2f}%'}), use_container_width=True, hide_index=True)
+    st.markdown("---")
+    # 계좌 요약 표
+    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
+    sum_acc['수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
+    st.dataframe(sum_acc.style.map(color_neg_red_pos_blue, subset=['손익', '수익률']).format({'매입금액':'{:,.0f}원', '평가금액':'{:,.0f}원', '손익':'{:+,.0f}원', '수익률':'{:+.2f}%'}), use_container_width=True, hide_index=True)
 
     if not history_df.empty:
         fig = go.Figure()
-        # 🎯 가로축 고정: 시트 데이터만 표기하여 날짜 밀림 해결
         h_dates = history_df['Date'].dt.date.astype(str)
-        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Norm'], name='KOSPI (상대비교)', line=dict(dash='dash', color='gray')))
-        for col, color in {'서은수익률_Norm': '#FF4B4B', '서희수익률_Norm': '#87CEEB', '큰스님수익률_Norm': '#00FF00'}.items():
+        bk_k = history_df['KOSPI'].iloc[0] if history_df['KOSPI'].iloc[0] != 0 else 1
+        k_yield = ((history_df['KOSPI'] / bk_k) - 1) * 100
+        fig.add_trace(go.Scatter(x=h_dates, y=k_yield, name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+        for col, color in {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}.items():
             if col in history_df.columns:
-                fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col.split('_')[0], line=dict(color=color, width=3)))
-        fig.update_layout(title="📈 통합 수익률 추이 (상대비교)", yaxis_title="누적수익률 상대비교지표", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col.replace('수익률',''), line=dict(color=color, width=3)))
+        fig.update_layout(title="📈 통합 수익률 추이 (vs KOSPI)", xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white", height=450)
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
+    st.subheader("🕵️ AI 관제탑 데일리 심층 리포트")
     m_idx = get_market_indices()
-    st.columns(2)[0].markdown(f"<div class='index-indicator {m_idx.get('KOSPI', {}).get('style', '')}'>KOSPI: {m_idx.get('KOSPI', {}).get('now', '-')}</div>", unsafe_allow_html=True)
+    idx_l, idx_r = st.columns(2)
+    idx_l.markdown(f"<div class='index-indicator {m_idx['KOSPI']['style']}'>KOSPI: {m_idx['KOSPI']['now']} ({m_idx['KOSPI']['diff']}, {m_idx['KOSPI']['rate']})</div>", unsafe_allow_html=True)
+    idx_r.markdown(f"<div class='index-indicator {m_idx['KOSDAQ']['style']}'>KOSDAQ: {m_idx['KOSDAQ']['now']} ({m_idx['KOSDAQ']['diff']}, {m_idx['KOSDAQ']['rate']})</div>", unsafe_allow_html=True)
     
-    st.subheader("📊 관심 섹터별 인텔리전스")
-    s_cols = st.columns(3)
-    sectors = {"반도체 / IT": "HBM 수요 폭발 및 AI 서버 증설 수혜.", "전력 / ESS": "북미 인프라 교체 및 데이터센터 가동 수혜.", "배터리 / 에너지": "전고체 기술 점유율 확대."}
-    for i, (n, d) in enumerate(sectors.items()):
-        with s_cols[i % 3]: st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><p>{d}</p></div>", unsafe_allow_html=True)
+    rep_l, rep_r = st.columns(2)
+    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>2026년 국내 증시는 강력한 수출 실적을 바탕으로 코스피 5,000선 시대를 공고히 하고 있습니다.</p></div>", unsafe_allow_html=True)
+    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>나스닥 AI 랠리와 미 연준의 금리 기조가 국내 대형 IT주에 우호적인 환경을 제공합니다.</p></div>", unsafe_allow_html=True)
 
-# [투자 주체별 탭]
+    # 🎯 [복구 및 추가] 총괄탭 하단 관심섹터 리포트
+    st.divider()
+    st.subheader("📊 관심 섹터별 인텔리전스 리포트")
+    s_cols = st.columns(3)
+    sectors = {
+        "반도체 / IT": "HBM 수요 폭발 및 AI 서버 증설 수혜 지속.",
+        "전력 / ESS": "북미 인프라 교체 및 데이터센터 가동 수혜.",
+        "배터리 / 에너지": "전고체 기술 우위 선점 기업 중심 재편.",
+        "바이오 / CDMO": "RNA 치료제 및 대규모 위탁생산 모멘텀.",
+        "모빌리티 / 전장": "현대차 그룹 중심의 밸류업 및 하이브리드 강세.",
+        "소비재 / 뷰티": "K-뷰티의 북미 및 글로벌 시장 점유율 폭증."
+    }
+    for i, (n, d) in enumerate(sectors.items()):
+        with s_cols[i % 3]: 
+            st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><div class='leader-tag'>👑 주도 섹터 분석</div><p>{d}</p></div>", unsafe_allow_html=True)
+
+# [투자별 상세 탭]
 def render_account_tab(acc_name, tab_obj, history_col):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
-        st.columns(4)[0].metric(f"{acc_name} 평가액", f"{a_eval:,.0f}원", f"{a_eval-a_buy:+,.0f}원")
+        # 상단 수익표
+        a_buy, a_eval, a_prev = sub_df['매입금액'].sum(), sub_df['평가금액'].sum(), sub_df['전일평가금액'].sum()
+        a_daily_rate = ((a_eval / a_prev - 1) * 100) if a_prev > 0 else 0
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("평가액", f"{a_eval:,.0f}원")
+        c2.metric("매입원금", f"{a_buy:,.0f}원")
+        c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원")
+        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{a_daily_rate:+.2f}%")
         
-        st.dataframe(style_holdings(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '전일대비손익', '전일대비변동률', '누적수익률']]).format({'매입금액':'{:,.0f}원', '평가금액':'{:,.0f}원', '현재가':'{:,.0f}원', '누적수익률':'{:+.2f}%'}), hide_index=True, use_container_width=True)
+        # 수익표 색채 적용
+        st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '손익', '수익률']].style.map(color_neg_red_pos_blue, subset=['손익', '수익률']).format({
+            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'
+        }), hide_index=True, use_container_width=True)
 
         st.divider()
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
         
-        # 🎯 리포트 및 그래프 (v36.5 레이아웃 복구)
+        # 🎯 [레이아웃 고정] 딥다이브 (좌: 수치, 우: 시사점)
+        res = RESEARCH_DATA.get(sel.replace(" ", ""))
+        if res:
+            rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
+            implications_html = "".join([f"<div class='implication-item'>• {imp}</div>" for imp in res['implications']])
+            st.markdown(f"""
+            <div class='insight-card'>
+                <div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브 (2026 Target)</div>
+                <div class='insight-flex'>
+                    <div class='insight-left'>
+                        <table class='research-table'>
+                            <thead><tr><th>분석 지표</th><th>2025년 (추정)</th><th>2026년 (Target)</th></tr></thead>
+                            <tbody>{rows}</tbody>
+                        </table>
+                    </div>
+                    <div class='insight-right'>
+                        <div class='implication-title'>💡 투자 시사점 및 전략</div>
+                        {implications_html}
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 추이/비중 그래프 (v35.5 레이아웃)
         g_left, g_right = st.columns([2, 1])
         with g_left:
-            if not history_df.empty:
+            if not history_df.empty and history_col in history_df.columns:
                 fig_acc = go.Figure()
                 h_dt = history_df['Date'].dt.date.astype(str)
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Norm'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[f'{history_col}_Norm'], mode='lines+markers', name=f'{acc_name} 수익률', line=dict(color='#87CEEB', width=4)))
-                
-                s_c = next((c for c in history_df.columns if sel.replace(' ','') in c.replace(' ','')), "")
-                if s_c and s_c != history_col:
-                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_c], mode='lines', name=f'{sel} 실재수익률', line=dict(color='#FF4B4B', width=2, dash='dot')))
-                fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", yaxis_title="누적수익률(%)", xaxis=dict(type='category'), height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[history_col], mode='lines+markers', name='계좌 수익률', line=dict(color='#87CEEB', width=4)))
+                if len(sub_df) > 1:
+                    s_c = next((c for c in history_df.columns if acc_name[:2] in c and sel.replace(' ','') in c.replace(' ','')), "")
+                    if s_c: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_c], mode='lines', name=f'{sel} 수익률', line=dict(color='#FF4B4B', width=2, dash='dot')))
+                fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", height=400, xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig_acc, use_container_width=True)
         with g_right:
             fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
-            fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
+            fig_p.update_layout(title="💰 자산 비중", height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
 
-        # 🎯 [복구] 하단 손익 분석 리포트 및 뉴스
+        # 🎯 [복구] 하단 리포트 및 뉴스/공시
         st.divider()
-        r_l, r_r = st.columns(2)
-        with r_l: st.markdown(f"<div class='report-box'><h4 style='color:#87CEEB;'>📋 {acc_name} 계좌 총평</h4><p>현재 포트폴리오는 견조한 흐름을 유지 중입니다. 시장 지수 대비 수익 방어력이 확인되며 2026년 타겟 달성을 위한 전략적 보유를 유지합니다.</p></div>", unsafe_allow_html=True)
-        with r_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 업황 대응 전략</h4><p>거시 경제 지표에 따라 반도체 및 고배당주 중심의 비중 조절을 검토합니다.</p></div>", unsafe_allow_html=True)
+        ar_l, ar_r = st.columns(2)
+        with ar_l: st.markdown(f"<div class='report-box' style='height:250px;'><h4 style='color:#87CEEB;'>📋 계좌 총평</h4><p>{acc_name} 포트폴리오는 연구 자료의 가이드라인에 따라 견조하게 관리되고 있습니다.</p></div>", unsafe_allow_html=True)
+        with ar_r: st.markdown(f"<div class='report-box' style='height:250px;'><h4 style='color:#FF4B4B;'>🌍 업황 대응 전략</h4><p>시장의 변동성에도 불구하고 주당 가치 제고가 확실한 종목 위주로 보유를 지속합니다.</p></div>", unsafe_allow_html=True)
 
         acc_news = get_acc_news(sub_df['종목명'].unique().tolist())
         if acc_news:
-            news_html = " ".join([f"<div style='margin-bottom:8px;'>[{n['name']}] <a href='{n['url']}' target='_blank' class='news-link' style='color:white;'>{n['title']} ↗️</a></div>" for n in acc_news])
-            st.markdown(f"<div class='acc-flash-container'>🔔 실시간 뉴스 및 공시: {news_html}</div>", unsafe_allow_html=True)
+            news_html = " ".join([f"<div class='acc-flash-item'><span class='acc-flash-stock'>[{n['name']}]</span> <a href='{n['url']}' target='_blank' class='news-link'>{n['title']} ↗️</a></div>" for n in acc_news])
+            st.markdown(f"<div class='acc-flash-container'><div style='font-weight: bold; color: #FFD700; margin-bottom: 10px;'>🔔 보유종목 최신 뉴스 및 공시 (새 창)</div>{news_html}</div>", unsafe_allow_html=True)
 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
+
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v36.5 가디언 리서치 & 섹터")
