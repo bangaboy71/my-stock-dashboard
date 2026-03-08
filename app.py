@@ -149,35 +149,67 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# [7. 투자 주체별 상세 렌더링 함수]
+# --- [7. 투자 주체별 상세 렌더링 함수: 내부 데이터 참조 버전] ---
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
-        if sub_df.empty: return
+        if sub_df.empty:
+            st.warning(f"{acc_name} 데이터가 시트에서 발견되지 않았습니다.")
+            return
         
+        # 지표 계산
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_prev_eval = (sub_df['수량'] * sub_df['전일종가']).sum()
         a_change_amt = a_eval - a_prev_eval
         a_change_pct = (a_change_amt / a_prev_eval * 100) if a_prev_eval != 0 else 0
         
+        # 상단 4대 메트릭 (누적손익 변동 표기 삭제 원칙 유지)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("평가액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
         c2.metric("매입액", f"{a_buy:,.0f}원")
         c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_change_pct:+.2f}%p")
         
+        # 종목별 테이블 (음양 색채 적용)
         display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']
-        st.dataframe(sub_df[display_cols].style.apply(lambda x: ['color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' for i, val in enumerate(x)], axis=1).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+        st.dataframe(sub_df[display_cols].style.apply(lambda x: [
+            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+            for i, val in enumerate(x)
+        ], axis=1).format({
+            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
+            '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', 
+            '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
 
-        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
-        from app_research import RESEARCH_DATA # 데이터 외부분리 권장하나 여기선 이전 코드 RESEARCH_DATA 사용
+        st.divider()
+        
+        # 🎯 중복 키 방지 및 종목 선택
+        sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_final_{acc_name}")
+        
+        # 🎯 [수정 핵심] 외부 import 없이 상단에 정의된 RESEARCH_DATA를 직접 사용합니다.
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
             rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
-            st.markdown(f"<div class='insight-card'><div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div><div class='insight-flex'><div class='insight-left'><table class='research-table'><thead><tr><th>지표</th><th>25년 추정</th><th>26년 Target</th></tr></thead><tbody>{rows}</tbody></table></div><div class='insight-right'>💡 {res['implications'][0]}</div></div></div>", unsafe_allow_html=True)
+            st.markdown(f"""
+                <div class='insight-card'>
+                    <div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div>
+                    <div class='insight-flex'>
+                        <div style='flex:1.2;'>
+                            <table class='research-table'>
+                                <thead><tr><th>지표</th><th>25년 추정</th><th>26년 Target</th></tr></thead>
+                                <tbody>{rows}</tbody>
+                            </table>
+                        </div>
+                        <div style='flex:1; background: rgba(255,215,0,0.05); padding: 15px; border-radius: 8px; border-left: 4px solid #FFD700; margin-left: 15px;'>
+                            <span style='color: #FFD700; font-weight: bold;'>💡 전략 인사이트</span><br>
+                            <span style='font-size: 0.95rem;'>{res['implications'][0]}</span><br><br>
+                            <span style='font-size: 0.95rem;'>{res['implications'][1] if len(res['implications']) > 1 else ""}</span>
+                        </div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
 
+        # 차트 레이아웃
         g_left, g_right = st.columns([2, 1])
         with g_left:
             if not history_df.empty:
@@ -194,7 +226,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
-
+            
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
