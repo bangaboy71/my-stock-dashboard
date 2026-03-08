@@ -8,16 +8,17 @@ import plotly.graph_objects as go
 import re
 
 # 1. 설정 및 연결 (v31.6 원형 100% 사수)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v36.4", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v36.5", layout="wide")
 
-# --- [CSS: 수익표 색채 및 리서치 레이아웃 패치] ---
+# --- [CSS: 수익표 색채 및 6대 섹터 박스 스타일] ---
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; }
     [data-testid="stMetricLabel"] { font-size: 0.9rem !important; }
     .report-box { padding: 25px; border-radius: 12px; height: 750px; overflow-y: auto; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.15); background-color: rgba(255,255,255,0.02); line-height: 1.8; }
-    .sector-box { padding: 20px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background-color: rgba(255,255,255,0.04); min-height: 500px; margin-bottom: 20px; }
+    .sector-box { padding: 20px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background-color: rgba(255,255,255,0.04); min-height: 300px; margin-bottom: 20px; }
     .sector-title { font-size: 1.3rem; font-weight: bold; border-bottom: 4px solid #87CEEB; padding-bottom: 12px; margin-bottom: 15px; color: #87CEEB; }
+    .leader-tag { background-color: rgba(255,215,0,0.15); border: 1px solid rgba(255,215,0,0.4); padding: 6px 12px; border-radius: 6px; color: #FFD700; font-weight: bold; margin-bottom: 12px; display: inline-block; font-size: 0.8em; }
     
     /* 🎯 딥다이브 카드: 2열 레이아웃 (좌: 수치, 우: 시사점) */
     .insight-card { background: rgba(135,206,235,0.03); padding: 25px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.25); margin-bottom: 25px; color: white; }
@@ -31,34 +32,29 @@ st.markdown("""
     .research-table td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }
     .target-val { color: #FFD700; font-weight: bold; }
     
-    .implication-title { color: #FFD700; font-weight: bold; font-size: 1rem; margin-bottom: 12px; }
-    .implication-item { font-size: 0.88rem; color: rgba(255,255,255,0.9); margin-bottom: 10px; line-height: 1.6; }
-
     .index-indicator { padding: 15px 30px; border-radius: 12px; font-weight: bold; font-size: 1.2rem; border: 2px solid; text-align: center; background-color: rgba(0,0,0,0.2); }
     .up-style { color: #FF4B4B; border-color: #FF4B4B; background-color: rgba(255, 75, 75, 0.05); }
     .down-style { color: #87CEEB; border-color: #87CEEB; background-color: rgba(135, 206, 235, 0.05); }
     
     .acc-flash-container { background: rgba(255,215,0,0.05); padding: 15px; border-radius: 10px; border: 1px dashed #FFD700; margin-top: 20px; }
-    .acc-flash-item { font-size: 0.88rem; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .acc-flash-stock { color: #87CEEB; font-weight: bold; margin-right: 8px; }
     .news-link:hover { color: #FFD700 !important; text-decoration: underline; cursor: pointer; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [2. 연구 데이터베이스 통합 (10종 완결)] ---
+# --- [2. 연구 데이터베이스 통합 (전 종목 완결)] ---
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
 
 RESEARCH_DATA = {
-    "삼성전자": {"desc": "2026년 영업이익 185조원 목표의 압도적 모멘텀.", "metrics": [("영업이익률", "16.8%", "38.5%"), ("ROE", "12.5%", "28.0%"), ("PER", "15.2배", "9.1배"), ("시가배당률", "1.9%", "4.5~6.0%")], "implications": ["HBM3E 양산 본격화 및 파운드리 수익성 개선", "특별 배당 포함 시 연 6% 수준의 환원 기대", "AI 서버 중심 메모리 수요 폭증에 따른 체질 개선"]},
-    "KT&G": {"desc": "ROE 15% 달성 및 자사주 소각을 통한 밸류업 진입.", "metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("PBR", "1.25배", "1.40배"), ("정규 DPS", "6,000원", "6,400~6,600원")], "implications": ["해외 궐련 수출 확대 및 NGP 성장 동력 확보", "2027년까지 발행주식 20% 소각 진행", "글로벌 신공장 가동을 통한 공급망 강화"]},
-    "테스": {"desc": "반도체 선단공정 장비 국산화 및 수익성 점프 예상.", "metrics": [("영업이익률", "10.7%", "19.0%"), ("ROE", "6.2%", "14.5%"), ("PER", "18.5배", "11.2배"), ("정규 DPS", "500원", "700~900원")], "implications": ["선단 공정 장비 수요 회복에 따른 이익률 개선", "2026년 ROE 14.5% 달성 전망", "안정적 재무 구조 기반의 배당 확대 기조"]},
-    "현대차2우B": {"desc": "고배당 우선주 및 은퇴 포트폴리오의 캐시카우.", "metrics": [("영업이익률", "6.2%", "7.0%"), ("ROE", "13.0%", "15.5%"), ("시가배당률", "5.7%", "6.4%"), ("정규 DPS", "13,600원", "14,500~15,500원")], "implications": ["SUV/제네시스 중심 믹스 개선을 통한 수익성 가이드라인 충족", "본주 대비 높은 할인율로 배당수익률 극대화", "자사주 소각 등 적극적 밸류업 정책 수행"]},
-    "KODEX200타겟위클리커버드콜": {"desc": "주 단위 콜옵션 매도로 연 15% 분배율 지향.", "metrics": [("옵션 프리미엄", "연 15%", "연 15%"), ("월 분배금", "110원", "120원"), ("수익 구조", "인컴+상승분", "타겟 프리미엄"), ("시가분배율", "연 12.5%", "연 15.0%")], "implications": ["박스권 장세에서 콜옵션 매도 수익을 통한 초과 수익", "은퇴 생활비 마련을 위한 월 분배금 최적화 도구", "하방 방어력을 갖춘 인컴 집중형 포트폴리오"]},
-    "일진전기": {"desc": "북미 전력 인프라 교체 주기 수혜주.", "metrics": [("영업이익률", "6.2%", "8.6%"), ("ROE", "15.2%", "22.5%"), ("PER", "18.0배", "12.5배"), ("시가배당률", "1.5%", "2.0~2.5%")], "implications": ["북미 인프라 교체 수요의 직접적 수혜", "수주 잔고 기반 영업이익 0.16조 타겟", "전력 효율화 및 ESS 시장 확대 모멘텀"]},
-    "에스티팜": {"desc": "RNA 치료제 CDMO 모멘텀 및 이익률 20% 타겟.", "metrics": [("영업이익률", "14.3%", "20.7%"), ("ROE", "8.5%", "18.2%"), ("PER", "45.0배", "22.5배"), ("시가배당률", "0.5%", "0.8~1.2%")], "implications": ["올리고 핵산 생산 시설 가동률 상승", "글로벌 제약사와의 CDMO 계약 확대 기대", "RNA 플랫폼 기반의 장기적 성장성 확보"]},
-    "현대글로비스": {"desc": "물류 효율화 및 DPS 8,000원 시대 지향.", "metrics": [("영업이익률", "6.2%", "6.7%"), ("ROE", "12.8%", "14.5%"), ("PER", "9.2배", "8.1배"), ("정규 DPS", "6,300원", "7,500~8,000원")], "implications": ["자동차 운반선 공급 부족에 따른 수익 방어", "해외 물류 거점 확보 및 그룹사 시너지", "배당 증액을 통한 주주 가치 제고 의지"]},
-    "LG에너지솔루션": {"desc": "이차전지 수익성 개선 및 영업이익 4.8조 타겟.", "metrics": [("영업이익률", "6.5%", "10.6%"), ("ROE", "5.2%", "11.5%"), ("PER", "65.0배", "32.0배"), ("시가배당률", "0.35%", "0.5~0.8%")], "implications": ["북미 합적 공장 가동 본격화", "차세대 배터리 양산 기술 우위 확보", "전기차 수요 회복 시 이익 가시성 대폭 개선"]},
-    "SK스퀘어": {"desc": "지주사 할인율 축소 및 자사주 소각 최대 0.8조.", "metrics": [("ROE", "4.5%", "9.8%"), ("PBR", "0.45배", "0.65배"), ("NAV 할인율", "65.0%", "45.0%"), ("자사주 소각", "0.2조", "0.5~0.8조")], "implications": ["하이닉스 배당 기반 주주 환원 정책 강화", "비상장 포트폴리오 자산 가치 재평가", "밸류업 가이드라인 준수를 통한 할인율 해소"]}
+    "삼성전자": {"desc": "2026년 영업이익 185조원 목표의 압도적 모멘텀.", "metrics": [("영업이익률", "16.8%", "38.5%"), ("ROE", "12.5%", "28.0%"), ("PER", "15.2배", "9.1배"), ("시가배당률", "1.9%", "4.5~6.0%")], "implications": ["HBM3E 양산 및 파운드리 수율 개선을 통한 수익 극대화", "특별 배당 포함 시 시가배당률 최대 6.0% 기대", "AI 서버용 메모리 수요 폭증에 따른 고마진 전환"]},
+    "KT&G": {"desc": "ROE 15% 달성 목표 및 3개년 주주환원 정책 선도.", "metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("PBR", "1.25배", "1.40배"), ("정규 DPS", "6,000원", "6,400~6,600원")], "implications": ["NGP(전자담배) 및 해외 궐련 매출 비중 확대", "2027년까지 발행주식 20% 소각을 통한 가치 제고", "카자흐스탄/인도네시아 공장 가동 효과 본격화"]},
+    "테스": {"desc": "반도체 선단공정 장비 국산화 수혜 및 이익률 점프.", "metrics": [("영업이익률", "10.7%", "19.0%"), ("ROE", "6.2%", "14.5%"), ("PER", "18.5배", "11.2배"), ("정규 DPS", "500원", "700~900원")], "implications": ["메모리 선단 공정 전환에 따른 장비 수요 폭증", "2026년 ROE 14.5% 달성 전망의 성장 가치주", "업황 회복에 따른 가동률 상승 및 현금흐름 개선"]},
+    "현대차2우B": {"desc": "은퇴 포트폴리오의 강력한 캐시카우 및 고배당주.", "metrics": [("영업이익률", "6.2%", "7.0%"), ("ROE", "13.0%", "15.5%"), ("시가배당률", "5.7%", "6.4%"), ("정규 DPS", "13,600원", "14,5~15.5천원")], "implications": ["SUV/제네시스 중심 믹스 개선 및 수익 가이드라인 준수", "본주 대비 높은 할인율로 저평가 매력 극대화", "분기 배당 및 자사주 소각 등 주주 친화 정책 강화"]},
+    "KODEX200타겟위클리커버드콜": {"desc": "연 15% 분배를 지향하는 은퇴 특화 인컴 도구.", "metrics": [("옵션 프리미엄", "연 15%", "연 15%"), ("월 분배금", "110원", "120원"), ("수익 구조", "인컴+상승분", "타겟 프리미엄"), ("시가분배율", "연 12.5%", "연 15.0%")], "implications": ["박스권 시장에서 콜옵션 매도 수익을 통한 인컴 창출", "은퇴 후 생활비 마련을 위한 월 분배금 최적화", "지수 상승 일부 참여 및 하방 방어력 보유"]},
+    "일진전기": {"desc": "북미 전력 인프라 교체 주기에 따른 장기 수혜.", "metrics": [("영업이익률", "6.2%", "8.6%"), ("ROE", "15.2%", "22.5%"), ("PER", "18.0배", "12.5배"), ("시가배당률", "1.5%", "2.0~2.5%")], "implications": ["북미 인프라 교체 및 데이터센터 증설의 직접적 수혜", "수주 잔고 기반 2026년 영업이익 0.16조원 목표", "전력 효율화 및 ESS 시장 확대에 따른 추가 모멘텀"]},
+    "에스티팜": {"desc": "RNA 치료제 CDMO 선두주자 및 고성장 모멘텀.", "metrics": [("영업이익률", "14.3%", "20.7%"), ("ROE", "8.5%", "18.2%"), ("PER", "45.0배", "22.5배"), ("시가배당률", "0.5%", "0.8~1.2%")], "implications": ["올리고 핵산 생산 시설 가동률 상승에 따른 수익 개선", "글로벌 제약사와의 대규모 계약 확대 기대", "기술적 진입 장벽을 통한 독점적 지위 강화"]},
+    "현대글로비스": {"desc": "물류 효율화 및 배당 증액을 통한 가치 제고.", "metrics": [("영업이익률", "6.2%", "6.7%"), ("ROE", "12.8%", "14.5%"), ("PER", "9.2배", "8.1배"), ("정규 DPS", "6,300원", "7.5~8.0천원")], "implications": ["자동차 운반선(PCTC) 공급 부족에 따른 운임 방어", "해외 거점 확보를 통한 비계열사 매출 확대", "적극적 배당 정책을 통한 밸류업 기조 확인"]},
+    "LG에너지솔루션": {"desc": "이차전지 수익성 개선 및 영업이익 4.8조 타겟.", "metrics": [("영업이익률", "6.5%", "10.6%"), ("ROE", "5.2%", "11.5%"), ("PER", "65.0배", "32.0배"), ("시가배당률", "0.35%", "0.5~0.8%")], "implications": ["북미 합작 공장(JV) 가동 본격화 및 점유율 확대", "차세대 배터리 양산 기술 우위를 통한 격차 확보", "전기차 시장 회복 시 이익 가시성 대폭 개선"]},
+    "SK스퀘어": {"desc": "지주사 할인율 해소 및 강력한 자사주 소각 추진.", "metrics": [("ROE", "4.5%", "9.8%"), ("PBR", "0.45배", "0.65배"), ("NAV 할인율", "65.0%", "45.0%"), ("자사주 소각", "0.2조", "0.5~0.8조")], "implications": ["하이닉스 배당 수익 기반의 적극적 환원 기조", "포트폴리오 자산 가치 재평가 및 IPO 모멘텀", "밸류업 가이드라인 준수를 통한 저평가 탈피"]}
 }
 
 # --- [3. 데이터 엔진 및 파싱 함수] ---
@@ -66,7 +62,7 @@ def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def color_negative_red_positive_blue(val):
+def color_neg_red_pos_blue(val):
     if isinstance(val, (int, float)):
         color = '#FF4B4B' if val > 0 else '#87CEEB' if val < 0 else 'white'
         return f'color: {color}'
@@ -109,7 +105,7 @@ def get_acc_news(stocks):
     except: pass
     return news_list
 
-# --- [4. 데이터 로드 및 수익표 색채 로직] ---
+# --- [4. 데이터 로드 및 전처리] ---
 full_df = conn.read(worksheet="종목 현황", ttl="1m")
 history_df = conn.read(worksheet="trend", ttl=0)
 
@@ -127,7 +123,7 @@ if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
     history_df = history_df.dropna(subset=['Date']).sort_values('Date')
 
-# --- [5. 사이드바 마스터 메뉴 복구] ---
+# --- [5. 사이드바 마스터 메뉴 (복구)] ---
 st.sidebar.header("🕹️ 관제탑 마스터 메뉴")
 if st.sidebar.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
 if st.sidebar.button("💾 오늘의 결과 저장/덮어쓰기"):
@@ -136,16 +132,16 @@ if st.sidebar.button("💾 오늘의 결과 저장/덮어쓰기"):
     acc_sum = full_df.groupby('계좌명').apply(lambda x: (x['평가금액'].sum() / x['매입금액'].sum() - 1) * 100 if x['매입금액'].sum() > 0 else 0)
     new_row = {"Date": today, "KOSPI": float(m_info['KOSPI']['now'].replace(',','')), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
     conn.update(worksheet="trend", data=pd.concat([history_df[history_df['Date']!=today], pd.DataFrame([new_row])]).sort_values('Date'))
-    st.sidebar.success(f"✅ 저장 완료"); st.rerun()
+    st.sidebar.success(f"✅ {today} 저장 완료"); st.rerun()
 if st.sidebar.button("🧹 과거 데이터 정제 (중복 제거)"):
     conn.update(worksheet="trend", data=history_df.drop_duplicates(subset=['Date'], keep='last'))
     st.sidebar.success("정제 완료"); st.rerun()
 
 # --- [UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.4</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.5</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 (복구)
+# [Tab 0] 총괄 현황 (복구 및 섹터 리포트 추가)
 with tabs[0]:
     t_eval, t_buy, t_prev = full_df['평가금액'].sum(), full_df['매입금액'].sum(), full_df['전일평가금액'].sum()
     d_rate = ((t_eval / t_prev - 1) * 100) if t_prev > 0 else 0
@@ -156,11 +152,10 @@ with tabs[0]:
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{d_rate:+.2f}%")
     
     st.markdown("---")
-    # 총괄 수익표
-    st.subheader("계좌별 누적 성과 요약")
+    # 계좌 요약 표
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum'}).reset_index()
     sum_acc['수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
-    st.dataframe(sum_acc.style.map(color_negative_red_positive_blue, subset=['손익', '수익률']).format({'매입금액':'{:,.0f}원', '평가금액':'{:,.0f}원', '손익':'{:+,.0f}원', '수익률':'{:+.2f}%'}), use_container_width=True, hide_index=True)
+    st.dataframe(sum_acc.style.map(color_neg_red_pos_blue, subset=['손익', '수익률']).format({'매입금액':'{:,.0f}원', '평가금액':'{:,.0f}원', '손익':'{:+,.0f}원', '수익률':'{:+.2f}%'}), use_container_width=True, hide_index=True)
 
     if not history_df.empty:
         fig = go.Figure()
@@ -175,15 +170,31 @@ with tabs[0]:
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
-    st.subheader("🕵️ AI 관제탑 데일리 심층 리포트 (복구)")
+    st.subheader("🕵️ AI 관제탑 데일리 심층 리포트")
     m_idx = get_market_indices()
     idx_l, idx_r = st.columns(2)
     idx_l.markdown(f"<div class='index-indicator {m_idx['KOSPI']['style']}'>KOSPI: {m_idx['KOSPI']['now']} ({m_idx['KOSPI']['diff']}, {m_idx['KOSPI']['rate']})</div>", unsafe_allow_html=True)
     idx_r.markdown(f"<div class='index-indicator {m_idx['KOSDAQ']['style']}'>KOSDAQ: {m_idx['KOSDAQ']['now']} ({m_idx['KOSDAQ']['diff']}, {m_idx['KOSDAQ']['rate']})</div>", unsafe_allow_html=True)
     
     rep_l, rep_r = st.columns(2)
-    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>국내 증시는 코스피 5,000선 시대를 향한 강력한 펀더멘털을 유지하고 있습니다.</p></div>", unsafe_allow_html=True)
-    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>나스닥 AI 랠리와 고환율 환경이 대형 수출주의 이익 체력을 지지하고 있습니다.</p></div>", unsafe_allow_html=True)
+    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>2026년 국내 증시는 강력한 수출 실적을 바탕으로 코스피 5,000선 시대를 공고히 하고 있습니다.</p></div>", unsafe_allow_html=True)
+    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>나스닥 AI 랠리와 미 연준의 금리 기조가 국내 대형 IT주에 우호적인 환경을 제공합니다.</p></div>", unsafe_allow_html=True)
+
+    # 🎯 [복구 및 추가] 총괄탭 하단 관심섹터 리포트
+    st.divider()
+    st.subheader("📊 관심 섹터별 인텔리전스 리포트")
+    s_cols = st.columns(3)
+    sectors = {
+        "반도체 / IT": "HBM 수요 폭발 및 AI 서버 증설 수혜 지속.",
+        "전력 / ESS": "북미 인프라 교체 및 데이터센터 가동 수혜.",
+        "배터리 / 에너지": "전고체 기술 우위 선점 기업 중심 재편.",
+        "바이오 / CDMO": "RNA 치료제 및 대규모 위탁생산 모멘텀.",
+        "모빌리티 / 전장": "현대차 그룹 중심의 밸류업 및 하이브리드 강세.",
+        "소비재 / 뷰티": "K-뷰티의 북미 및 글로벌 시장 점유율 폭증."
+    }
+    for i, (n, d) in enumerate(sectors.items()):
+        with s_cols[i % 3]: 
+            st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><div class='leader-tag'>👑 주도 섹터 분석</div><p>{d}</p></div>", unsafe_allow_html=True)
 
 # [투자별 상세 탭]
 def render_account_tab(acc_name, tab_obj, history_col):
@@ -191,7 +202,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        # 상단 메트릭
+        # 상단 수익표
         a_buy, a_eval, a_prev = sub_df['매입금액'].sum(), sub_df['평가금액'].sum(), sub_df['전일평가금액'].sum()
         a_daily_rate = ((a_eval / a_prev - 1) * 100) if a_prev > 0 else 0
         c1, c2, c3, c4 = st.columns(4)
@@ -200,15 +211,15 @@ def render_account_tab(acc_name, tab_obj, history_col):
         c3.metric("총 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원")
         c4.metric("수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{a_daily_rate:+.2f}%")
         
-        # 🎯 [수정] 투자탭 수익표 색채 적용
-        st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '손익', '수익률']].style.map(color_negative_red_positive_blue, subset=['손익', '수익률']).format({
+        # 수익표 색채 적용
+        st.dataframe(sub_df[['종목명', '수량', '매입단가', '현재가', '손익', '수익률']].style.map(color_neg_red_pos_blue, subset=['손익', '수익률']).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', '손익': '{:+,.0f}원', '수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
 
         st.divider()
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
         
-        # 🎯 [레이아웃 조정] 딥다이브 카드 (좌: 표, 우: 시사점)
+        # 🎯 [레이아웃 고정] 딥다이브 (좌: 수치, 우: 시사점)
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
             rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
@@ -231,6 +242,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
             </div>
             """, unsafe_allow_html=True)
 
+        # 추이/비중 그래프 (v35.5 레이아웃)
         g_left, g_right = st.columns([2, 1])
         with g_left:
             if not history_df.empty and history_col in history_df.columns:
@@ -256,10 +268,10 @@ def render_account_tab(acc_name, tab_obj, history_col):
         acc_news = get_acc_news(sub_df['종목명'].unique().tolist())
         if acc_news:
             news_html = " ".join([f"<div class='acc-flash-item'><span class='acc-flash-stock'>[{n['name']}]</span> <a href='{n['url']}' target='_blank' class='news-link'>{n['title']} ↗️</a></div>" for n in acc_news])
-            st.markdown(f"<div class='acc-flash-container'><div style='font-weight: bold; color: #FFD700; margin-bottom: 10px;'>🔔 보유종목 최신 공시 및 뉴스 (새 창)</div>{news_html}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='acc-flash-container'><div style='font-weight: bold; color: #FFD700; margin-bottom: 10px;'>🔔 보유종목 최신 뉴스 및 공시 (새 창)</div>{news_html}</div>", unsafe_allow_html=True)
 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v36.4 가디언 풀 리스토어")
+st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v36.5 가디언 리서치 & 섹터")
