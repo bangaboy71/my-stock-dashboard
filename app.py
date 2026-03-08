@@ -6,8 +6,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 
-# 1. 설정 및 UI 스타일 (v36.5 원형 및 사용자 원칙 사수)
-st.set_page_config(page_title="가족 자산 성장 관제탑 v36.12", layout="wide")
+# 1. 설정 및 UI 스타일 정의
+st.set_page_config(page_title="가족 자산 성장 관제탑 v36.13", layout="wide")
 
 st.markdown("""
     <style>
@@ -15,9 +15,7 @@ st.markdown("""
     .report-box { padding: 25px; border-radius: 12px; height: 350px; overflow-y: auto; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.15); background-color: rgba(255,255,255,0.02); line-height: 1.8; }
     .sector-box { padding: 20px; border-radius: 10px; border: 1px solid rgba(135,206,235,0.2); background-color: rgba(135,206,235,0.03); min-height: 250px; margin-bottom: 20px; }
     .sector-title { font-size: 1.2rem; font-weight: bold; border-bottom: 3px solid #87CEEB; padding-bottom: 10px; margin-bottom: 15px; color: #87CEEB; }
-    .leader-tag { background: rgba(255,215,0,0.15); border: 1px solid #FFD700; padding: 4px 10px; border-radius: 5px; color: #FFD700; font-size: 0.8rem; font-weight: bold; margin-bottom: 10px; display: inline-block; }
     
-    /* 🎯 딥다이브 카드 (2열 레이아웃) */
     .insight-card { background: rgba(135,206,235,0.03); padding: 25px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.25); margin-bottom: 25px; color: white; }
     .insight-title { color: #87CEEB; font-weight: bold; font-size: 1.3rem; margin-bottom: 20px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 12px; }
     .insight-flex { display: flex; gap: 30px; align-items: flex-start; }
@@ -36,20 +34,18 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- [2. 엔진 및 연구 데이터베이스] ---
+# --- [2. 엔진 및 연구 데이터베이스 (투자 시사점 통합)] ---
 STOCK_CODES = {"삼성전자": "005930", "KT&G": "033780", "LG에너지솔루션": "373220", "현대글로비스": "086280", "현대차2우B": "005387", "KODEX200타겟위클리커버드콜": "498400", "에스티팜": "237690", "테스": "095610", "일진전기": "103590", "SK스퀘어": "402340"}
 
 RESEARCH_DATA = {
-    "삼성전자": {"desc": "2026년 영업이익 185조원 목표의 압도적 모멘텀.", "metrics": [("영업이익률", "16.8%", "38.5%"), ("ROE", "12.5%", "28.0%"), ("특별 DPS", "500원", "3,500~7,000원"), ("시가배당률", "1.9%", "4.5~6.0%")], "implications": ["HBM3E 양산 본격화 및 파운드리 수익성 개선", "특별 배당 포함 시 강력한 환원 기대", "AI 서버 중심 메모리 수요 폭증"]},
-    "KT&G": {"desc": "ROE 15% 달성 목표 및 밸류업 구간 진입.", "metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("자사주 소각", "0.9조", "0.5~1.1조"), ("정규 DPS", "6,000원", "6,400~6,600원")], "implications": ["해외 궐련 및 NGP 성장 동력 확보", "발행주식 20% 소각을 통한 가치 제고", "글로벌 신공장 가동 효과 본격화"]},
-    "현대차2우B": {"desc": "은퇴 포트폴리오의 강력한 캐시카우 및 고배당주.", "metrics": [("영업이익률", "6.2%", "7.0%"), ("ROE", "13.0%", "15.5%"), ("정규 DPS", "13,600원", "14,500~15,500원"), ("시가배당률", "5.7%", "6.4%")], "implications": ["SUV/제네시스 믹스 개선 및 수익 가이드라인 준수", "본주 대비 높은 할인율로 배당수익률 극대화", "자사주 소각 정책 강화"]},
-    "테스": {"desc": "반도체 선단공정 장비 국산화 수혜 및 이익률 점프.", "metrics": [("영업이익률", "10.7%", "19.0%"), ("ROE", "6.2%", "14.5%"), ("PER", "18.5배", "11.2배"), ("정규 DPS", "500원", "700~900원")], "implications": ["선단 공정 장비 수요 회복에 따른 이익률 개선", "2026년 ROE 14.5% 달성 전망", "안정적 재무 기반 배당 확대 기조"]},
-    "KODEX200타겟위클리커버드콜": {"desc": "연 15% 분배 지향 은퇴 특화 인컴 도구.", "metrics": [("옵션 프리미엄", "연 15%", "연 15%"), ("월 분배금", "110원", "120원"), ("시가분배율", "연 12.5%", "연 15.0%"), ("수익구조", "인컴+상승분", "타겟 프리미엄")], "implications": ["박스권 시장 내 콜옵션 매도 수익 극대화", "은퇴 생활비 마련을 위한 월 분배금 최적화", "지수 상승 일부 참여 및 하방 방어력 보유"]}
+    "삼성전자": {"desc": "2026년 영업이익 185조원 목표의 압도적 모멘텀.", "metrics": [("영업이익률", "16.8%", "38.5%"), ("ROE", "12.5%", "28.0%"), ("PER", "15.2배", "9.1배"), ("시가배당률", "1.9%", "4.5~6.0%")], "implications": ["HBM3E 양산 본격화 및 수익성 개선", "특별 배당 포함 시 강력한 환원 기대", "AI 서버 중심 메모리 수요 폭증"]},
+    "KT&G": {"desc": "ROE 15% 달성 목표 및 밸류업 구간 진입.", "metrics": [("영업이익률", "20.5%", "20.8%"), ("ROE", "10.5%", "15.0%"), ("자사주 소각", "0.9조", "0.5~1.1조"), ("정규 DPS", "6,000원", "6,400~6,600원")], "implications": ["해외 궐련 및 NGP 성장 동력 확보", "발행주식 20% 소각을 통한 가치 제고", "카자흐스탄·인도네시아 공장 가동 효과"]},
+    "현대차2우B": {"desc": "고배당 우선주 및 은퇴 포트폴리오 캐시카우.", "metrics": [("영업이익률", "6.2%", "7.0%"), ("ROE", "13.0%", "15.5%"), ("정규 DPS", "13,600원", "14.5~15.5천원"), ("시가배당률", "5.7%", "6.4%")], "implications": ["SUV/제네시스 믹스 개선 및 수익 가이드라인 준수", "본주 대비 높은 할인율로 저평가 매력 극대화", "분기 배당 및 주주 환원 정책 강화"]},
+    "테스": {"desc": "반도체 선단공정 장비 국산화 수혜.", "metrics": [("영업이익률", "10.7%", "19.0%"), ("ROE", "6.2%", "14.5%"), ("PER", "18.5배", "11.2배"), ("정규 DPS", "500원", "700~900원")], "implications": ["메모리 선단 공정 전환 장비 수요 폭증", "2026년 ROE 14.5% 달성 전망", "안정적 재무 기반 배당 확대 기조"]},
+    "KODEX200타겟위클리커버드콜": {"desc": "연 15% 분배 지향 은퇴 특화 인컴 도구.", "metrics": [("옵션 프리미엄", "연 15%", "연 15%"), ("월 분배금", "110원", "120원"), ("시가분배율", "연 12.5%", "연 15.0%"), ("수익구조", "인컴+상승분", "타겟 프리미엄")], "implications": ["주 단위 콜옵션 매도 수익을 통한 초과 수익", "은퇴 생활비 마련을 위한 월 분배금 최적화", "박스권 시장 내 하방 방어력 보유"]}
 }
 
-def get_now_kst():
-    return datetime.now(timezone(timedelta(hours=9)))
-
+def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -62,8 +58,7 @@ def get_market_indices():
             val = soup.find("em", {"id": "now_value"}).text
             raw = soup.find("span", {"id": "change_value_and_rate"}).text.strip().split()
             market[code] = {"now": val, "diff": raw[0].replace("상승","+").replace("하락","-"), "rate": raw[1], "style": "up-style" if "+" in raw[0] or "상승" in raw[0] else "down-style"}
-    except:
-        market = {"KOSPI": {"now": "-", "diff": "-", "rate": "-", "style": ""}, "KOSDAQ": {"now": "-", "diff": "-", "rate": "-", "style": ""}}
+    except: market = {"KOSPI": {"now": "-", "diff": "-", "rate": "-", "style": ""}, "KOSDAQ": {"now": "-", "diff": "-", "rate": "-", "style": ""}}
     return market
 
 def get_stock_data(name):
@@ -75,31 +70,15 @@ def get_stock_data(name):
         now_p = int(soup.find("div", {"class": "today"}).find("span", {"class": "blind"}).text.replace(",", ""))
         prev_p = int(soup.find("td", {"class": "first"}).find("span", {"class": "blind"}).text.replace(",", ""))
         return now_p, prev_p
-    except:
-        return 0, 0
+    except: return 0, 0
 
-def get_acc_news(stocks):
-    news_list = []
-    try:
-        for s in stocks:
-            code = STOCK_CODES.get(s.replace(" ", ""))
-            if not code: continue
-            soup = BeautifulSoup(requests.get(f"https://finance.naver.com/item/main.naver?code={code}", headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
-            news_sec = soup.find("div", {"class": "news_section"})
-            if news_sec:
-                tag = news_sec.find("li").find("a")
-                news_list.append({"name": s, "title": tag.text.strip(), "url": tag['href'] if tag['href'].startswith("http") else f"https://finance.naver.com{tag['href']}"})
-    except: pass
-    return news_list
-
-# --- [3. 데이터 로드 및 정밀 지표 산출] ---
+# --- [3. 데이터 로드 및 벤치마크 정규화] ---
 full_df = conn.read(worksheet="종목 현황", ttl="1m")
 history_df = conn.read(worksheet="trend", ttl=0)
 
 if not full_df.empty:
     for c in ['수량', '매입단가']:
         full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     full_df['매입금액'], full_df['평가금액'] = full_df['수량'] * full_df['매입단가'], full_df['수량'] * full_df['현재가']
@@ -109,11 +88,23 @@ if not full_df.empty:
     full_df['전일대비손익'] = full_df['평가금액'] - full_df['전일평가금액']
     full_df['전일대비변동률'] = (full_df['전일대비손익'] / full_df['전일평가금액'].replace(0, float('nan')) * 100).fillna(0)
 
+# 🎯 [수정] 벤치마크 3월 3일 기준점 정규화 로직
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
     history_df = history_df.dropna(subset=['Date']).sort_values('Date')
+    
+    # 2026-03-03 KOSPI 기준값 추출
+    base_date = pd.Timestamp("2026-03-03")
+    base_kospi_row = history_df[history_df['Date'] == base_date]
+    if not base_kospi_row.empty:
+        kospi_base = base_kospi_row['KOSPI'].values[0]
+    else:
+        kospi_base = history_df['KOSPI'].iloc[0] # 해당일 데이터 없을 시 첫날 기준
 
-# --- [4. 정밀 색채 스타일 엔진] ---
+    # 코스피 누적 수익률 계산 (3월 3일 = 0%)
+    history_df['KOSPI_Relative_Return'] = (history_df['KOSPI'] / kospi_base - 1) * 100
+
+# --- [4. 정밀 색채 맵핑 스타일] ---
 def style_summary(df):
     def apply_color(row):
         eval_c = 'color: #FF4B4B' if row['평가금액'] > row['매입금액'] else 'color: #87CEEB' if row['평가금액'] < row['매입금액'] else ''
@@ -130,10 +121,9 @@ def style_holdings(df):
         return ['', '', '', '', price_c, '', d_c, d_c, t_c]
     return df.style.apply(apply_color, axis=1)
 
-# --- [5. 사이드바 관리 메뉴 복구] ---
+# --- [5. UI 메인 구성] ---
 st.sidebar.header("🕹️ 관제탑 마스터 메뉴")
-if st.sidebar.button("🔄 실시간 데이터 전체 갱신"):
-    st.cache_data.clear(); st.rerun()
+if st.sidebar.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
 if st.sidebar.button("💾 오늘의 결과 저장"):
     today = now_kst.date()
     m_info = get_market_indices()
@@ -141,22 +131,18 @@ if st.sidebar.button("💾 오늘의 결과 저장"):
     new_row = {"Date": today, "KOSPI": float(m_info['KOSPI']['now'].replace(',','')), "서은수익률": acc_sum.get('서은투자', 0), "서희수익률": acc_sum.get('서희투자', 0), "큰스님수익률": acc_sum.get('큰스님투자', 0)}
     conn.update(worksheet="trend", data=pd.concat([history_df[history_df['Date']!=today], pd.DataFrame([new_row])]).sort_values('Date'))
     st.sidebar.success("✅ 저장 완료!"); st.rerun()
-if st.sidebar.button("🧹 데이터 정제"):
-    conn.update(worksheet="trend", data=history_df.drop_duplicates(subset=['Date'], keep='last'))
-    st.sidebar.success("✅ 정제 완료!"); st.rerun()
 
-# --- [6. UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.12</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.13</h1>", unsafe_allow_html=True)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 (복구)
+# [Tab 0] 총괄 현황
 with tabs[0]:
     t_eval, t_buy, t_prev = full_df['평가금액'].sum(), full_df['매입금액'].sum(), full_df['전일평가금액'].sum()
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원")
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
     m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원", f"{t_eval-t_prev:+,.0f}원")
-    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100 if t_buy>0 else 0:.2f}%", f"{(t_eval/t_prev-1)*100 if t_prev>0 else 0:+.2f}%")
+    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:.2f}%", f"{(t_eval/t_prev-1)*100 if t_prev>0 else 0:+.2f}%")
     
     st.divider()
     st.subheader("투자 주체별 성과 요약")
@@ -164,19 +150,22 @@ with tabs[0]:
     sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
     sum_acc['전일대비변동률'] = (sum_acc['전일대비손익'] / (sum_acc['평가금액'] - sum_acc['전일대비손익']).replace(0, float('nan')) * 100).fillna(0)
     
+    # 🎯 [요청 조정] 전일대비변동률을 누적수익률 좌측으로 배치
     sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동률', '누적수익률']]
     st.dataframe(style_summary(sum_acc).format({
         '매입금액':'{:,.0f}원', '평가금액':'{:,.0f}원', '손익':'{:+,.0f}원', '전일대비손익':'{:+,.0f}원', '전일대비변동률':'{:+.2f}%', '누적수익률':'{:+.2f}%'
     }), use_container_width=True, hide_index=True)
 
+    # 📈 [정규화 그래프] 3월 3일 기준 벤치마크 통합 추이
     if not history_df.empty:
         fig = go.Figure()
         h_dates = history_df['Date'].dt.date.astype(str)
-        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI'], name='KOSPI 지수', line=dict(dash='dash', color='gray')))
+        # 벤치마크 (정규화된 누적 수익률)
+        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative_Return'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='rgba(255,255,255,0.5)', width=2)))
         for col, color in {'서은수익률': '#FF4B4B', '서희수익률': '#87CEEB', '큰스님수익률': '#00FF00'}.items():
             if col in history_df.columns:
                 fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col.replace('수익률',''), line=dict(color=color, width=3)))
-        fig.update_layout(title="📈 통합 성과 추이 (Benchmark 통합)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+        fig.update_layout(title="📈 통합 수익률 추이 (Benchmark Normalization)", yaxis_title="누적 수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
@@ -186,12 +175,12 @@ with tabs[0]:
     idx_r.markdown(f"<div class='index-indicator {m_idx['KOSDAQ']['style']}'>KOSDAQ: {m_idx['KOSDAQ']['now']} ({m_idx['KOSDAQ']['diff']}, {m_idx['KOSDAQ']['rate']})</div>", unsafe_allow_html=True)
     
     rep_l, rep_r = st.columns(2)
-    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>수출 실적 개선세가 뚜렷하며 반도체 섹터의 이익 기여도가 높아지고 있습니다.</p></div>", unsafe_allow_html=True)
-    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>미국 AI 인프라 수요와 금리 기조가 국내 대형 IT주에 우호적 환경을 제공합니다.</p></div>", unsafe_allow_html=True)
+    with rep_l: st.markdown("<div class='report-box'><h4 style='color:#87CEEB;'>🇰🇷 국내 시장 분석</h4><p>국내 증시는 코스피 5,000선 시대를 열고 있으며 반도체 섹터의 실적 기여가 지수의 하방을 견조하게 지지합니다.</p></div>", unsafe_allow_html=True)
+    with rep_r: st.markdown("<div class='report-box'><h4 style='color:#FF4B4B;'>🌍 글로벌 매크로 분석</h4><p>나스닥 AI 랠리와 미 연준의 금리 기조가 국내 대형 IT주에 우호적인 환경을 형성하고 있습니다.</p></div>", unsafe_allow_html=True)
 
     st.divider()
     s_cols = st.columns(3)
-    sectors = {"반도체 / IT": "HBM 수요 수혜.", "전력 / ESS": "북미 인프라 교체 수혜.", "배터리 / 에너지": "전고체 기술 점유율 확대.", "바이오 / CDMO": "RNA 치료제 모멘텀.", "모빌리티 / 전장": "현대차 밸류업 강세.", "소비재 / 뷰티": "K-뷰티 글로벌 폭증."}
+    sectors = {"반도체 / IT": "HBM 수요 폭발 및 AI 서버 증설 수혜.", "전력 / ESS": "북미 인프라 교체 및 데이터센터 가동 수혜.", "배터리 / 에너지": "전고체 기술 점유율 확대.", "바이오 / CDMO": "RNA 치료제 모멘텀.", "모빌리티 / 전장": "현대차 그룹 중심 밸류업 강세.", "소비재 / 뷰티": "K-뷰티의 글로벌 점유율 폭증."}
     for i, (n, d) in enumerate(sectors.items()):
         with s_cols[i % 3]: st.markdown(f"<div class='sector-box'><div class='sector-title'>{n}</div><div class='leader-tag'>👑 주도 섹터</div><p>{d}</p></div>", unsafe_allow_html=True)
 
@@ -201,7 +190,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty: return
         
-        # 🎯 상단 계좌별 보유종목 총합 지표 복구
+        # 🎯 상단 계좌별 보유종목 총합 지표 (복구)
         a_buy, a_eval, a_prev = sub_df['매입금액'].sum(), sub_df['평가금액'].sum(), sub_df['전일평가금액'].sum()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("평가액", f"{a_eval:,.0f}원")
@@ -209,7 +198,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         c3.metric("누적 손익", f"{a_eval-a_buy:+,.0f}원", f"{a_eval-a_prev:+,.0f}원")
         c4.metric("누적 수익률", f"{(a_eval/a_buy-1)*100:.2f}%", f"{(a_eval/a_prev-1)*100 if a_prev>0 else 0:+.2f}%")
         
-        # 🎯 상세 수익표 (현재가 색채 적용)
+        # 상세 수익표
         st.dataframe(style_holdings(sub_df[[
             '종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '전일대비손익', '전일대비변동률', '누적수익률'
         ]]).format({
@@ -220,7 +209,7 @@ def render_account_tab(acc_name, tab_obj, history_col):
         st.divider()
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
         
-        # 🎯 딥다이브 (2열 리서치 레이아웃)
+        # 🎯 딥다이브 (2열 레이아웃: 좌-수치표, 우-시사점)
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
             rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
@@ -235,22 +224,29 @@ def render_account_tab(acc_name, tab_obj, history_col):
             </div>
             """, unsafe_allow_html=True)
 
-        # 🎯 성과 추이 그래프 (계좌 + 종목 추이 보강)
+        # 🎯 [수정] 성과 추이 그래프 (계좌 + 벤치마크 + 종목 추이)
         g_left, g_right = st.columns([2, 1])
         with g_left:
             if not history_df.empty:
                 fig_acc = go.Figure()
                 h_dt = history_df['Date'].dt.date.astype(str)
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[history_col], mode='lines+markers', name='계좌 수익률', line=dict(color='#87CEEB', width=4)))
-                # 종목별 히스토리가 있을 경우 대조 트레이스 추가 가능 (현재는 계좌 추이 우선)
-                fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", height=400, xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                # 벤치마크 (3/3 기준 정규화)
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative_Return'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='rgba(255,255,255,0.4)')))
+                # 계좌 수익률
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[history_col], mode='lines+markers', name=f'{acc_name} 수익률', line=dict(color='#87CEEB', width=4)))
+                # 🎯 종목별 수익률 추이 (history_df 내 컬럼 존재 시)
+                s_c = next((c for c in history_df.columns if sel.replace(' ','') in c.replace(' ','')), "")
+                if s_c and s_c != history_col:
+                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_c], mode='lines', name=f'{sel} 추이', line=dict(color='#FF4B4B', width=2, dash='dot')))
+                
+                fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이 (Benchmark vs Account vs Stock)", yaxis_title="누적 수익률 (%)", height=400, xaxis=dict(type='category'), paper_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig_acc, use_container_width=True)
         with g_right:
             fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
             fig_p.update_layout(title="💰 자산 비중", height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
 
-        # 뉴스 피드 복구
+        # 뉴스 피드
         acc_news = get_acc_news(sub_df['종목명'].unique().tolist())
         if acc_news:
             news_html = " ".join([f"<div class='acc-flash-item'><span class='acc-flash-stock'>[{n['name']}]</span> <a href='{n['url']}' target='_blank' class='news-link'>{n['title']} ↗️</a></div>" for n in acc_news])
@@ -259,5 +255,3 @@ def render_account_tab(acc_name, tab_obj, history_col):
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
-
-st.caption(f"최종 업데이트: {now_kst.strftime('%Y-%m-%d %H:%M:%S')} (KST) | v36.12 가디언 프리시전 마스터")
