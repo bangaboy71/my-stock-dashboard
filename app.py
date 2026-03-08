@@ -126,11 +126,13 @@ with st.sidebar:
         conn.update(worksheet="trend", data=final_history)
         st.cache_data.clear(); st.success(f"✅ {sel_date} 수익률이 시트에 저장되었습니다!"); st.rerun()
 
-# --- [6. UI 메인 구성] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.39</h1>", unsafe_allow_html=True)
+# --- [6. UI 메인 구성: 총괄 탭 및 개별 탭 호출] ---
+st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.43</h1>", unsafe_allow_html=True)
+
+# 탭 생성 (총 4개)
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 내 지표 수정 (누적손익 변동 삭제)
+# [Tab 0] 총괄 현황 렌더링
 with tabs[0]:
     t_eval = full_df['평가금액'].sum()
     t_buy = full_df['매입금액'].sum()
@@ -142,12 +144,13 @@ with tabs[0]:
     t_change_pct = (t_change_amt / t_prev_eval * 100) if t_prev_eval != 0 else 0
     
     m1, m2, m3, m4 = st.columns(4)
-    # 평가금액: 전일비 변동액과 비율 병기
+    # 1. 평가금액: 변동액과 비율 병기
     m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", delta=f"{t_change_amt:+,.0f}원 ({t_change_pct:+.2f}%)")
+    # 2. 투자 원금
     m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    # 누적손익: 변동액 표기 삭제 (원칙 반영)
+    # 3. 누적 손익: 변동 표기 삭제 (사용자 지침)
     m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
-    # 누적수익률: 전일비 변동폭(%p) 병기
+    # 4. 누적 수익률: 변동폭(%p) 병기
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
     st.divider()
@@ -159,7 +162,6 @@ with tabs[0]:
 
     if not history_df.empty:
         fig = go.Figure()
-        # 🎯 [해결 3] Category 축으로 시트에 없는 날짜 100% 제거
         h_dates = history_df['Date'].dt.date.astype(str)
         fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
         for acc in ['서은투자', '서희투자', '큰스님투자']:
@@ -168,42 +170,40 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# [교체] render_account_tab 함수 전체 (인자 3개로 복구하여 에러 해결)
+# --- [7. 투자 주체별 상세 렌더링 함수 정의] ---
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
-        if sub_df.empty: return
+        if sub_df.empty:
+            st.warning(f"{acc_name}에 해당하는 데이터가 없습니다.")
+            return
         
-        # 지표 계산용 데이터 준비
+        # 지표 계산
         a_buy = sub_df['매입금액'].sum()
         a_eval = sub_df['평가금액'].sum()
-        # 해당 계좌의 종목별 전일 평가액 합계
         a_prev_eval = (sub_df['수량'] * sub_df['전일종가']).sum()
-        
-        # 전일 대비 변동치 계산
         a_change_amt = a_eval - a_prev_eval
         a_change_pct = (a_change_amt / a_prev_eval * 100) if a_prev_eval != 0 else 0
         
-        # 🎯 상단 4대 핵심 지표 (v36.41 지침 반영)
+        # 상단 4대 지표 (누적손익 변동 표기 삭제 버전)
         c1, c2, c3, c4 = st.columns(4)
-        # 1. 평가금액: 변동액과 비율 병기
-        c1.metric("평가금액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
-        # 2. 매입금액: 고정
-        c2.metric("매입금액", f"{a_buy:,.0f}원")
-        # 3. 누적손익: 변동 표기 삭제 (사용자 원칙)
-        c3.metric("누적손익", f"{a_eval-a_buy:+,.0f}원")
-        # 4. 누적수익률: 변동폭(%p) 병기
+        c1.metric("평가액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
+        c2.metric("매입액", f"{a_buy:,.0f}원")
+        c3.metric("손익", f"{a_eval-a_buy:+,.0f}원") # 변동 표기 삭제
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_change_pct:+.2f}%p")
         
-        # --- 이하 기존 코드 유지 (데이터프레임 및 그래프 렌더링) ---
+        # 보유 종목 리스트
         st.dataframe(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '누적수익률']].style.apply(
             lambda row: ['' if i != 5 else ('color: #FF4B4B' if row[5]>row[3] else 'color: #87CEEB') for i, v in enumerate(row)], axis=1
         ).format({
             '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '누적수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
 
-        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+        st.divider()
+        # 🎯 중복 키 방지를 위해 key에 acc_name 반영
+        sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_widget_{acc_name}")
         
+        # 리서치 데이터 출력
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
             rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
@@ -228,48 +228,15 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
 
         st.divider(); r_l, r_r = st.columns(2)
         with r_l: st.markdown(f"<div class='report-box'><h4>📋 {acc_name} 계좌 총평</h4><p>Target 달성 보유 지속.</p></div>", unsafe_allow_html=True)
-        with r_r: st.markdown("<div class='report-box'><h4>🌍 업황 대응 전략</h4><p>시장 변동성 모니터링.</p></div>", unsafe_allow_html=True)
-        
-        # 🎯 정수 포맷 고정
-        st.dataframe(sub_df[['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '누적수익률']].style.apply(lambda row: ['' if i != 5 else ('color: #FF4B4B' if row[5]>row[3] else 'color: #87CEEB') for i, v in enumerate(row)], axis=1).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '누적수익률': '{:+.2f}%'
-        }), hide_index=True, use_container_width=True)
+        with r_r: st.markdown("<div class='report-box'><h4>🌍 업황 대응 전략</h4><p>시장 변동성 모니터링 중.</p></div>", unsafe_allow_html=True)
 
-        st.divider(); sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
-        
-        # 🎯 기업 딥다이브 리서치 카드 복구
-        res = RESEARCH_DATA.get(sel.replace(" ", ""))
-        if res:
-            rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
-            st.markdown(f"<div class='insight-card'><div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div><div class='insight-flex'><div class='insight-left'><table class='research-table'><thead><tr><th>지표</th><th>25년 추정</th><th>26년 Target</th></tr></thead><tbody>{rows}</tbody></table></div><div class='insight-right'>💡 {res['implications'][0]}</div></div></div>", unsafe_allow_html=True)
-
-        g_left, g_right = st.columns([2, 1])
-        with g_left:
-            if not history_df.empty:
-                fig_acc = go.Figure()
-                h_dt = history_df['Date'].dt.date.astype(str)
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
-                
-                # 🎯 계좌별 실제 수익률 추이 바인딩
-                acc_col = find_matching_col(history_df, acc_name)
-                if acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 실제수익률', line=dict(width=4)))
-                
-                # 🎯 종목별 실제 수익률 추이 바인딩
-                s_col = find_matching_col(history_df, acc_name, sel)
-                if s_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', name=f'{sel} 실제수익률', line=dict(width=2, dash='dot')))
-                
-                fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
-                st.plotly_chart(fig_acc, use_container_width=True)
-        with g_right:
-            fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
-            fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
-            st.plotly_chart(fig_p, use_container_width=True)
-
+# --- [8. 각 탭에 함수 호출 (중복 주의)] ---
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-st.caption(f"v36.39 가디언 프리시전 제로-디펙트 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"v36.43 가디언 프리시전 클린-업 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
