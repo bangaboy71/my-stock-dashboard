@@ -43,38 +43,61 @@ RESEARCH_DATA = {
 STOCK_CODES = {k: v for k, v in zip(RESEARCH_DATA.keys(), ["005930", "033780", "237690", "373220", "086280", "005387", "498400", "237690", "103590", "402340"])}
 # (기존 get_market_status, get_stock_data, find_matching_col 함수들이 이 아래에 위치해야 합니다.)
 
-# --- [2. 엔진 및 헬퍼 함수: 마켓 데이터 확장] ---
+# --- [2. 엔진 및 헬퍼 함수: 마켓 데이터 수집 정밀화] ---
 def get_market_status():
     data = {}
+    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    
     try:
-        # 1. 지수 데이터 (KOSPI, KOSDAQ)
+        # 1. 지수 데이터 (KOSPI, KOSDAQ) - 셀렉터 보강
         for code in ["KOSPI", "KOSDAQ"]:
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
-            soup = BeautifulSoup(requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
+            res = requests.get(url, headers=header, timeout=5)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
             now_val = soup.select_one("#now_value").text
-            change_text = soup.select_one("#change_value_and_rate").get_text(strip=True).split()
-            direction, diff, pct = change_text[0], change_text[1], change_text[2]
+            # 변동 수치와 퍼센트 분리 로직 강화
+            change_el = soup.select_one("#change_value_and_rate")
+            change_text = change_el.get_text(strip=True).split()
+            
+            # 상승/하락 기호 및 색상 판별
+            direction = change_text[0]
+            diff = change_text[1]
+            pct = change_text[2]
+            
             color = "#FF4B4B" if "상승" in direction else "#87CEEB" if "하락" in direction else "white"
-            data[code] = {"val": now_val, "diff": f"{'+' if '상승' in direction else '-'}{diff}", "pct": pct, "color": color}
+            sign = "+" if "상승" in direction else "-" if "하락" in direction else ""
+            
+            data[code] = {"val": now_val, "diff": f"{sign}{diff}", "pct": pct, "color": color}
         
-        # 2. 환율 데이터 (원/달러)
+        # 2. 환율 데이터 (원/달러) - 정밀 경로 지정
         ex_url = "https://finance.naver.com/marketindex/"
-        ex_soup = BeautifulSoup(requests.get(ex_url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
-        ex_val = ex_soup.select_one("span.value").text
-        ex_change = ex_soup.select_one("span.change").text
-        ex_dir = ex_soup.select_one("div.head_info > span.blind").text # '상승' 또는 '하락'
+        ex_res = requests.get(ex_url, headers=header, timeout=5)
+        ex_soup = BeautifulSoup(ex_res.text, 'html.parser')
+        
+        # 환율 리스트 중 첫 번째(달러)를 명확히 지정
+        usd_box = ex_soup.select_one("#exchangeList > li.on > a.head.usd > div")
+        if not usd_box: # 'on' 클래스가 없을 경우를 대비한 2차 경로
+            usd_box = ex_soup.select_one("a.head.usd > div")
+            
+        ex_val = usd_box.select_one("span.value").text
+        ex_change = usd_box.select_one("span.change").text
+        # 상승/하락 화살표 텍스트 추출
+        ex_dir = usd_box.select_one("span.blind").text 
+        
         ex_color = "#FF4B4B" if "상승" in ex_dir else "#87CEEB" if "하락" in ex_dir else "white"
         data["USD/KRW"] = {"val": ex_val, "diff": ex_change, "pct": "원", "color": ex_color}
 
-        # 3. 거래량 데이터 (KOSPI 기준)
-        vol_url = "https://finance.naver.com/sise/sise_index.naver?code=KOSPI"
-        vol_soup = BeautifulSoup(requests.get(vol_url, headers={'User-Agent': 'Mozilla/5.0'}).text, 'html.parser')
-        vol_val = vol_soup.select_one("#quant").text # 거래량(천주)
+        # 3. 거래량 데이터 (KOSPI)
+        vol_val = soup.select_one("#quant").text # 마지막 루프인 KOSDAQ 페이지가 아닌 KOSPI에서 가져오도록 보장 필요
         data["VOLUME"] = {"val": f"{vol_val}", "diff": "KOSPI", "pct": "천주", "color": "white"}
         
-    except:
-        # 오류 시 더미 데이터
-        for k in ["KOSPI", "KOSDAQ", "USD/KRW", "VOLUME"]: data[k] = {"val": "-", "diff": "-", "pct": "-", "color": "white"}
+    except Exception as e:
+        # 에러 발생 시 UI 유지를 위한 더미 데이터 및 로그
+        st.sidebar.error(f"지수 로드 실패: {str(e)}")
+        for k in ["KOSPI", "KOSDAQ", "USD/KRW", "VOLUME"]: 
+            if k not in data: data[k] = {"val": "연결중", "diff": "-", "pct": "-", "color": "white"}
+            
     return data
 
 def get_stock_data(name):
@@ -285,6 +308,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
