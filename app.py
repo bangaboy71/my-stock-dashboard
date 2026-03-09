@@ -301,24 +301,76 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         # 🎯 중복 키 방지 및 종목 선택
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_final_{acc_name}")
         
-        # 🎯 [수정 핵심] 외부 import 없이 상단에 정의된 RESEARCH_DATA를 직접 사용합니다.
+        # --- [v36.64-RS: 인텔리전스 딥다이브 교체 모듈] ---
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
-            rows = "".join([f"<tr><td>{m[0]}</td><td>{m[1]}</td><td class='target-val'>{m[2]}</td></tr>" for m in res['metrics']])
+            # 1. 필요 수치 사전 계산
+            buy_p = sub_df.loc[sub_df['종목명'] == sel, '매입단가'].values[0]
+            curr_p = sub_df.loc[sub_df['종목명'] == sel, '현재가'].values[0]
+            days = sub_df.loc[sub_df['종목명'] == sel, '보유일수'].values[0]
+            days = max(days, 1) # 0일 방지
+            total_ret = sub_df.loc[sub_df['종목명'] == sel, '누적수익률'].values[0]
+            
+            # 연 환산 수익률 및 리스크 지표 (시트의 신규 열 데이터 활용)
+            high_52w = sub_df.loc[sub_df['종목명'] == sel, '52주최고가'].values[0]
+            post_high = sub_df.loc[sub_df['종목명'] == sel, '매입후최고가'].values[0]
+            
+            # 수식 적용
+            ann_ret = ((1 + total_ret/100)**(365/days) - 1) * 100
+            upside = (high_52w / curr_p - 1) * 100 if curr_p > 0 else 0
+            tp_price = post_high * 0.80  # 익절가 (최고가 대비 -20%)
+            sl_price = buy_p * 0.85      # 손절가 (매입가 대비 -15%)
+
+            # 2. UI 렌더링 (2단 레이아웃 + 하단 경보)
             st.markdown(f"""
                 <div class='insight-card'>
-                    <div class='insight-title'>🔍 {sel} 인텔리전스 딥다이브</div>
-                    <div class='insight-flex'>
-                        <div style='flex:1.2;'>
-                            <table class='research-table'>
-                                <thead><tr><th>지표</th><th>25년 추정</th><th>26년 Target</th></tr></thead>
-                                <tbody>{rows}</tbody>
+                    <div style='color: #87CEEB; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 10px;'>
+                        🔍 {sel} 인텔리전스 전략 보고서 <span style='font-size: 0.8rem; font-weight: normal; opacity: 0.7; float: right;'>보유 {days}일차</span>
+                    </div>
+                    
+                    <div style='display: flex; gap: 25px; margin-bottom: 20px;'>
+                        <div style='flex: 1; background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px;'>
+                            <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 핵심 재무 지표 (Target)</div>
+                            <table style='width: 100%; font-size: 0.9rem;'>
+                                {"".join([f"<tr><td style='padding:5px 0;'>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span class='target-val'>{m[2]}</span></td></tr>" for m in res['metrics']])}
                             </table>
+                            <div style='margin-top: 15px; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px;'>
+                                <span style='color: #FFD700;'>💡 인사이트:</span> {res['implications'][0]}
+                            </div>
                         </div>
-                        <div style='flex:1; background: rgba(255,215,0,0.05); padding: 15px; border-radius: 8px; border-left: 4px solid #FFD700; margin-left: 15px;'>
-                            <span style='color: #FFD700; font-weight: bold;'>💡 전략 인사이트</span><br>
-                            <span style='font-size: 0.95rem;'>{res['implications'][0]}</span><br><br>
-                            <span style='font-size: 0.95rem;'>{res['implications'][1] if len(res['implications']) > 1 else ""}</span>
+                        
+                        <div style='flex: 1; background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.1);'>
+                            <div style='color: #87CEEB; font-size: 0.85rem; margin-bottom: 10px;'>⚡ 실시간 전략 모니터</div>
+                            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 15px;'>
+                                <div>
+                                    <div style='font-size: 0.75rem; opacity: 0.6;'>연 환산 수익률</div>
+                                    <div style='font-size: 1.2rem; font-weight: bold; color: #FF4B4B;'>{ann_ret:+.1f}%</div>
+                                </div>
+                                <div>
+                                    <div style='font-size: 0.75rem; opacity: 0.6;'>상승 여력</div>
+                                    <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{upside:+.1f}%</div>
+                                </div>
+                                <div style='grid-column: span 2;'>
+                                    <div style='font-size: 0.75rem; opacity: 0.6;'>현재가 상태</div>
+                                    <div style='font-size: 1.1rem;'>{curr_p:,.0f}원 <span style='font-size: 0.8rem; opacity: 0.7;'> (52주 최고가: {high_52w:,.0f})</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"};'>
+                        <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 8px;'>🚨 익절/손절 실시간 경보 시스템</div>
+                        <div style='display: flex; justify-content: space-between; font-size: 0.9rem;'>
+                            <span>🛡️ <b>손절 가이드 (-15%):</b> {sl_price:,.0f}원 <span style='font-size: 0.8rem; opacity: 0.6;'>(매입 {buy_p:,.0f} 대비)</span></span>
+                            <span style='color: {"#FF4B4B" if curr_p <= sl_price else "#00FF00"};'>
+                                {"⚠️ 즉시 대응" if curr_p <= sl_price else "✅ 매우 안전"}
+                            </span>
+                        </div>
+                        <div style='display: flex; justify-content: space-between; font-size: 0.9rem; margin-top: 5px;'>
+                            <span>🚨 <b>익절 가이드 (-20%):</b> {tp_price:,.0f}원 <span style='font-size: 0.8rem; opacity: 0.6;'>(최고 {post_high:,.0f} 대비)</span></span>
+                            <span style='color: {"#FFA500" if curr_p <= tp_price else "#00FF00"};'>
+                                {"⚠️ 추세 이탈" if curr_p <= tp_price else "✅ 추세 유지"}
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -361,4 +413,5 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
