@@ -178,7 +178,7 @@ except Exception as e:
     st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
     st.stop()
 
-# --- [3. 데이터 로드 및 정제 (안정화 통합 버전)] ---
+# --- [3. 데이터 로드 및 표준 날짜 최적화 연산] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -191,37 +191,41 @@ except Exception as e:
     st.stop()
 
 if not full_df.empty:
-    # 1. 숫자 데이터 타입 변환 (신규 리스크 지표 포함)
+    # 1. 숫자 데이터 타입 통합 변환
     target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
     for c in target_num_cols:
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-    # 2. 날짜 및 보유일수 계산 (내부 연산용, 표출은 안 함)
+    # 2. [최적화] 표준 날짜 엔진 (YYYY-MM-DD 대응)
     if '최초매입일' in full_df.columns:
-        # 날짜를 읽되, 서식이 틀리면 NaT(빈값)처리하여 에러 방지
+        # 표준 형식은 추가 옵션 없이도 가장 빠르게 해석됩니다.
         full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
-        today_date = datetime.now().replace(tzinfo=None)
         
-        # 보유일수 계산: 날짜가 없으면 기본값 365일로 처리하여 연환산 수익률 에러 방지
+        # 오늘 날짜와의 차이 계산 (벡터 연산으로 속도 최적화)
+        today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         full_df['보유일수'] = (today_date - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int)
-        full_df['보유일수'] = full_df['보유일수'].apply(lambda x: max(x, 1))
+        
+        # 연환산 수익률 에러 방지 (최소 1일 보정)
+        full_df['보유일수'] = full_df['보유일수'].clip(lower=1)
     else:
-        full_df['보유일수'] = 365 # 열이 아예 없을 때의 기본값
+        full_df['보유일수'] = 365
 
     # 3. 실시간 가격 수집 (v36.64 핵심 로직)
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     
-    # 4. 수익 및 변동 지표 연산
+    # 4. 수익 지표 및 리스크 관제용 연산
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
     full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
     full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
-    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+    
+    # 수익률 계산 (분모가 0인 경우를 대비한 replace 처리)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-
+    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+    
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
     history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
@@ -445,6 +449,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
