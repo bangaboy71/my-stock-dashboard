@@ -456,64 +456,64 @@ with st.sidebar:
 
 # 수정 후: 앱을 켜는 순간의 '오늘 날짜'가 자동으로 들어감
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
-    # --- [v36.89 패치: 모든 지표 통합 저장 로직] ---
+    # --- [v36.91 패치: 사용자 trend 시트 헤더 완전 대응 버전] ---
     if st.button(f"🚀 {sel_date} 결과 확정 저장"):
         try:
-            # 0. 원본 데이터 존재 확인
-            if full_df.empty:
-                st.warning("⚠️ 저장할 종목 데이터가 없습니다. 조회를 먼저 수행해주세요.")
-                st.stop()
-
-            # 1. 저장 날짜 및 실시간 KOSPI 지수 확보
             save_date_str = sel_date.strftime('%Y-%m-%d')
             m_status = get_market_status()
-            # KOSPI 수치를 숫자로 변환 (저장 후 계산 용이)
             kospi_val = float(m_status['KOSPI']['val'].replace(',', ''))
             
-            # 2. 투자주체별(계좌별) 실시간 성과 집계
-            # 각 계좌에 속한 종목들의 매입/평가액/손익을 모두 합산합니다.
-            summary = full_df.groupby('계좌명').agg({
-                '매입금액': 'sum', 
-                '평가금액': 'sum', 
-                '손익': 'sum'
-            }).reset_index()
-            
-            # 3. [추가] 투자주체별 누적 수익률 계산
-            # 이 로직이 있어야 시트의 '수익률' 칸이 채워집니다.
-            summary['수익률'] = (summary['손익'] / summary['매입금액'] * 100).fillna(0)
-            
-            # 4. [추가] 공통 데이터(날짜, KOSPI)를 모든 행에 부여
-            summary['날짜'] = save_date_str
-            summary['KOSPI'] = kospi_val
-            
-            # 5. 기존 'trend' 시트 데이터와 병합 (중복 방지 Upsert)
-            current_trend = conn.read(worksheet="trend", ttl=0)
-            
-            if not current_trend.empty:
-                # 비교를 위한 날짜 형식 통일
-                current_trend['날짜'] = pd.to_datetime(current_trend['날짜']).dt.strftime('%Y-%m-%d')
+            # 1. 신규 데이터 행(Row) 생성 (시트의 모든 열을 포함한 빈 그릇)
+            # history_df의 컬럼 구조를 그대로 복사합니다.
+            new_entry = pd.Series(index=history_df.columns, dtype='object')
+            new_entry['날짜'] = save_date_str
+            new_entry['KOSPI'] = kospi_val
+
+            # 2. 계좌별 합산 수익률 계산 및 매핑
+            # '서은투자', '서희투자', '큰스님' 등 계좌명별로 수익률을 추출하여 시트 이름에 맞게 넣습니다.
+            for acc in full_df['계좌명'].unique():
+                acc_df = full_df[full_df['계좌명'] == acc]
+                buy_sum = acc_df['매입금액'].sum()
+                eval_sum = acc_df['평가금액'].sum()
+                acc_ret = ((eval_sum / buy_sum - 1) * 100) if buy_sum > 0 else 0
                 
-                # 🎯 오늘(3월 9일) 기록이 이미 있다면 지우고 새로 합칩니다.
+                # 🎯 시트의 열 이름 매칭 (예: '서은투자' -> '서은수익률')
+                col_name = f"{acc.replace('투자', '')}수익률"
+                if col_name in new_entry.index:
+                    new_entry[col_name] = acc_ret
+                
+                # 🎯 종목별 수익률 매핑 (예: '서은_삼성전자수익률')
+                for _, row in acc_df.iterrows():
+                    stock_col = f"{acc.replace('투자', '')}_{row['종목명'].strip()}수익률"
+                    if stock_col in new_entry.index:
+                        new_entry[stock_col] = row['누적수익률']
+
+            # 3. 데이터프레임으로 변환
+            new_row_df = pd.DataFrame([new_entry])
+
+            # 4. 기존 데이터와 병합 (동일 날짜 중복 제거)
+            current_trend = conn.read(worksheet="trend", ttl=0)
+            if not current_trend.empty:
+                current_trend['날짜'] = pd.to_datetime(current_trend['날짜']).dt.strftime('%Y-%m-%d')
                 updated_trend = pd.concat([
                     current_trend[current_trend['날짜'] != save_date_str],
-                    summary
+                    new_row_df
                 ], ignore_index=True)
             else:
-                updated_trend = summary
+                updated_trend = new_row_df
 
-            # 6. 구글 시트 업데이트 실행
+            # 5. 시트 업데이트 및 캐시 삭제
             conn.update(worksheet="trend", data=updated_trend)
-            
-            # 7. 성공 피드백 및 앱 갱신
             st.cache_data.clear()
-            st.success(f"✅ {save_date_str} 결과 저장 완료! (KOSPI: {kospi_val:,.2f})")
-            st.balloons()
+            st.success(f"✅ {save_date_str} 데이터가 시트 맞춤형으로 저장되었습니다!")
             st.rerun()
 
         except Exception as e:
-            st.error(f"❌ 저장 중 오류 발생: {e}")
-
+            st.error(f"❌ 저장 오류: {e}")
+            st.info("시트의 열 이름과 코드의 매핑 규칙(계좌명 + '수익률')이 일치하는지 확인해주세요.")
+            
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
