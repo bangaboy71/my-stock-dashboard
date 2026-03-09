@@ -165,7 +165,7 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [3. 데이터 로드 및 날짜 엔진 보정 (Section 3 전체 교체)] ---
+# --- [3. 데이터 로드 및 정제 (날짜 보정 및 연산 완전 복구)] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -177,38 +177,50 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}"); st.stop()
 
 if not full_df.empty:
-    # 1. 숫자 데이터 변환
+    # 1. 숫자 데이터 변환 (리스크 관리 열 포함)
     target_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
     for c in target_cols:
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     
-    # 🎯 2. 보유일수 계산 엔진 (정밀 보정 버전)
+    # 🎯 2. 보유일수 정밀 계산 엔진 (21.3.15 등 2자리 연도 대응)
     if '최초매입일' in full_df.columns:
-        # 날짜 해석 시 연도/월/일 순서를 명시적으로 지정하여 2015년 오판 방지
-        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce', yearfirst=True)
+        # 다양한 날짜 형식(21.3.15, 2021-03-15 등)을 안전하게 해석
+        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
         
-        # 오늘 날짜 (시간 정보 제거한 순수 날짜만 추출)
-        today_date = datetime.now().date()
+        # 2015년 오판 방지: 연도가 2000년 이전으로 나오면 100년을 더하는 로직 (선택적)
+        # 하지만 pd.to_datetime은 보통 70-99는 1900년대, 00-69는 2000년대로 인식합니다.
+        # 가장 안전하게 오늘 날짜와 비교합니다.
+        today_plain = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # 날짜 차이 계산 (Series.dt.date를 활용하여 타입 일치)
-        full_df['보유일수'] = full_df['최초매입일'].apply(
-            lambda x: (today_date - x.date()).days if pd.notnull(x) else 0
-        )
-        
-        # 0일 방지 로직
-        full_df['보유일수'] = full_df['보유일수'].apply(lambda x: max(x, 1))
+        def calculate_days(d):
+            if pd.isnull(d): return 1
+            d_plain = d.replace(tzinfo=None)
+            # 만약 해석된 연도가 너무 미래거나 과거면 보정 (예: 2068년 등)
+            if d_plain.year > today_plain.year: 
+                d_plain = d_plain.replace(year=d_plain.year - 100)
+            diff = (today_plain - d_plain).days
+            return max(diff, 1)
+
+        full_df['보유일수'] = full_df['최초매입일'].apply(calculate_days)
     else:
         full_df['보유일수'] = 1
 
-    # 3. 실시간 가격 및 변동 지표 (기존 로직 유지)
+    # 3. 실시간 가격 수집
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     
-    # 기초 연산
+    # 🎯 4. 기초 연산 및 그룹화(Groupby)용 핵심 열 생성 (에러 해결 포인트)
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
+    
+    # 전일 대비 지표 (이 부분이 있어야 뒤의 groupby가 에러 나지 않습니다)
+    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
+    full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
+    
+    # 수익률 지표
+    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     
 if not history_df.empty:
@@ -438,6 +450,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
