@@ -178,70 +178,73 @@ except Exception as e:
     st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
     st.stop()
 
-# --- [3. 데이터 로드 및 정제: 전일대비 지표 및 날짜 최적화 통합] ---
+# --- [3. 데이터 로드 및 정제: 벤치마크 연산 통합 완결판] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
-    # 데이터 로드
     full_df = conn.read(worksheet="종목 현황", ttl="1m")
+    # trend(성과 추이) 데이터 로드
     history_df = conn.read(worksheet="trend", ttl=0)
 except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
+# --- A. 종목 현황(full_df) 정제 (사용자님 코드 기반 최적화) ---
 if not full_df.empty:
-    # 1. 숫자 데이터 타입 통합 변환 (에러 방지용)
     target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
     for c in target_num_cols:
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-    # 2. 표준 날짜 엔진 (보유일수 계산 - 2021-03-15 대응)
     if '최초매입일' in full_df.columns:
         full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
         today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        # 날짜 차이 계산 및 1일 보정
         full_df['보유일수'] = (today_date - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int)
         full_df['보유일수'] = full_df['보유일수'].clip(lower=1)
     else:
         full_df['보유일수'] = 365
 
-    # 3. 실시간 가격 수집
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     
-    # 🎯 4. [핵심] 모든 수익/변동 지표 연산 (KeyError 해결 포인트)
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    
-    # 이 '전일대비손익' 열이 있어야 계좌별 합산(line 279)이 가능합니다.
     full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
     full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
     
-    # 수익률 및 변동률 계산
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
-    
-    # 리스크 보조 지표 (상승여력 등)
     full_df['상승여력'] = (full_df['52주최고가'] / full_df['현재가'].replace(0, 1) - 1) * 100
 
-# --- B. 성과 추이(history_df) 정제 섹션 (KeyError: 'Date' 해결) ---
+# --- B. 성과 추이(history_df) 정제 (KOSPI_Relative 생성 로직 추가) ---
 if not history_df.empty:
-    # 🎯 시트의 '날짜' 열을 찾아서 'Date'로 통일합니다.
+    # 1. 날짜 열 이름 통일
     target_col = '날짜' if '날짜' in history_df.columns else 'Date'
-    
     if target_col in history_df.columns:
-        # 날짜 형식 변환
         history_df[target_col] = pd.to_datetime(history_df[target_col], errors='coerce')
-        # 하단 그래프 코드에서 'Date'를 쓰므로 이름을 변경
         history_df = history_df.rename(columns={target_col: 'Date'})
-        # 날짜 순서대로 정렬 (그래프가 꼬이지 않도록)
         history_df = history_df.sort_values('Date')
+    
+    # 🎯 2. [추가] KOSPI 상대 수익률(벤치마크) 연산
+    # 이 부분이 있어야 KeyError: 'KOSPI_Relative'가 해결됩니다.
+    if 'KOSPI' in history_df.columns:
+        # KOSPI 지수 숫자 변환
+        history_df['KOSPI'] = pd.to_numeric(history_df['KOSPI'].astype(str).str.replace(',', ''), errors='coerce')
+        
+        # 3월 3일 혹은 데이터의 첫 시점 지수를 기준(100%)으로 설정
+        base_kospi = history_df['KOSPI'].iloc[0]
+        
+        if base_kospi > 0:
+            # 벤치마크 상대 수익률 공식: $$Relative = (\frac{Current}{Base} - 1) \times 100$$
+            history_df['KOSPI_Relative'] = (history_df['KOSPI'] / base_kospi - 1) * 100
+        else:
+            history_df['KOSPI_Relative'] = 0
     else:
-        st.error(f"⚠️ 'trend' 시트에 날짜 열이 없습니다. 현재 열: {list(history_df.columns)}")
+        # KOSPI 열이 없으면 에러 방지용으로 0으로 채운 열 생성
+        history_df['KOSPI_Relative'] = 0
         
 st.markdown(
     f"""
@@ -502,6 +505,7 @@ with st.sidebar:
             st.warning("시트의 'trend' 워크시트 헤더가 [계좌명, 매입금액, 평가금액, 손익, 날짜]인지 확인해주세요.")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
