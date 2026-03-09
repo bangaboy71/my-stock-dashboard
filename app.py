@@ -438,17 +438,61 @@ with st.sidebar:
     st.header("⚙️ 관리 메뉴")
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
     st.divider()
-    sel_date = st.date_input("결과 저장 날짜", value=pd.Timestamp("2026-03-06"))
-    if st.button(f"{sel_date} 결과 확정 저장"):
-        save_ts = pd.Timestamp(sel_date)
-        original_cols = [c for c in history_df.columns if c != 'KOSPI_Relative']
-        new_row = pd.Series(index=original_cols, dtype='object')
-        new_row['Date'] = save_ts
-        new_row['KOSPI'] = get_market_status()['KOSPI']['val'].replace(',', '')
-        # ... (이전 v36.39 저장 로직 동일 적용)
-        st.success(f"✅ {sel_date} 저장 완료!")
+    # 수정 전: 2026-03-06으로 고정됨
+# sel_date = st.date_input("결과 저장 날짜", value=pd.Timestamp("2026-03-06"))
+
+# 수정 후: 앱을 켜는 순간의 '오늘 날짜'가 자동으로 들어감
+    sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
+    # --- [v36.86 패치: 결과 확정 저장 로직 통합] ---
+    if st.button(f"🚀 {sel_date} 결과 확정 저장"):
+        try:
+            # 1. 날짜 표준화 (시트 6자리 숫자 변환 방지)
+            save_date_str = sel_date.strftime('%Y-%m-%d')
+            
+            # 2. 저장할 성과 데이터 집계 (계좌별 합산)
+            # full_df에서 계좌별로 매입/평가/손익을 합칩니다.
+            summary = full_df.groupby('계좌명').agg({
+                '매입금액': 'sum', 
+                '평가금액': 'sum', 
+                '손익': 'sum'
+            }).reset_index()
+            
+            # 3. 날짜 열 추가
+            summary['날짜'] = save_date_str
+            
+            # 4. 기존 Trend 데이터와 병합 및 중복 제거 (Upsert 로직)
+            # history_df(trend 시트)를 최신 상태로 다시 읽어옵니다.
+            current_trend = conn.read(worksheet="trend", ttl=0)
+            
+            if not current_trend.empty:
+                # 기존 데이터의 날짜 형식을 비교 가능하게 변환
+                current_trend['날짜'] = pd.to_datetime(current_trend['날짜']).dt.strftime('%Y-%m-%d')
+                
+                # 🎯 같은 날짜의 데이터가 이미 있다면 제거 (덮어쓰기 준비)
+                updated_trend = pd.concat([
+                    current_trend[current_trend['날짜'] != save_date_str],
+                    summary
+                ], ignore_index=True)
+            else:
+                updated_trend = summary
+
+            # 5. 구글 시트 실제 쓰기 실행
+            conn.update(worksheet="trend", data=updated_trend)
+            
+            # 6. 성공 피드백 및 캐시 강제 갱신
+            st.cache_data.clear() # 캐시 삭제하여 그래프에 즉시 반영
+            st.success(f"✅ {save_date_str} 결과가 'trend' 시트에 안전하게 기록되었습니다!")
+            st.balloons()
+            
+            # 즉시 반영을 위한 화면 리프레시
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"❌ 저장 실패: {e}")
+            st.warning("시트의 'trend' 워크시트 헤더가 [계좌명, 매입금액, 평가금액, 손익, 날짜]인지 확인해주세요.")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
