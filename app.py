@@ -456,32 +456,44 @@ with st.sidebar:
 
 # 수정 후: 앱을 켜는 순간의 '오늘 날짜'가 자동으로 들어감
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
-    # --- [v36.86 패치: 결과 확정 저장 로직 통합] ---
+    # --- [v36.89 패치: 모든 지표 통합 저장 로직] ---
     if st.button(f"🚀 {sel_date} 결과 확정 저장"):
         try:
-            # 1. 날짜 표준화 (시트 6자리 숫자 변환 방지)
+            # 0. 원본 데이터 존재 확인
+            if full_df.empty:
+                st.warning("⚠️ 저장할 종목 데이터가 없습니다. 조회를 먼저 수행해주세요.")
+                st.stop()
+
+            # 1. 저장 날짜 및 실시간 KOSPI 지수 확보
             save_date_str = sel_date.strftime('%Y-%m-%d')
+            m_status = get_market_status()
+            # KOSPI 수치를 숫자로 변환 (저장 후 계산 용이)
+            kospi_val = float(m_status['KOSPI']['val'].replace(',', ''))
             
-            # 2. 저장할 성과 데이터 집계 (계좌별 합산)
-            # full_df에서 계좌별로 매입/평가/손익을 합칩니다.
+            # 2. 투자주체별(계좌별) 실시간 성과 집계
+            # 각 계좌에 속한 종목들의 매입/평가액/손익을 모두 합산합니다.
             summary = full_df.groupby('계좌명').agg({
                 '매입금액': 'sum', 
                 '평가금액': 'sum', 
                 '손익': 'sum'
             }).reset_index()
             
-            # 3. 날짜 열 추가
-            summary['날짜'] = save_date_str
+            # 3. [추가] 투자주체별 누적 수익률 계산
+            # 이 로직이 있어야 시트의 '수익률' 칸이 채워집니다.
+            summary['수익률'] = (summary['손익'] / summary['매입금액'] * 100).fillna(0)
             
-            # 4. 기존 Trend 데이터와 병합 및 중복 제거 (Upsert 로직)
-            # history_df(trend 시트)를 최신 상태로 다시 읽어옵니다.
+            # 4. [추가] 공통 데이터(날짜, KOSPI)를 모든 행에 부여
+            summary['날짜'] = save_date_str
+            summary['KOSPI'] = kospi_val
+            
+            # 5. 기존 'trend' 시트 데이터와 병합 (중복 방지 Upsert)
             current_trend = conn.read(worksheet="trend", ttl=0)
             
             if not current_trend.empty:
-                # 기존 데이터의 날짜 형식을 비교 가능하게 변환
+                # 비교를 위한 날짜 형식 통일
                 current_trend['날짜'] = pd.to_datetime(current_trend['날짜']).dt.strftime('%Y-%m-%d')
                 
-                # 🎯 같은 날짜의 데이터가 이미 있다면 제거 (덮어쓰기 준비)
+                # 🎯 오늘(3월 9일) 기록이 이미 있다면 지우고 새로 합칩니다.
                 updated_trend = pd.concat([
                     current_trend[current_trend['날짜'] != save_date_str],
                     summary
@@ -489,22 +501,20 @@ with st.sidebar:
             else:
                 updated_trend = summary
 
-            # 5. 구글 시트 실제 쓰기 실행
+            # 6. 구글 시트 업데이트 실행
             conn.update(worksheet="trend", data=updated_trend)
             
-            # 6. 성공 피드백 및 캐시 강제 갱신
-            st.cache_data.clear() # 캐시 삭제하여 그래프에 즉시 반영
-            st.success(f"✅ {save_date_str} 결과가 'trend' 시트에 안전하게 기록되었습니다!")
+            # 7. 성공 피드백 및 앱 갱신
+            st.cache_data.clear()
+            st.success(f"✅ {save_date_str} 결과 저장 완료! (KOSPI: {kospi_val:,.2f})")
             st.balloons()
-            
-            # 즉시 반영을 위한 화면 리프레시
             st.rerun()
 
         except Exception as e:
-            st.error(f"❌ 저장 실패: {e}")
-            st.warning("시트의 'trend' 워크시트 헤더가 [계좌명, 매입금액, 평가금액, 손익, 날짜]인지 확인해주세요.")
+            st.error(f"❌ 저장 중 오류 발생: {e}")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
