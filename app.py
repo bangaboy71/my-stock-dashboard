@@ -176,51 +176,49 @@ try:
 except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}"); st.stop()
 
+# --- [Section 3: 슈퍼 루버스트 날짜 엔진 및 리스크 연산] ---
 if not full_df.empty:
-    # 1. 숫자 데이터 변환 (리스크 관리 열 포함)
+    # 1. 숫자 데이터 정제 (52주 고가 등 포함)
     target_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
     for c in target_cols:
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    
-    # 🎯 2. 보유일수 정밀 계산 엔진 (21.3.15 등 2자리 연도 대응)
+
+    # 🎯 2. [핵심] 'YY.MM.DD' 전용 날짜 해석 엔진
     if '최초매입일' in full_df.columns:
-        # 다양한 날짜 형식(21.3.15, 2021-03-15 등)을 안전하게 해석
-        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
+        def force_date_format(d):
+            try:
+                d_str = str(d).strip()
+                # 21.3.15 형식을 2021-03-15로 강제 해석
+                return pd.to_datetime(d_str, format='%y.%m.%d')
+            except:
+                # 위 형식이 아니면 일반적인 해석 시도
+                return pd.to_datetime(d, errors='coerce')
+
+        full_df['최초매입일'] = full_df['최초매입일'].apply(force_date_format)
         
-        # 2015년 오판 방지: 연도가 2000년 이전으로 나오면 100년을 더하는 로직 (선택적)
-        # 하지만 pd.to_datetime은 보통 70-99는 1900년대, 00-69는 2000년대로 인식합니다.
-        # 가장 안전하게 오늘 날짜와 비교합니다.
-        today_plain = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # 오늘 날짜 (KST 기준 시간 정보 제거)
+        today_now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
-        def calculate_days(d):
+        def safe_calc_days(d):
             if pd.isnull(d): return 1
+            # 시간대 정보(tz)가 있다면 제거하여 비교
             d_plain = d.replace(tzinfo=None)
-            # 만약 해석된 연도가 너무 미래거나 과거면 보정 (예: 2068년 등)
-            if d_plain.year > today_plain.year: 
-                d_plain = d_plain.replace(year=d_plain.year - 100)
-            diff = (today_plain - d_plain).days
+            diff = (today_now - d_plain).days
             return max(diff, 1)
 
-        full_df['보유일수'] = full_df['최초매입일'].apply(calculate_days)
+        full_df['보유일수'] = full_df['최초매입일'].apply(safe_calc_days)
     else:
         full_df['보유일수'] = 1
 
-    # 3. 실시간 가격 수집
+    # 3. 실시간 시세 및 기초 수익 연산 (기존 로직 유지)
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
-    
-    # 🎯 4. 기초 연산 및 그룹화(Groupby)용 핵심 열 생성 (에러 해결 포인트)
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    
-    # 전일 대비 지표 (이 부분이 있어야 뒤의 groupby가 에러 나지 않습니다)
     full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
     full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
-    
-    # 수익률 지표
-    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     
 if not history_df.empty:
@@ -450,6 +448,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
