@@ -176,42 +176,29 @@ try:
 except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}"); st.stop()
 
-# --- [Section 3: 슈퍼 루버스트 날짜 엔진 및 리스크 연산] ---
+# --- [3. 데이터 로드 및 정제: 보유일수 및 리스크 지표 연산] ---
 if not full_df.empty:
-    # 1. 숫자 데이터 정제 (52주 고가 등 포함)
+    # 1. 숫자 데이터 강제 변환
     target_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
     for c in target_cols:
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-    # 🎯 2. [핵심] 'YY.MM.DD' 전용 날짜 해석 엔진
+    # 🎯 2. 날짜 엔진 (4006일 오류 해결 및 보유일수 생성)
     if '최초매입일' in full_df.columns:
-        def force_date_format(d):
-            try:
-                d_str = str(d).strip()
-                # 21.3.15 형식을 2021-03-15로 강제 해석
-                return pd.to_datetime(d_str, format='%y.%m.%d')
-            except:
-                # 위 형식이 아니면 일반적인 해석 시도
-                return pd.to_datetime(d, errors='coerce')
-
-        full_df['최초매입일'] = full_df['최초매입일'].apply(force_date_format)
+        # 21.3.15 형식을 2021년으로 정확히 해석하도록 포맷 강제
+        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'].astype(str), format='%y.%m.%d', errors='coerce')
         
-        # 오늘 날짜 (KST 기준 시간 정보 제거)
+        # 오늘 날짜 (2026-03-09 기준)
         today_now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
-        def safe_calc_days(d):
-            if pd.isnull(d): return 1
-            # 시간대 정보(tz)가 있다면 제거하여 비교
-            d_plain = d.replace(tzinfo=None)
-            diff = (today_now - d_plain).days
-            return max(diff, 1)
-
-        full_df['보유일수'] = full_df['최초매입일'].apply(safe_calc_days)
+        # 보유일수 계산 (시간대 제거 후 연산)
+        full_df['보유일수'] = (today_now - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(1).astype(int)
+        full_df['보유일수'] = full_df['보유일수'].apply(lambda x: max(x, 1))
     else:
         full_df['보유일수'] = 1
 
-    # 3. 실시간 시세 및 기초 수익 연산 (기존 로직 유지)
+    # 3. 실시간 가격 및 기초 수익 연산
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
@@ -220,6 +207,11 @@ if not full_df.empty:
     full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
     full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
+    
+    # 🎯 4. 추가 지표 생성 (UI 테이블 표시용)
+    full_df['연환산수익률'] = ((1 + full_df['누적수익률']/100)**(365/full_df['보유일수']) - 1) * 100
+    full_df['상승여력'] = (full_df['52주최고가'] / full_df['현재가'].replace(0, 1) - 1) * 100
+    full_df['손절가'] = full_df['매입단가'] * 0.85
     
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
@@ -292,36 +284,27 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# --- [7. 투자 주체별 상세 렌더링 함수: 내부 데이터 참조 버전] ---
+# --- [7. 투자 주체별 상세 렌더링 함수 (에러 방지 강화)] ---
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty:
-            st.warning(f"{acc_name} 데이터가 시트에서 발견되지 않았습니다.")
+            st.info("해당 계좌에 보유 종목이 없습니다.")
             return
-        
-        # 지표 계산
-        a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
-        a_prev_eval = (sub_df['수량'] * sub_df['전일종가']).sum()
-        a_change_amt = a_eval - a_prev_eval
-        a_change_pct = (a_change_amt / a_prev_eval * 100) if a_prev_eval != 0 else 0
-        
-        # 상단 4대 메트릭 (누적손익 변동 표기 삭제 원칙 유지)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("평가액", f"{a_eval:,.0f}원", delta=f"{a_change_amt:+,.0f}원 ({a_change_pct:+.2f}%)")
-        c2.metric("매입액", f"{a_buy:,.0f}원")
-        c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
-        c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_change_pct:+.2f}%p")
-        
-        # 종목별 테이블 (음양 색채 적용)
-        display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']
+
+        # 🎯 실제 데이터에 존재하는 컬럼만 표시 리스트에 담기
+        potential_cols = ['종목명', '보유일수', '수량', '매입단가', '현재가', '평가금액', '손익', '누적수익률', '연환산수익률']
+        display_cols = [c for c in potential_cols if c in sub_df.columns]
+
+        # 메인 수익분석 테이블 출력
         st.dataframe(sub_df[display_cols].style.apply(lambda x: [
-            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+            'color: #FF4B4B' if (i >= 6 and isinstance(val, (int, float)) and val > 0) else 
+            'color: #87CEEB' if (i >= 6 and isinstance(val, (int, float)) and val < 0) else '' 
             for i, val in enumerate(x)
         ], axis=1).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
-            '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', 
-            '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+            '보유일수': '{:,.0f}일', '수량': '{:,.0f}', '매입단가': '{:,.0f}원',
+            '현재가': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원',
+            '누적수익률': '{:+.2f}%', '연환산수익률': '{:+.2f}%'
         }), hide_index=True, use_container_width=True)
 
         st.divider()
@@ -448,6 +431,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
