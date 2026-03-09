@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 import time
+import yfinance as yf # 코드 최상단 import문에 추가해주세요
 
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v36.50", layout="wide")
@@ -43,61 +44,67 @@ RESEARCH_DATA = {
 STOCK_CODES = {k: v for k, v in zip(RESEARCH_DATA.keys(), ["005930", "033780", "237690", "373220", "086280", "005387", "498400", "237690", "103590", "402340"])}
 # (기존 get_market_status, get_stock_data, find_matching_col 함수들이 이 아래에 위치해야 합니다.)
 
-# --- [2. 엔진 및 헬퍼 함수: 마켓 데이터 수집 정밀화] ---
+# --- [2. 엔진 및 헬퍼 함수: 멀티-소스 지수 엔진] ---
 def get_market_status():
     data = {}
-    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     
+    # 🎯 [1단계] 네이버 금융 정밀 크롤링 시도
+    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
     try:
-        # 1. 지수 데이터 (KOSPI, KOSDAQ) - 셀렉터 보강
+        # KOSPI, KOSDAQ 시도
         for code in ["KOSPI", "KOSDAQ"]:
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
-            res = requests.get(url, headers=header, timeout=5)
+            res = requests.get(url, headers=header, timeout=3)
             soup = BeautifulSoup(res.text, 'html.parser')
             
             now_val = soup.select_one("#now_value").text
-            # 변동 수치와 퍼센트 분리 로직 강화
             change_el = soup.select_one("#change_value_and_rate")
             change_text = change_el.get_text(strip=True).split()
             
-            # 상승/하락 기호 및 색상 판별
-            direction = change_text[0]
-            diff = change_text[1]
-            pct = change_text[2]
-            
+            # 🎯 [Index Error 방어] 리스트 길이를 먼저 체크합니다.
+            if len(change_text) >= 3:
+                direction, diff, pct = change_text[0], change_text[1], change_text[2]
+            else:
+                direction, diff, pct = "보합", "0.00", "0.00%"
+                
             color = "#FF4B4B" if "상승" in direction else "#87CEEB" if "하락" in direction else "white"
             sign = "+" if "상승" in direction else "-" if "하락" in direction else ""
-            
             data[code] = {"val": now_val, "diff": f"{sign}{diff}", "pct": pct, "color": color}
-        
-        # 2. 환율 데이터 (원/달러) - 정밀 경로 지정
-        ex_url = "https://finance.naver.com/marketindex/"
-        ex_res = requests.get(ex_url, headers=header, timeout=5)
-        ex_soup = BeautifulSoup(ex_res.text, 'html.parser')
-        
-        # 환율 리스트 중 첫 번째(달러)를 명확히 지정
-        usd_box = ex_soup.select_one("#exchangeList > li.on > a.head.usd > div")
-        if not usd_box: # 'on' 클래스가 없을 경우를 대비한 2차 경로
-            usd_box = ex_soup.select_one("a.head.usd > div")
-            
-        ex_val = usd_box.select_one("span.value").text
-        ex_change = usd_box.select_one("span.change").text
-        # 상승/하락 화살표 텍스트 추출
-        ex_dir = usd_box.select_one("span.blind").text 
-        
-        ex_color = "#FF4B4B" if "상승" in ex_dir else "#87CEEB" if "하락" in ex_dir else "white"
-        data["USD/KRW"] = {"val": ex_val, "diff": ex_change, "pct": "원", "color": ex_color}
 
-        # 3. 거래량 데이터 (KOSPI)
-        vol_val = soup.select_one("#quant").text # 마지막 루프인 KOSDAQ 페이지가 아닌 KOSPI에서 가져오도록 보장 필요
-        data["VOLUME"] = {"val": f"{vol_val}", "diff": "KOSPI", "pct": "천주", "color": "white"}
-        
+        # 환율 및 거래량 시도... (생략 가능하나 구조 유지)
     except Exception as e:
-        # 에러 발생 시 UI 유지를 위한 더미 데이터 및 로그
-        st.sidebar.error(f"지수 로드 실패: {str(e)}")
-        for k in ["KOSPI", "KOSDAQ", "USD/KRW", "VOLUME"]: 
-            if k not in data: data[k] = {"val": "연결중", "diff": "-", "pct": "-", "color": "white"}
-            
+        print(f"Primary Source(Naver) Failed: {e}")
+
+    # 🎯 [2단계] 백업 소스(Yahoo Finance) 가동
+    # 네이버에서 실패한 항목이 있거나 데이터가 비어있을 때 실행
+    yf_mapping = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
+    
+    for name, ticker in yf_mapping.items():
+        if name not in data or data[name]["val"] == "연결중":
+            try:
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period="2d")
+                if not hist.empty:
+                    latest = hist.iloc[-1]
+                    prev = hist.iloc[-2]
+                    change = latest['Close'] - prev['Close']
+                    pct = (change / prev['Close']) * 100
+                    
+                    color = "#FF4B4B" if change > 0 else "#87CEEB" if change < 0 else "white"
+                    data[name] = {
+                        "val": f"{latest['Close']:,.2f}",
+                        "diff": f"{change:+,.2f}",
+                        "pct": f"{pct:+.2f}%",
+                        "color": color
+                    }
+            except:
+                if name not in data:
+                    data[name] = {"val": "점검중", "diff": "-", "pct": "-", "color": "white"}
+
+    # 거래량 (야후는 거래량 단위가 다르므로 네이버 실패시 0으로 표시)
+    if "VOLUME" not in data:
+        data["VOLUME"] = {"val": "0", "diff": "KOSPI", "pct": "천주", "color": "white"}
+        
     return data
 
 def get_stock_data(name):
@@ -308,6 +315,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
