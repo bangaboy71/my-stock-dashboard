@@ -165,7 +165,7 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [3. 데이터 로드 및 정제 (보유일수 및 리스크 지표 연산 포함)] ---
+# --- [3. 데이터 로드 및 날짜 엔진 보정 (Section 3 전체 교체)] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -174,42 +174,41 @@ try:
     full_df = conn.read(worksheet="종목 현황", ttl="1m")
     history_df = conn.read(worksheet="trend", ttl=0)
 except Exception as e:
-    st.error(f"⚠️ 구글 시트 연결 오류: {e}")
-    st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
-    st.stop()
+    st.error(f"⚠️ 구글 시트 연결 오류: {e}"); st.stop()
 
 if not full_df.empty:
-    # 🎯 [추가] 1. 모든 숫자형 열 강제 변환 (새로 추가한 리스크 열들 포함)
+    # 1. 숫자 데이터 변환
     target_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
     for c in target_cols:
-        # 시트에 해당 열이 있을 때만 변환 진행
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     
-    # 🎯 [추가] 2. 보유일수 계산 로직
-    # 시트의 '최초매입일'을 날짜 형식으로 변환
+    # 🎯 2. 보유일수 계산 엔진 (정밀 보정 버전)
     if '최초매입일' in full_df.columns:
-        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
-        # 오늘 날짜와 비교 (시간대 제거하여 계산)
-        today_plain = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        full_df['보유일수'] = (today_plain - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(0).astype(int)
-        # 0일인 경우(오늘 매수) 1일로 보정하여 연환산 수익률 에러 방지
+        # 날짜 해석 시 연도/월/일 순서를 명시적으로 지정하여 2015년 오판 방지
+        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce', yearfirst=True)
+        
+        # 오늘 날짜 (시간 정보 제거한 순수 날짜만 추출)
+        today_date = datetime.now().date()
+        
+        # 날짜 차이 계산 (Series.dt.date를 활용하여 타입 일치)
+        full_df['보유일수'] = full_df['최초매입일'].apply(
+            lambda x: (today_date - x.date()).days if pd.notnull(x) else 0
+        )
+        
+        # 0일 방지 로직
         full_df['보유일수'] = full_df['보유일수'].apply(lambda x: max(x, 1))
     else:
-        # 열이 아예 없을 경우 에러 방지용 기본값
         full_df['보유일수'] = 1
 
-    # 3. 실시간 가격 수집
+    # 3. 실시간 가격 및 변동 지표 (기존 로직 유지)
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     
-    # 4. 기초 연산 및 일일 변동 지표 생성
+    # 기초 연산
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
-    full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
-    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     
 if not history_df.empty:
@@ -342,12 +341,17 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             tp_price = post_high * 0.80  # 익절가
             sl_price = buy_p * 0.85      # 손절가
 
-            # 3. UI 렌더링 (2단 레이아웃 + 하단 경보)
+            # 딥다이브 렌더링 섹션 내부
+            days = s_row['보유일수'] # 위에서 계산된 보정된 보유일수 사용
+
             st.markdown(f"""
-                <div class='insight-card'>
-                    <div style='color: #87CEEB; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 10px;'>
-                        🔍 {sel} 인텔리전스 전략 보고서 <span style='font-size: 0.8rem; font-weight: normal; opacity: 0.7; float: right;'>보유 {days}일차</span>
-                    </div>
+               <div class='insight-card'>
+                   <div style='color: #87CEEB; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px;'>
+                       🔍 {sel} 인텔리전스 전략 보고서 
+                       <span style='font-size: 0.85rem; font-weight: normal; opacity: 0.8; float: right; background: rgba(135,206,235,0.1); padding: 2px 10px; border-radius: 15px;'>
+                         보유 {days:,}일차
+                       </span>
+               </div>
                     
                     <div style='display: flex; gap: 20px; margin-bottom: 20px;'>
                         <div style='flex: 1; background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px;'>
@@ -434,6 +438,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
