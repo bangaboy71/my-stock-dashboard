@@ -200,8 +200,14 @@ if not history_df.empty:
     base_row = history_df[history_df['Date'] == base_date]
     history_df['KOSPI_Relative'] = (history_df['KOSPI'] / (base_row['KOSPI'].values[0] if not base_row.empty else history_df['KOSPI'].iloc[0]) - 1) * 100
 
-# --- [6. UI 타이틀 및 4구간 와이드 HUD] ---
-st.markdown(f"<h1 style='text-align: center; color: #87CEEB;'>🌐 AI 금융 통합 관제탑 v36.54</h1>", unsafe_allow_html=True)
+st.markdown(
+    f"""
+    <h2 style='text-align: center; color: #87CEEB; font-size: 1.8rem; font-weight: 600; margin-bottom: 25px; letter-spacing: -0.5px;'>
+        🌐 AI 금융 통합 관제탑 <span style='font-size: 1.2rem; font-weight: 300; opacity: 0.7;'>v36.64</span>
+    </h2>
+    """, 
+    unsafe_allow_html=True
+)
 
 m_status = get_market_status()
 hud_cols = st.columns(4)
@@ -355,6 +361,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
