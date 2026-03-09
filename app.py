@@ -165,7 +165,7 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [3. 데이터 로드 및 정제 (API 에러 핸들링 포함)] ---
+# --- [3. 데이터 로드 및 정제 (보유일수 및 리스크 지표 연산 포함)] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -179,12 +179,31 @@ except Exception as e:
     st.stop()
 
 if not full_df.empty:
-    for c in ['수량', '매입단가']:
-        full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    # 🎯 [추가] 1. 모든 숫자형 열 강제 변환 (새로 추가한 리스크 열들 포함)
+    target_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
+    for c in target_cols:
+        # 시트에 해당 열이 있을 때만 변환 진행
+        if c in full_df.columns:
+            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    
+    # 🎯 [추가] 2. 보유일수 계산 로직
+    # 시트의 '최초매입일'을 날짜 형식으로 변환
+    if '최초매입일' in full_df.columns:
+        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
+        # 오늘 날짜와 비교 (시간대 제거하여 계산)
+        today_plain = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        full_df['보유일수'] = (today_plain - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(0).astype(int)
+        # 0일인 경우(오늘 매수) 1일로 보정하여 연환산 수익률 에러 방지
+        full_df['보유일수'] = full_df['보유일수'].apply(lambda x: max(x, 1))
+    else:
+        # 열이 아예 없을 경우 에러 방지용 기본값
+        full_df['보유일수'] = 1
+
+    # 3. 실시간 가격 수집
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     
-    # 기초 연산 및 일일 변동 지표 생성
+    # 4. 기초 연산 및 일일 변동 지표 생성
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
@@ -192,7 +211,7 @@ if not full_df.empty:
     full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
     full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-
+    
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
     history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
@@ -301,47 +320,49 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         # 🎯 중복 키 방지 및 종목 선택
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_final_{acc_name}")
         
-        # --- [v36.64-RS: 인텔리전스 딥다이브 교체 모듈] ---
+       # --- [v36.64-RS: 에러 방지 및 핀셋 교체 모듈] ---
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
-            # 1. 필요 수치 사전 계산
-            buy_p = sub_df.loc[sub_df['종목명'] == sel, '매입단가'].values[0]
-            curr_p = sub_df.loc[sub_df['종목명'] == sel, '현재가'].values[0]
-            days = sub_df.loc[sub_df['종목명'] == sel, '보유일수'].values[0]
-            days = max(days, 1) # 0일 방지
-            total_ret = sub_df.loc[sub_df['종목명'] == sel, '누적수익률'].values[0]
+            # 🎯 특정 종목의 행 데이터 추출
+            s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
             
-            # 연 환산 수익률 및 리스크 지표 (시트의 신규 열 데이터 활용)
-            high_52w = sub_df.loc[sub_df['종목명'] == sel, '52주최고가'].values[0]
-            post_high = sub_df.loc[sub_df['종목명'] == sel, '매입후최고가'].values[0]
+            # 수치 할당 (안전한 추출)
+            buy_p = s_row['매입단가']
+            curr_p = s_row['현재가']
+            days = s_row['보유일수']
+            total_ret = s_row['누적수익률']
             
-            # 수식 적용
+            # 리스크 지표 (시트에 없으면 기본값 0 처리)
+            high_52w = s_row.get('52주최고가', 0)
+            post_high = s_row.get('매입후최고가', curr_p) # 기록 없으면 현재가 기준
+            
+            # 전략 수치 계산
             ann_ret = ((1 + total_ret/100)**(365/days) - 1) * 100
-            upside = (high_52w / curr_p - 1) * 100 if curr_p > 0 else 0
-            tp_price = post_high * 0.80  # 익절가 (최고가 대비 -20%)
-            sl_price = buy_p * 0.85      # 손절가 (매입가 대비 -15%)
+            upside = (high_52w / curr_p - 1) * 100 if curr_p > 0 and high_52w > 0 else 0
+            tp_price = post_high * 0.80  # 익절가
+            sl_price = buy_p * 0.85      # 손절가
 
-            # 2. UI 렌더링 (2단 레이아웃 + 하단 경보)
+            # 3. UI 렌더링 (2단 레이아웃 + 하단 경보)
             st.markdown(f"""
                 <div class='insight-card'>
                     <div style='color: #87CEEB; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; border-bottom: 1px solid rgba(135,206,235,0.2); padding-bottom: 10px;'>
                         🔍 {sel} 인텔리전스 전략 보고서 <span style='font-size: 0.8rem; font-weight: normal; opacity: 0.7; float: right;'>보유 {days}일차</span>
                     </div>
                     
-                    <div style='display: flex; gap: 25px; margin-bottom: 20px;'>
+                    <div style='display: flex; gap: 20px; margin-bottom: 20px;'>
                         <div style='flex: 1; background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px;'>
                             <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 핵심 재무 지표 (Target)</div>
                             <table style='width: 100%; font-size: 0.9rem;'>
-                                {"".join([f"<tr><td style='padding:5px 0;'>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span class='target-val'>{m[2]}</span></td></tr>" for m in res['metrics']])}
+                                {"".join([f"<tr><td style='padding:4px 0;'>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span class='target-val'>{m[2]}</span></td></tr>" for m in res['metrics']])}
                             </table>
-                            <div style='margin-top: 15px; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px;'>
+                            <div style='margin-top: 12px; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;'>
                                 <span style='color: #FFD700;'>💡 인사이트:</span> {res['implications'][0]}
                             </div>
                         </div>
                         
                         <div style='flex: 1; background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.1);'>
                             <div style='color: #87CEEB; font-size: 0.85rem; margin-bottom: 10px;'>⚡ 실시간 전략 모니터</div>
-                            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 15px;'>
+                            <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px;'>
                                 <div>
                                     <div style='font-size: 0.75rem; opacity: 0.6;'>연 환산 수익률</div>
                                     <div style='font-size: 1.2rem; font-weight: bold; color: #FF4B4B;'>{ann_ret:+.1f}%</div>
@@ -350,24 +371,24 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                                     <div style='font-size: 0.75rem; opacity: 0.6;'>상승 여력</div>
                                     <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{upside:+.1f}%</div>
                                 </div>
-                                <div style='grid-column: span 2;'>
-                                    <div style='font-size: 0.75rem; opacity: 0.6;'>현재가 상태</div>
-                                    <div style='font-size: 1.1rem;'>{curr_p:,.0f}원 <span style='font-size: 0.8rem; opacity: 0.7;'> (52주 최고가: {high_52w:,.0f})</span></div>
+                                <div style='grid-column: span 2; margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.05);'>
+                                    <div style='font-size: 0.75rem; opacity: 0.6;'>현재가 / 52주 고가</div>
+                                    <div style='font-size: 1rem;'>{curr_p:,.0f} / <span style='color:#aaa;'>{high_52w:,.0f}</span></div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"};'>
-                        <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 8px;'>🚨 익절/손절 실시간 경보 시스템</div>
+                    <div style='background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"};'>
+                        <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 8px;'>🚨 리스크 관리 가이드</div>
                         <div style='display: flex; justify-content: space-between; font-size: 0.9rem;'>
-                            <span>🛡️ <b>손절 가이드 (-15%):</b> {sl_price:,.0f}원 <span style='font-size: 0.8rem; opacity: 0.6;'>(매입 {buy_p:,.0f} 대비)</span></span>
+                            <span>🛡️ <b>손절선 (-15%):</b> {sl_price:,.0f}원</span>
                             <span style='color: {"#FF4B4B" if curr_p <= sl_price else "#00FF00"};'>
                                 {"⚠️ 즉시 대응" if curr_p <= sl_price else "✅ 매우 안전"}
                             </span>
                         </div>
-                        <div style='display: flex; justify-content: space-between; font-size: 0.9rem; margin-top: 5px;'>
-                            <span>🚨 <b>익절 가이드 (-20%):</b> {tp_price:,.0f}원 <span style='font-size: 0.8rem; opacity: 0.6;'>(최고 {post_high:,.0f} 대비)</span></span>
+                        <div style='display: flex; justify-content: space-between; font-size: 0.9rem; margin-top: 4px;'>
+                            <span>🚨 <b>익절선 (-20%):</b> {tp_price:,.0f}원</span>
                             <span style='color: {"#FFA500" if curr_p <= tp_price else "#00FF00"};'>
                                 {"⚠️ 추세 이탈" if curr_p <= tp_price else "✅ 추세 유지"}
                             </span>
@@ -375,7 +396,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                     </div>
                 </div>
             """, unsafe_allow_html=True)
-
+            
         # 차트 레이아웃
         g_left, g_right = st.columns([2, 1])
         with g_left:
@@ -413,5 +434,6 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
