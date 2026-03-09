@@ -44,69 +44,92 @@ RESEARCH_DATA = {
 STOCK_CODES = {k: v for k, v in zip(RESEARCH_DATA.keys(), ["005930", "033780", "237690", "373220", "086280", "005387", "498400", "237690", "103590", "402340"])}
 # (기존 get_market_status, get_stock_data, find_matching_col 함수들이 이 아래에 위치해야 합니다.)
 
-# --- [2. 엔진 및 헬퍼 함수: 멀티-소스 지수 엔진] ---
+# --- [2. 엔진 및 헬퍼 함수: 지표 연산 및 거래량 복구] ---
 def get_market_status():
     data = {}
+    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     
-    # 🎯 [1단계] 네이버 금융 정밀 크롤링 시도
-    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+    # 🎯 [1단계: Naver] 시도
     try:
-        # KOSPI, KOSDAQ 시도
         for code in ["KOSPI", "KOSDAQ"]:
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
             res = requests.get(url, headers=header, timeout=3)
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            now_val = soup.select_one("#now_value").text
-            change_el = soup.select_one("#change_value_and_rate")
-            change_text = change_el.get_text(strip=True).split()
+            # 수치 추출
+            now_val = soup.select_one("#now_value").text.replace(',', '')
+            # 변동액과 비율 (숫자만 추출하여 부호 판별)
+            change_area = soup.select_one("#change_value_and_rate").get_text(strip=True)
+            # 텍스트에서 숫자와 마이너스 부호만 추출하는 로직 강화
+            import re
+            nums = re.findall(r"[-+]?\d*\.\d+|\d+", change_area.replace(',', ''))
             
-            # 🎯 [Index Error 방어] 리스트 길이를 먼저 체크합니다.
-            if len(change_text) >= 3:
-                direction, diff, pct = change_text[0], change_text[1], change_text[2]
-            else:
-                direction, diff, pct = "보합", "0.00", "0.00%"
+            if len(nums) >= 2:
+                diff_val = float(nums[0])
+                pct_val = nums[1]
+                # 방향 판별 (텍스트 대신 부호로 색상 결정)
+                is_up = "상승" in change_area or float(diff_val) > 0
+                is_down = "하락" in change_area or float(diff_val) < 0
+                color = "#FF4B4B" if is_up else "#87CEEB" if is_down else "white"
+                sign = "+" if is_up else "" # 마이너스는 수치에 포함됨
                 
-            color = "#FF4B4B" if "상승" in direction else "#87CEEB" if "하락" in direction else "white"
-            sign = "+" if "상승" in direction else "-" if "하락" in direction else ""
-            data[code] = {"val": now_val, "diff": f"{sign}{diff}", "pct": pct, "color": color}
+                data[code] = {
+                    "val": f"{float(now_val):,.2f}",
+                    "diff": f"{sign}{diff_val:,.2f}",
+                    "pct": f"{pct_val}%",
+                    "color": color
+                }
+            
+            # 거래량 수집 (KOSPI 우선)
+            if code == "KOSPI":
+                quant = soup.select_one("#quant")
+                if quant: data["VOLUME"] = {"val": quant.text, "diff": "KOSPI", "pct": "천주", "color": "white"}
 
-        # 환율 및 거래량 시도... (생략 가능하나 구조 유지)
     except Exception as e:
-        print(f"Primary Source(Naver) Failed: {e}")
+        print(f"Naver Error: {e}")
 
-    # 🎯 [2단계] 백업 소스(Yahoo Finance) 가동
-    # 네이버에서 실패한 항목이 있거나 데이터가 비어있을 때 실행
-    yf_mapping = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
-    
-    for name, ticker in yf_mapping.items():
+    # 🎯 [2단계: Yahoo Finance 백업 및 보완]
+    yf_map = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
+    for name, ticker in yf_map.items():
         if name not in data or data[name]["val"] == "연결중":
             try:
-                stock = yf.Ticker(ticker)
-                hist = stock.history(period="2d")
+                tk = yf.Ticker(ticker)
+                hist = tk.history(period="2d")
                 if not hist.empty:
                     latest = hist.iloc[-1]
                     prev = hist.iloc[-2]
-                    change = latest['Close'] - prev['Close']
-                    pct = (change / prev['Close']) * 100
+                    close_price = latest['Close']
+                    diff = close_price - prev['Close']
+                    pct = (diff / prev['Close']) * 100
                     
-                    color = "#FF4B4B" if change > 0 else "#87CEEB" if change < 0 else "white"
+                    color = "#FF4B4B" if diff > 0 else "#87CEEB" if diff < 0 else "white"
                     data[name] = {
-                        "val": f"{latest['Close']:,.2f}",
-                        "diff": f"{change:+,.2f}",
+                        "val": f"{close_price:,.2f}",
+                        "diff": f"{diff:+,.2f}",
                         "pct": f"{pct:+.2f}%",
                         "color": color
                     }
-            except:
-                if name not in data:
-                    data[name] = {"val": "점검중", "diff": "-", "pct": "-", "color": "white"}
+                    # 야후에서 거래량 보완 (KOSPI인 경우)
+                    if name == "KOSPI" and "VOLUME" not in data:
+                        vol_m = latest['Volume'] / 1000 # 천주 단위 변환
+                        data["VOLUME"] = {"val": f"{vol_m:,.0f}", "diff": "YF_VOL", "pct": "천주", "color": "white"}
+            except: pass
 
-    # 거래량 (야후는 거래량 단위가 다르므로 네이버 실패시 0으로 표시)
-    if "VOLUME" not in data:
-        data["VOLUME"] = {"val": "0", "diff": "KOSPI", "pct": "천주", "color": "white"}
-        
+    # 환율 정보가 없을 때 Naver MarketIndex 재시도
+    if "USD/KRW" not in data:
+        try:
+            ex_res = requests.get("https://finance.naver.com/marketindex/", headers=header)
+            ex_soup = BeautifulSoup(ex_res.text, 'html.parser')
+            data["USD/KRW"] = {
+                "val": ex_soup.select_one("span.value").text,
+                "diff": ex_soup.select_one("span.change").text,
+                "pct": "원",
+                "color": "#FF4B4B" if "상승" in ex_soup.select_one("span.blind").text else "#87CEEB"
+            }
+        except: pass
+
     return data
-
+    
 def get_stock_data(name):
     code = STOCK_CODES.get(str(name).replace(" ", ""))
     if not code: return 0, 0
@@ -315,6 +338,7 @@ with st.sidebar:
         st.success(f"✅ {sel_date} 저장 완료!")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
