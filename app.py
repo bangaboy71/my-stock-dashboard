@@ -310,15 +310,15 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# --- [v40.3 패치: 변수 선언 최적화 및 NameError 방지] ---
+# --- [v40.4 패치: 클래식 레이아웃 및 경보 시스템 문구 복구] ---
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty:
-            st.warning(f"{acc_name} 데이터가 없습니다.")
+            st.warning(f"{acc_name} 데이터가 발견되지 않았습니다.")
             return
         
-        # 1. 상단 요약 지표 및 테이블 (v36.50 스타일)
+        # 1. 상단 계좌 요약 (Metric)
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_diff = sub_df['전일대비손익'].sum() if '전일대비손익' in sub_df.columns else 0
         a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
@@ -335,77 +335,90 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
 
         st.divider()
         
-        # 2. 종목 선택 및 모든 전략 변수 선행 계산 (NameError 방지 핵심)
-        sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_v40_{acc_name}")
+        # 2. 종목 선택 및 데이터 확보
+        sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_v404_{acc_name}")
         s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
         
-        # --- 모든 UI에서 공통으로 사용할 변수들 정의 ---
+        # 수치 데이터 선언
         curr_p = float(s_row.get('현재가', 0))
         buy_p = float(s_row.get('매입단가', 0))
         target_p = float(s_row.get('목표가', 0))
-        high_post = float(s_row.get('매입후최고가', curr_p))
+        high_52 = float(s_row.get('52주최고가', 0))
+        post_high = float(s_row.get('매입후최고가', curr_p))
         total_ret = float(s_row.get('누적수익률', 0))
         upside = float(s_row.get('목표대비상승여력', 0))
-        days = int(s_row.get('보유일수', 365))
+        days = max(int(s_row.get('보유일수', 365)), 1)
         
-        # 연 환산 수익률 및 리스크 가이드 계산
-        ann_ret = ((1 + total_ret/100)**(365/max(days, 1)) - 1) * 100
-        sl_price = buy_p * 0.85  # 손절선
-        tp_price = high_post * 0.80  # 익절선
+        # 지표 연산
+        ann_ret = ((1 + total_ret/100)**(365/days) - 1) * 100
+        sl_price = buy_p * 0.85      # 손절 가이드
+        tp_price = post_high * 0.80  # 익절 가이드
 
-        # 3. 트리플-매트릭스 전략 모니터 (동일 폰트 1.2rem)
-        st.markdown(f"##### 🔍 {sel} 실시간 전략 모니터")
-        st.markdown(f"""
-            <div style='background: rgba(135,206,235,0.05); padding: 20px; border-radius: 12px; border: 1px solid rgba(135,206,235,0.1);'>
-                <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; text-align: center;'>
-                    <div>
-                        <div style='font-size: 0.8rem; opacity: 0.6; margin-bottom: 5px;'>연 환산 수익률</div>
-                        <div style='font-size: 1.2rem; font-weight: bold; color: #FF4B4B;'>{ann_ret:+.1f}%</div>
-                    </div>
-                    <div style='border-left: 1px solid rgba(255,255,255,0.1); border-right: 1px solid rgba(255,255,255,0.1);'>
-                        <div style='font-size: 0.8rem; color: #FFD700; margin-bottom: 5px;'>🎯 시트 목표가</div>
-                        <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
-                    </div>
-                    <div>
-                        <div style='font-size: 0.8rem; opacity: 0.6; margin-bottom: 5px;'>기대 상승 여력</div>
-                        <div style='font-size: 1.2rem; font-weight: bold; color: #00FF00;'>{upside:+.1f}%</div>
-                    </div>
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
-
-        # 4. 재무 지표 및 리스크 경보 (RESEARCH_DATA 유무와 상관없이 리스크 경보는 표시)
-        res = RESEARCH_DATA.get(sel.replace(" ", ""))
-        col_res, col_risk = st.columns([1, 1])
+        st.markdown(f"##### 🔍 {sel} 인텔리전스 전략 보고서")
         
+        # 3. [중앙] 좌: 재무 지표 | 우: 실시간 전략 모니터
+        col_res, col_strat = st.columns([1, 1])
+
         with col_res:
+            res = RESEARCH_DATA.get(sel.replace(" ", ""))
             if res:
                 metrics_html = "".join([f"<tr><td>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span style='color:#FFD700;'>{m[2]}</span></td></tr>" for m in res['metrics']])
                 st.markdown(f"""
-                    <div class='report-box' style='height:180px; padding:15px;'>
+                    <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 210px;'>
                         <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 핵심 재무 지표 (Target)</div>
                         <table style='width: 100%; font-size: 0.9rem;'>{metrics_html}</table>
+                        <div style='margin-top: 10px; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;'>
+                            <span style='color: #FFD700;'>💡 인사이트:</span> {res['implications'][0]}
+                        </div>
                     </div>
                 """, unsafe_allow_html=True)
             else:
                 st.info("💡 종목 상세 분석 데이터가 없습니다.")
 
-        with col_risk:
-            # 리스크 경보 시스템 (NameError 방지를 위해 계산된 변수 사용)
-            border_color = "#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"
+        with col_strat:
+            # 🎯 트리플 매트릭스 (연환산 | 목표가 | 상승여력)
             st.markdown(f"""
-                <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {border_color}; height: 180px;'>
-                    <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>🚨 리스크 관리 가이드</div>
-                    <div style='margin-bottom:10px;'>
-                        <div style='font-size:0.75rem; opacity:0.6;'>🛡️ 손절선 (-15%)</div>
-                        <div style='font-size:1rem;'>{sl_price:,.0f}원 {"⚠️" if curr_p <= sl_price else "✅"}</div>
+                <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.1); height: 210px;'>
+                    <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 15px;'>⚡ 실시간 전략 모니터</div>
+                    <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; margin-bottom: 15px;'>
+                        <div>
+                            <div style='font-size: 0.75rem; opacity: 0.6;'>연 환산 수익률</div>
+                            <div style='font-size: 1.2rem; font-weight: bold; color: #FF4B4B;'>{ann_ret:+.1f}%</div>
+                        </div>
+                        <div style='border-left: 1px solid rgba(255,255,255,0.1); border-right: 1px solid rgba(255,255,255,0.1);'>
+                            <div style='font-size: 0.75rem; color: #FFD700;'>🎯 시트 목표가</div>
+                            <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}</div>
+                        </div>
+                        <div>
+                            <div style='font-size: 0.75rem; opacity: 0.6;'>기대 상승 여력</div>
+                            <div style='font-size: 1.2rem; font-weight: bold; color: #00FF00;'>{upside:+.1f}%</div>
+                        </div>
                     </div>
-                    <div>
-                        <div style='font-size:0.75rem; opacity:0.6;'>🚨 익절선 (-20%)</div>
-                        <div style='font-size:1rem;'>{tp_price:,.0f}원 {"⚠️" if curr_p <= tp_price else "✅"}</div>
+                    <div style='border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px; font-size: 0.9rem; color: #bbb;'>
+                        현재가: <b>{curr_p:,.0f}원</b><br>
+                        <span style='font-size: 0.8rem; opacity: 0.7;'>52주 최고가: {high_52:,.0f}원</span>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
+
+        # 4. [하단] 익절/손절 실시간 경보 시스템 (상태 문구 복구)
+        st.markdown(f"""
+            <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"}; margin-top: 15px;'>
+                <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>🚨 익절/손절 실시간 경보 시스템</div>
+                <div style='display: flex; justify-content: space-between; font-size: 0.95rem;'>
+                    <span>🛡️ <b>손절 가이드 (-15%):</b> {sl_price:,.0f}원 <span style='font-size:0.8rem; opacity:0.6;'>(매입 {buy_p:,.0f} 대비)</span></span>
+                    <span style='color: {"#FF4B4B" if curr_p <= sl_price else "#00FF00"}; font-weight: bold;'>
+                        {"⚠️ 즉시 대응" if curr_p <= sl_price else "✅ 매우 안전"}
+                    </span>
+                </div>
+                <div style='display: flex; justify-content: space-between; font-size: 0.95rem; margin-top: 8px;'>
+                    <span>🚨 <b>익절 가이드 (-20%):</b> {tp_price:,.0f}원 <span style='font-size:0.8rem; opacity:0.6;'>(최고 {post_high:,.0f} 대비)</span></span>
+                    <span style='color: {"#FFA500" if curr_p <= tp_price else "#00FF00"}; font-weight: bold;'>
+                        {"⚠️ 추세 이탈" if curr_p <= tp_price else "✅ 추세 유지"}
+                    </span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
             
         # 차트 레이아웃
         g_left, g_right = st.columns([2, 1])
@@ -514,5 +527,6 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
