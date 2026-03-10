@@ -190,48 +190,42 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
+# --- [교체구간 1: 데이터 정제 및 목표가 연산] ---
 if not full_df.empty:
-    # 🎯 1. 컬럼명 공백 제거 (구글 시트의 보이지 않는 공백 방어)
+    # 1. 컬럼명 공백 제거 (에러 방패)
     full_df.columns = [c.strip() for c in full_df.columns]
 
-    # 🎯 2. 숫자 데이터 타입 통합 변환 (매입후최저가 삭제, 목표가 추가)
-    # 리스트에 '목표가'가 반드시 있어야 합니다!
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가']
-    
-    for c in target_num_cols:
-        if c in full_df.columns:
-            # 콤마 제거 후 숫자로 변환
-            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        elif c == '목표가':
-            # 🎯 안전장치: 시트에서 '목표가'를 못 읽어왔을 경우 앱이 죽지 않게 0으로 생성
-            full_df['목표가'] = 0
+    # 2. 필수 수치 열 강제 확보 (없으면 0으로 자동 생성)
+    # 삭제하신 '매입후최저가'는 여기서 빠지고, '목표가'가 새로 들어갑니다.
+    essential_cols = ['수량', '매입단가', '현재가', '전일종가', '목표가', '매입후최고가']
+    for c in essential_cols:
+        if c not in full_df.columns: 
+            full_df[c] = 0
+        # 콤마 제거 후 숫자로 강제 변환
+        full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-    # 🎯 3. [최적화] 표준 날짜 및 보유일수 계산
-    if '최초매입일' in full_df.columns:
-        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
-        today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        full_df['보유일수'] = (today_date - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int)
-        full_df['보유일수'] = full_df['보유일수'].clip(lower=1)
-    else:
-        full_df['보유일수'] = 365
-
-    # 🎯 4. 실시간 가격 수집
-    prices = full_df['종목명'].apply(get_stock_data).tolist()
-    full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
-    
-    # 🎯 5. 기대 상승 여력 계산 (KeyError 방지형 로직)
-    # 현재가와 목표가 컬럼이 확실히 있을 때만 계산합니다.
-    full_df['목표대비상승여력'] = full_df.apply(
-        lambda x: ((x.get('목표가', 0) / x.get('현재가', 1) - 1) * 100) 
-        if x.get('현재가', 0) > 0 and x.get('목표가', 0) > 0 else 0, 
-        axis=1
-    )
-
-    # 🎯 6. 나머지 수익 지표 연산
+    # 3. 핵심 수익 지표 연산 (순서대로 실행)
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
+    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
+    full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
+    
+    # 누적수익률 및 기대상승여력 (목표가 기준)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
+    
+    # 🎯 상승여력 계산 (현재가 0 방지)
+    full_df['목표대비상승여력'] = full_df.apply(
+        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, axis=1
+    )
+
+    # 4. 보유일수 계산 (표준 날짜 로직)
+    if '최초매입일' in full_df.columns:
+        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
+        today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        full_df['보유일수'] = (today_date - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int).clip(lower=1)
+    else:
+        full_df['보유일수'] = 365
     
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
@@ -270,30 +264,41 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황
+# --- [교체구간 2: 안전한 총괄 합계 계산] ---
 with tabs[0]:
-    t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
-    t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
-    t_change_amt = t_eval - t_prev_eval
-    t_change_pct = (t_change_amt / t_prev_eval * 100) if t_prev_eval != 0 else 0
-    
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", delta=f"{t_change_amt:+,.0f}원 ({t_change_pct:+.2f}%)")
-    m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
-    m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
-    m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
-    
-    st.divider()
-    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
-    sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
-    sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
-    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']]
-    
-    st.dataframe(sum_acc.style.apply(lambda x: ['color: #FF4B4B' if (i >= 3 and val > 0) else 'color: #87CEEB' if (i >= 3 and val < 0) else '' for i, val in enumerate(x)], axis=1).format({
-        '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-    }), use_container_width=True, hide_index=True)
+    if not full_df.empty:
+        # 합계에 필요한 열이 실제로 존재하는지 한 번 더 검증
+        agg_targets = ['매입금액', '평가금액', '손익', '전일대비손익']
+        existing_agg = {c: 'sum' for c in agg_targets if c in full_df.columns}
+        
+        if existing_agg:
+            # 계좌별 합계 계산
+            sum_acc = full_df.groupby('계좌명').agg(existing_agg).reset_index()
+            
+            # 합계 데이터 기반 수익률 및 변동율 재계산
+            sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
+            sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+            sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
+            
+            # 전체 합계 상단 메트릭 표시
+            t_eval, t_buy = sum_acc['평가금액'].sum(), sum_acc['매입금액'].sum()
+            t_diff = sum_acc['전일대비손익'].sum()
+            t_pct = (t_diff / (t_eval - t_diff) * 100) if (t_eval - t_diff) != 0 else 0
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("가족 총 평가액", f"{t_eval:,.0f}원", delta=f"{t_diff:+,.0f}원 ({t_pct:+.2f}%)")
+            m2.metric("총 투자 원금", f"{t_buy:,.0f}원")
+            m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
+            m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%")
 
+            st.divider()
+            
+            # 계좌별 요약 테이블 출력
+            st.dataframe(sum_acc.style.format({
+                '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
+                '전일대비손익': '{:+,.0f}원', '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+            }), use_container_width=True, hide_index=True)
+        
     if not history_df.empty:
         fig = go.Figure()
         h_dates = history_df['Date'].dt.date.astype(str)
@@ -526,5 +531,6 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
