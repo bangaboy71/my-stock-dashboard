@@ -440,40 +440,46 @@ with st.sidebar:
     st.divider()
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
    
-# --- [v38.7 패치: 데이터 확정권 및 수동 보정 시스템] ---
+
+# --- [v38.8 패치: 고정형 관리자 편집기 시스템] ---
     st.header("⚙️ 기록 관리자 모드")
     sel_date = st.date_input("📅 저장/복구 날짜 선택", value=datetime.now())
     
-    if st.button(f"🔍 {sel_date} 데이터 불러오기/검증"):
+    # 1. 데이터 로드 로직 (세션에 고정)
+    if st.button(f"🔍 {sel_date} 데이터 불러오기"):
         save_date_str = sel_date.strftime('%Y-%m-%d')
-        is_past = save_date_str < datetime.now().strftime('%Y-%m-%d')
-        
-        # 3월 9일 팩트 기본 세팅
+        # 기본값 설정
         if save_date_str == "2026-03-09":
-            st.session_state['tmp_kospi'] = 5251.87
-            st.session_state['tmp_prices'] = {"KODEX200타겟위클리커버드콜": 16515.0, "삼성전자": 111400.0} # 주요 팩트
+            st.session_state['edit_kospi'] = 5251.87
+            # 3월 9일 주요 팩트 미리 주입
+            st.session_state['edit_prices'] = {"KODEX200타겟위클리커버드콜": 16515.0, "삼성전자": 111400.0}
         else:
-            k_tk = yf.Ticker("^KS11")
-            k_h = k_tk.history(period="1d")
-            st.session_state['tmp_kospi'] = float(k_h['Close'].iloc[-1]) if not k_h.empty else 0.0
+            m_status = get_market_status()
+            st.session_state['edit_kospi'] = float(m_status["KOSPI"]["val"].replace(",",""))
+            st.session_state['edit_prices'] = {}
+        
+        st.session_state['editor_active'] = True # 편집기 활성화 상태 고정
+        st.success(f"✅ {save_date_str} 데이터를 가져왔습니다. 아래에서 수정 후 기록하세요.")
 
-    # 데이터가 로드된 상태라면 편집창 활성화
-    if 'tmp_kospi' in st.session_state:
+    # 2. 편집기 영역 (editor_active가 True인 동안 계속 표시됨)
+    if st.session_state.get('editor_active', False):
         st.divider()
         st.subheader(f"🛠️ {sel_date} 수치 최종 확정")
         
-        # 1. KOSPI 지수 확정
-        final_kospi = st.number_input("KOSPI 지수 확정", value=st.session_state['tmp_kospi'])
+        # KOSPI 지수 수정
+        final_kospi = st.number_input("KOSPI 지수", value=st.session_state['edit_kospi'], format="%.2f")
         
-        # 2. 종목별 종가 확인 및 수정 (모든 종목 리스팅)
-        st.write("📋 종목별 종가(Close)를 확인하세요.")
+        # 종목별 종가 수정 테이블
+        st.write("📋 종목별 종가(Close) 확인/수정")
         final_prices = {}
         for idx, row in full_df.iterrows():
             s_name = row['종목명']
-            # 기존에 저장된 팩트가 있으면 우선 적용, 없으면 현재가 노출
-            default_p = st.session_state.get('tmp_prices', {}).get(s_name, float(row['현재가']))
-            final_prices[s_name] = st.number_input(f"{s_name} 종가", value=default_p, key=f"edit_{s_name}")
+            # 세션에 저장된 팩트가 있으면 쓰고, 없으면 시트의 현재가 사용
+            default_p = st.session_state.get('edit_prices', {}).get(s_name, float(row['현재가']))
+            final_prices[s_name] = st.number_input(f"[{s_name}]", value=default_p, key=f"inp_{s_name}", format="%.0f")
 
+        st.write("---")
+        # 🎯 [핵심] 이 버튼이 이제 사라지지 않고 유지됩니다.
         if st.button("🚀 위 수치로 시트 최종 기록"):
             try:
                 save_date_str = sel_date.strftime('%Y-%m-%d')
@@ -482,7 +488,7 @@ with st.sidebar:
                 if '날짜' in new_entry.index: new_entry['날짜'] = save_date_str
                 new_entry['KOSPI'] = final_kospi
 
-                # 계좌별 수익률 연산
+                # 계좌별/종목별 수익률 연산
                 for acc in full_df['계좌명'].unique():
                     acc_df = full_df[full_df['계좌명'] == acc]
                     acc_eval_sum = 0.0
@@ -492,28 +498,30 @@ with st.sidebar:
                         target_p = final_prices[r['종목명']]
                         buy_p = float(r['매입단가'])
                         
-                        # 종목별 수익률 기록
                         s_col = find_matching_col(history_df, acc, r['종목명'])
                         if s_col: new_entry[s_col] = ((target_p / buy_p) - 1) * 100
                         acc_eval_sum += (target_p * float(r['수량']))
 
-                    # 계좌별 수익률 기록
                     a_col = find_matching_col(history_df, acc)
                     if a_col: new_entry[a_col] = ((acc_eval_sum / acc_buy_total) - 1) * 100
 
-                # 시트 업데이트
+                # 시트 전송
                 hist_copy = history_df.copy()
                 hist_copy['Date'] = pd.to_datetime(hist_copy['Date']).dt.strftime('%Y-%m-%d')
                 updated_df = pd.concat([hist_copy[hist_copy['Date'] != save_date_str], pd.DataFrame([new_entry])], ignore_index=True)
                 
                 conn.update(worksheet="trend", data=updated_df.sort_values('Date').reset_index(drop=True))
-                st.success(f"✅ {save_date_str} 데이터가 한치의 오차 없이 기록되었습니다!")
-                del st.session_state['tmp_kospi'] # 완료 후 세션 삭제
+                st.success("✅ 시트에 완벽하게 기록되었습니다!")
+                
+                # 저장 후 상태 초기화
+                st.session_state['editor_active'] = False
+                st.cache_data.clear()
                 st.rerun()
+                
             except Exception as e:
-                st.error(f"❌ 기록 실패: {e}")
-            
+                st.error(f"❌ 기록 실패: {e}")            
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
