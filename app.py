@@ -190,13 +190,22 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
+# --- [v39.0 데이터 정제: 열 삭제 반영 및 목표가 추가] ---
 if not full_df.empty:
-    # 1. 숫자 데이터 타입 통합 변환
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
+    # 🎯 '매입후최저가'는 제외하고 '목표가'를 포함하여 숫자 변환
+    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가']
     for c in target_num_cols:
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        elif c == '목표가':
+            full_df['목표가'] = 0 # 시트에 열이 아직 없다면 기본값 생성
 
+    # 🎯 상승 여력 계산 (목표가 기준)
+    full_df['목표대비상승여력'] = full_df.apply(
+        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, 
+        axis=1
+    )
+    
     # 2. [최적화] 표준 날짜 엔진 (YYYY-MM-DD 대응)
     if '최초매입일' in full_df.columns:
         # 표준 형식은 추가 옵션 없이도 가장 빠르게 해석됩니다.
@@ -338,13 +347,42 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
 # --- [v36.64-RS: 인텔리전스 전략 보고서 (들여쓰기 교정본)] ---
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
-            # 1. 수치 데이터 추출 및 계산 (내부 연산용)
-            s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
-            buy_p = s_row['매입단가']
-            curr_p = s_row['현재가']
-            total_ret = s_row['누적수익률']
-            high_52w = s_row.get('52주최고가', 0)
-            post_high = s_row.get('매입후최고가', curr_p)
+            # --- [v39.0 UI: 목표가 기반 전략 모니터] ---
+        s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
+        curr_p = s_row['현재가']
+        target_p = s_row.get('목표가', 0)
+        upside = s_row.get('목표대비상승여력', 0)
+        high_post = s_row.get('매입후최고가', curr_p) # 최저가 대신 최고가만 참조
+
+        st.markdown(f"##### 🔍 {sel} 실시간 전략 모니터")
+        
+        # UI 레이아웃 구성
+        col_info, col_target = st.columns([1, 1])
+
+        with col_info:
+            st.markdown(f"""
+                <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 180px;'>
+                    <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📈 가격 모니터링</div>
+                    <div style='margin-bottom: 8px;'>현재가: <b>{curr_p:,.0f}원</b></div>
+                    <div style='margin-bottom: 8px;'>매입후 최고가: <span style='color: #FF4B4B;'>{high_post:,.0f}원</span></div>
+                    <div style='font-size: 0.8rem; color: #888;'>* 매입후최저가 지표는 관리 중단됨</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with col_target:
+            # 🎯 시트 '목표가'와 '상승여력' 강조
+            st.markdown(f"""
+                <div style='background: rgba(255,215,0,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,215,0,0.3); height: 180px; text-align: center;'>
+                    <div style='color: #FFD700; font-size: 0.9rem; font-weight: bold; margin-bottom: 15px;'>🎯 시트 설정 목표가</div>
+                    <div style='font-size: 1.6rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
+                    <div style='margin-top: 15px;'>
+                        <div style='font-size: 0.75rem; opacity: 0.7;'>기대 상승 여력</div>
+                        <div style='font-size: 1.8rem; font-weight: bold; color: {"#00FF00" if upside > 0 else "#FF4B4B"};'>
+                            {upside:+.1f}%
+                        </div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
             
             # 보유일수 (표출은 안 하지만 연환산수익률 계산용으로 사용)
             days = s_row.get('보유일수', 365)
@@ -519,6 +557,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
