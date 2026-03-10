@@ -451,52 +451,79 @@ with st.sidebar:
 
 # 수정 후: 앱을 켜는 순간의 '오늘 날짜'가 자동으로 들어감
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
-    # --- [v36.99 패치: 공백 불일치 해결 버전] ---
+    # --- [v37.0 패치: 과거 날짜 소급 저장 정밀화 로직] ---
     if st.button(f"🚀 {sel_date} 결과 확정 저장"):
         try:
             save_date_str = sel_date.strftime('%Y-%m-%d')
-            m_status = get_market_status()
-            kospi_val = float(m_status['KOSPI']['val'].replace(',', ''))
+            today_str = datetime.now().strftime('%Y-%m-%d')
             
-            # 1. 새 행 생성
-            new_entry = pd.Series(index=history_df.columns, dtype='object')
-            new_entry['날짜'] = save_date_str
-            new_entry['KOSPI'] = kospi_val
+            # 1. 과거 날짜 저장인지 확인
+            is_past_save = save_date_str < today_str
             
-            # 2. 계좌별 수익률 매핑
-            for acc in full_df['계좌명'].unique():
-                acc_df = full_df[full_df['계좌명'] == acc]
-                buy_sum = acc_df['매입금액'].sum()
-                eval_sum = acc_df['평가금액'].sum()
-                acc_ret = ((eval_sum / buy_sum - 1) * 100) if buy_sum > 0 else 0
-                
-                col_name = f"{acc.replace('투자', '')}수익률"
-                if col_name in new_entry.index:
-                    new_entry[col_name] = acc_ret
-                
-                # 🎯 3. [교정 지점] 종목명에서 공백을 완전히 제거하여 시트 열 제목과 맞춤
-                for _, row in acc_df.iterrows():
-                    # .replace(' ', '')를 추가하여 'KODEX 200'을 'KODEX200'으로 변환
-                    clean_stock_name = row['종목명'].replace(' ', '').strip()
-                    stock_col = f"{acc.replace('투자', '')}_{clean_stock_name}수익률"
-                    
-                    if stock_col in new_entry.index:
-                        new_entry[stock_col] = row['누적수익률']
-                    else:
-                        # 디버깅용: 만약 여전히 못 찾는다면 로그 출력 (콘솔 확인용)
-                        print(f"DEBUG: 컬럼 매칭 실패 - {stock_col}")
+            with st.status(f"📡 {save_date_str} 데이터 정합성 검증 중...", expanded=True) as status:
+                # 2. 시장 지수(KOSPI) 확보
+                if is_past_save:
+                    # 과거 날짜라면 야후 파이낸스에서 그날의 종가 가져오기
+                    import yfinance as yf
+                    kospi_hist = yf.Ticker("^KS11").history(start=sel_date, end=sel_date + timedelta(days=1))
+                    kospi_val = kospi_hist['Close'].iloc[0] if not kospi_hist.empty else 0
+                else:
+                    # 오늘이라면 실시간 지수 사용
+                    m_status = get_market_status()
+                    kospi_val = float(m_status['KOSPI']['val'].replace(',', ''))
 
-            # 4. 시트 업데이트 실행
-            # 기존 데이터와 병합 (동일 날짜는 덮어쓰기)
-            history_df_tmp = history_df.copy()
-            if 'Date' in history_df_tmp.columns:
-                history_df_tmp['Date'] = pd.to_datetime(history_df_tmp['Date']).dt.strftime('%Y-%m-%d')
-                history_df_tmp = history_df_tmp[history_df_tmp['Date'] != save_date_str]
-            
-            updated_trend = pd.concat([history_df_tmp, pd.DataFrame([new_entry])], ignore_index=True)
-            conn.update(worksheet="trend", data=updated_trend)
-            
-            st.success(f"✅ {save_date_str} 결과가 모든 종목(KODEX 포함) 누락 없이 저장되었습니다!")
+                # 3. 새 행 생성 및 기초 정보 입력
+                new_entry = pd.Series(index=history_df.columns, dtype='object')
+                new_entry['날짜'] = save_date_str
+                new_entry['KOSPI'] = kospi_val
+
+                # 4. 계좌별/종목별 수익률 계산
+                for acc in full_df['계좌명'].unique():
+                    acc_df = full_df[full_df['계좌명'] == acc]
+                    
+                    # 🎯 과거 저장일 경우, 종목별 과거 종가를 가져와 수익률 재계산
+                    acc_eval_sum = 0
+                    acc_buy_sum = acc_df['매입금액'].sum()
+                    
+                    for _, row in acc_df.iterrows():
+                        stock_name = row['종목명'].strip()
+                        clean_stock_name = stock_name.replace(' ', '')
+                        ticker = str(row.get('종목코드', '')).strip()
+                        
+                        # 과거 종가 혹은 실시간가 결정
+                        target_price = row['현재가'] # 기본은 실시간
+                        if is_past_save and ticker and ticker != 'nan':
+                            # 타임머신 가동: 과거 그날의 종가 수집
+                            hist_data = yf.Ticker(ticker).history(start=sel_date, end=sel_date + timedelta(days=1))
+                            if not hist_data.empty:
+                                target_price = hist_data['Close'].iloc[0]
+                        
+                        # 재계산된 수익률
+                        stock_profit_rate = ((target_price / row['매입단가']) - 1) * 100
+                        acc_eval_sum += (target_price * row['수량'])
+                        
+                        # 종목별 수익률 칸 채우기
+                        stock_col = f"{acc.replace('투자', '')}_{clean_stock_name}수익률"
+                        if stock_col in new_entry.index:
+                            new_entry[stock_col] = stock_profit_rate
+
+                    # 계좌 전체 수익률 칸 채우기
+                    acc_ret = ((acc_eval_sum / acc_buy_sum) - 1) * 100 if acc_buy_sum > 0 else 0
+                    acc_col = f"{acc.replace('투자', '')}수익률"
+                    if acc_col in new_entry.index:
+                        new_entry[acc_col] = acc_ret
+
+                # 5. 시트 업데이트
+                history_df_tmp = history_df.copy()
+                if 'Date' in history_df_tmp.columns:
+                    history_df_tmp['Date'] = pd.to_datetime(history_df_tmp['Date']).dt.strftime('%Y-%m-%d')
+                    history_df_tmp = history_df_tmp[history_df_tmp['Date'] != save_date_str]
+                
+                updated_trend = pd.concat([history_df_tmp, pd.DataFrame([new_entry])], ignore_index=True)
+                conn.update(worksheet="trend", data=updated_trend)
+                
+                status.update(label=f"✅ {save_date_str} 데이터가 정확하게 기록되었습니다!", state="complete")
+
             st.cache_data.clear()
             st.rerun()
 
@@ -504,6 +531,7 @@ with st.sidebar:
             st.error(f"❌ 저장 실패: {e}")
             
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
