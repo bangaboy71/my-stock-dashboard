@@ -190,28 +190,23 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
-# --- [v39.2 패치: KeyError 방어 및 컬럼 정규화] ---
+
+# --- [v39.3 데이터 정제: 상승여력 연산 강화] ---
 if not full_df.empty:
-    # 1. 컬럼 이름의 앞뒤 공백을 제거하여 매칭 확률을 높입니다.
+    # 컬럼 공백 제거 및 숫자형 변환 (필수 열 리스트)
     full_df.columns = [c.strip() for c in full_df.columns]
+    num_cols = ['수량', '매입단가', '현재가', '52주최고가', '매입후최고가', '목표가']
+    
+    for c in num_cols:
+        if c in full_df.columns:
+            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        elif c == '목표가':
+            full_df['목표가'] = 0 # 목표가 열이 없으면 0으로 생성
 
-    # 2. '목표가' 컬럼이 실제로 존재하는지 확인 후 처리
-    if '목표가' in full_df.columns:
-        # 숫자형 변환 (콤마 제거 및 에러 처리)
-        full_df['목표가'] = pd.to_numeric(full_df['목표가'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    else:
-        # 🎯 [핵심] 만약 시트에서 못 읽어왔다면, 에러 대신 0으로 채워진 컬럼을 임시로 만듭니다.
-        full_df['목표가'] = 0
-
-    # 3. '현재가' 컬럼도 안전하게 확보 (KeyError 방지)
-    if '현재가' not in full_df.columns:
-        full_df['현재가'] = 0
-
-    # 4. 람다 함수 대신 안전한 벡터 연산으로 상승여력 계산
-    # .get()을 사용하여 컬럼이 없을 경우를 한 번 더 대비합니다.
+    # 🎯 상승 여력 계산 (목표가 대비 현재가)
+    # 현재가가 0이거나 목표가가 현재가보다 작을 경우를 대비해 처리
     full_df['목표대비상승여력'] = full_df.apply(
-        lambda x: ((x.get('목표가', 0) / x.get('현재가', 1) - 1) * 100) 
-        if x.get('현재가', 0) > 0 and x.get('목표가', 0) > 0 else 0,
+        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0,
         axis=1
     )
     
@@ -358,52 +353,79 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         
         # 🎯 [핵심] if 문 뒤에는 반드시 아래처럼 들여쓰기가 되어야 합니다.
         if res:
-            s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
-            curr_p = s_row['현재가']
-            target_p = s_row.get('목표가', 0)
-            upside = s_row.get('목표대비상승여력', 0)
-            high_post = s_row.get('매입후최고가', curr_p)
+            # --- [v39.3 UI: 전략 보고서 & 리스크 경보 복구] ---
+        s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
+        
+        # 데이터 변수 할당
+        curr_p = s_row['현재가']
+        buy_p = s_row['매입단가']
+        target_p = s_row['목표가']
+        high_post = s_row.get('매입후최고가', curr_p)
+        upside = s_row['목표대비상승여력']
+        
+        # 🎯 전략 가이드라인 계산
+        sl_price = buy_p * 0.85      # 손절 가이드 (-15%)
+        tp_price = high_post * 0.80  # 익절/추세 가이드 (최고가 대비 -20%)
 
-            st.markdown(f"##### 🔍 {sel} 인텔리전스 전략 보고서")
-            
-            col_res, col_strat = st.columns([1, 1])
+        st.markdown(f"##### 🔍 {sel} 실시간 전략 모니터")
+        
+        col_res, col_strat = st.columns([1, 1])
 
-            with col_res:
-                # RESEARCH_DATA 기반 재무 지표 (RESEARCH_DATA 딕셔너리 참조)
-                metrics_html = "".join([f"<tr><td>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span style='color:#FFD700;'>{m[2]}</span></td></tr>" for m in res['metrics']])
-                st.markdown(f"""
-                    <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 200px;'>
-                        <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 핵심 재무 목표 (Long-term)</div>
-                        <table style='width: 100%; font-size: 0.9rem;'>{metrics_html}</table>
-                        <div style='margin-top: 10px; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;'>
-                            <span style='color: #FFD700;'>💡 인사이트:</span> {res['implications'][0]}
+        with col_res:
+            # 📋 재무 및 가격 정보 (기존 스타일)
+            st.markdown(f"""
+                <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 180px;'>
+                    <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 가격 및 지표 모니터</div>
+                    <table style='width: 100%; font-size: 0.95rem;'>
+                        <tr><td>현재가</td><td style='text-align:right;'><b>{curr_p:,.0f}원</b></td></tr>
+                        <tr><td>매입단가</td><td style='text-align:right; color:#888;'>{buy_p:,.0f}원</td></tr>
+                        <tr><td>매입후 최고가</td><td style='text-align:right; color:#FF4B4B;'>{high_post:,.0f}원</td></tr>
+                    </table>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with col_strat:
+            # 🎯 목표가 및 상승여력 (폰트 크기 조정)
+            st.markdown(f"""
+                <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.2); height: 180px;'>
+                    <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>⚡ 목표가 분석</div>
+                    <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px;'>
+                        <div>
+                            <div style='font-size: 0.75rem; color: #FFD700;'>🎯 설정 목표가</div>
+                            <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
+                        </div>
+                        <div>
+                            <div style='font-size: 0.75rem; opacity: 0.6;'>기대상승여력</div>
+                            <div style='font-size: 1.2rem; font-weight: bold; color: {"#00FF00" if upside > 0 else "#FF4B4B"};'>
+                                {upside:+.1f}%
+                            </div>
                         </div>
                     </div>
-                """, unsafe_allow_html=True)
-
-            with col_strat:
-                # 🎯 시트 '목표가' 기반 실시간 모니터
-                st.markdown(f"""
-                    <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.2); height: 200px;'>
-                        <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>⚡ 실시간 전략 모니터 (Target Base)</div>
-                        <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px;'>
-                            <div>
-                                <div style='font-size: 0.75rem; opacity: 0.6;'>현재가</div>
-                                <div style='font-size: 1.2rem; font-weight: bold;'>{curr_p:,.0f}원</div>
-                            </div>
-                            <div>
-                                <div style='font-size: 0.75rem; color: #FFD700;'>🎯 시트 목표가</div>
-                                <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
-                            </div>
-                            <div style='grid-column: span 2; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px; margin-top: 5px;'>
-                                <div style='font-size: 0.75rem; opacity: 0.6;'>기대 상승 여력</div>
-                                <div style='font-size: 1.8rem; font-weight: bold; color: {"#00FF00" if upside > 0 else "#FF4B4B"};'>
-                                    {upside:+.1f}%
-                                </div>
-                            </div>
-                        </div>
+                    <div style='margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem;'>
+                        💡 <b>상태:</b> {sel} 종목은 현재 목표가 대비 <span style='color:#FFD700;'>{(target_p - curr_p):,.0f}원</span> 아래에 있습니다.
                     </div>
-                """, unsafe_allow_html=True)
+                </div>
+            """, unsafe_allow_html=True)
+
+        # 🚨 [복구] 익절/손절 실시간 경보 시스템
+        st.markdown(f"""
+            <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"}; margin-top: 15px;'>
+                <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>🚨 익절/손절 실시간 경보 시스템</div>
+                <div style='display: flex; justify-content: space-between; font-size: 0.95rem;'>
+                    <span>🛡️ <b>손절 가이드 (-15%):</b> {sl_price:,.0f}원 <span style='font-size:0.8rem; opacity:0.6;'>(매입 {buy_p:,.0f} 대비)</span></span>
+                    <span style='color: {"#FF4B4B" if curr_p <= sl_price else "#00FF00"}; font-weight: bold;'>
+                        {"⚠️ 즉시 대응" if curr_p <= sl_price else "✅ 매우 안전"}
+                    </span>
+                </div>
+                <div style='display: flex; justify-content: space-between; font-size: 0.95rem; margin-top: 8px;'>
+                    <span>🚨 <b>익절 가이드 (-20%):</b> {tp_price:,.0f}원 <span style='font-size:0.8rem; opacity:0.6;'>(최고 {high_post:,.0f} 대비)</span></span>
+                    <span style='color: {"#FFA500" if curr_p <= tp_price else "#00FF00"}; font-weight: bold;'>
+                        {"⚠️ 추세 이탈" if curr_p <= tp_price else "✅ 추세 유지"}
+                    </span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
         else:
             # RESEARCH_DATA에 없는 종목일 경우 메시지 표시
             st.info(f"💡 {sel} 종목은 상세 분석 데이터가 없습니다. 시트의 현재 수치 위주로 확인하세요.")
@@ -581,6 +603,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
