@@ -440,7 +440,7 @@ with st.sidebar:
     st.divider()
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
     
-# --- [v37.8 패치: 과거 데이터 강제 복구 및 이름표 일치화] ---
+# --- [v37.9 패치: 시리즈 앰비규어스 오류 해결 버전] ---
     if st.button(f"🚀 {sel_date} 결과 확정 저장"):
         try:
             save_date_str = sel_date.strftime('%Y-%m-%d')
@@ -448,71 +448,75 @@ with st.sidebar:
             is_past = save_date_str < today_str
             
             with st.status(f"📡 {save_date_str} 데이터 정밀 복구 중...", expanded=True) as status:
-                # 🎯 1. KOSPI 지수 정밀 수집 (0 입력 방지)
-                k_val = 0
+                # 🎯 1. KOSPI 지수 정밀 수집 (스칼라 추출 보강)
+                k_val = 0.0
                 if is_past:
-                    # 지정일 포함 전후 5일 데이터를 긁어 가장 정확한 날짜의 종가를 선택
                     k_df = yf.download("^KS11", 
-                                       start=(sel_date - timedelta(days=3)).strftime('%Y-%m-%d'),
+                                       start=(sel_date - timedelta(days=5)).strftime('%Y-%m-%d'),
                                        end=(sel_date + timedelta(days=2)).strftime('%Y-%m-%d'), 
                                        progress=False)
                     if not k_df.empty:
-                        # 지정한 날짜와 같거나 그 이전 가장 가까운 영업일 종가 채택
-                        k_val = k_df[k_df.index.date <= sel_date]['Close'].iloc[-1]
+                        # .iloc[-1] 뒤에 .item()이나 float()을 붙여 단일 숫자로 강제 변환
+                        # 최근 yf는 Close가 멀티인덱스일 수 있어 ['Close'] 선택 후 첫 번째 열을 지정
+                        temp_series = k_df[k_df.index.date <= sel_date]['Close']
+                        if not temp_series.empty:
+                            k_val = float(temp_series.iloc[-1])
                 
-                # 데이터 수집 실패 시 실시간 데이터 활용 (오늘인 경우)
+                # 수집 실패 시 실시간 데이터 활용
                 if k_val == 0:
                     k_val = float(m_status["KOSPI"]["val"].replace(",", ""))
 
-                # 🎯 2. 새 데이터 행 준비 (KOSPI/코스피 열 이름 대응)
+                # 🎯 2. 새 데이터 행 준비
                 new_entry = pd.Series(index=history_df.columns, dtype='object')
                 new_entry['Date'] = save_date_str
                 if '날짜' in new_entry.index: new_entry['날짜'] = save_date_str
-                
-                # 시트의 열 제목이 'KOSPI'든 '코스피'든 모두 대응
                 if 'KOSPI' in new_entry.index: new_entry['KOSPI'] = k_val
                 if '코스피' in new_entry.index: new_entry['코스피'] = k_val
 
-                # 🎯 3. 계좌 및 종목별 수익률 재계산 (실시간 데이터 혼입 방지)
+                # 🎯 3. 계좌 및 종목별 수익률 재계산
                 for acc in full_df['계좌명'].unique():
                     acc_df = full_df[full_df['계좌명'] == acc]
-                    acc_eval_sum = 0
-                    acc_buy_sum = acc_df['매입금액'].sum()
+                    acc_eval_sum = 0.0
+                    acc_buy_sum = float(acc_df['매입금액'].sum())
                     
                     for _, row in acc_df.iterrows():
                         ticker = str(row.get('종목코드', '')).strip()
-                        target_price = row['현재가'] # 기본값
+                        # 현재가도 안전하게 float 변환
+                        target_price = float(row['현재가']) 
                         
                         if is_past and ticker and ticker != 'nan':
-                            # 과거 종가 정밀 추적
                             h_df = yf.download(ticker, 
-                                               start=(sel_date - timedelta(days=3)).strftime('%Y-%m-%d'),
+                                               start=(sel_date - timedelta(days=5)).strftime('%Y-%m-%d'),
                                                end=(sel_date + timedelta(days=2)).strftime('%Y-%m-%d'), 
                                                progress=False)
                             if not h_df.empty:
-                                target_price = h_df[h_df.index.date <= sel_date]['Close'].iloc[-1]
+                                temp_p_series = h_df[h_df.index.date <= sel_date]['Close']
+                                if not temp_p_series.empty:
+                                    # 🎯 핵심: 단일 값으로 추출
+                                    target_price = float(temp_p_series.iloc[-1])
                         
-                        # 연산 및 매핑
-                        s_ret = ((target_price / row['매입단가']) - 1) * 100
-                        acc_eval_sum += (target_price * row['수량'])
+                        # 수익률 연산
+                        buy_price = float(row['매입단가'])
+                        s_ret = ((target_price / buy_price) - 1) * 100 if buy_price > 0 else 0
+                        acc_eval_sum += (target_price * float(row['수량']))
                         
-                        # 종목별 열 매핑
+                        # 종목 매핑
                         s_col = find_matching_col(history_df, acc, row['종목명'])
                         if s_col: new_entry[s_col] = s_ret
 
-                    # 계좌 전체 수익률
+                    # 계좌 수익률
                     a_ret = ((acc_eval_sum / acc_buy_sum) - 1) * 100 if acc_buy_sum > 0 else 0
                     a_col = find_matching_col(history_df, acc)
                     if a_col: new_entry[a_col] = a_ret
 
-                # 🎯 4. 시트 업데이트 (기존 잘못된 3월 9일 데이터 삭제 후 재삽입)
+                # 🎯 4. 시트 업데이트
                 hist_tmp = history_df.copy()
                 hist_tmp['Date'] = pd.to_datetime(hist_tmp['Date']).dt.strftime('%Y-%m-%d')
                 updated_trend = pd.concat([hist_tmp[hist_tmp['Date'] != save_date_str], pd.DataFrame([new_entry])], ignore_index=True)
                 updated_trend = updated_trend.sort_values('Date').reset_index(drop=True)
                 
                 conn.update(worksheet="trend", data=updated_trend)
-                status.update(label=f"✅ {save_date_str} 데이터가 실제 종가 기준으로 복구되었습니다!", state="complete")
+                status.update(label=f"✅ {save_date_str} 데이터 복구 및 저장 완료!", state="complete")
 
             st.cache_data.clear()
             st.rerun()
@@ -521,6 +525,7 @@ with st.sidebar:
             st.error(f"❌ 저장 실패: {e}")
             
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
