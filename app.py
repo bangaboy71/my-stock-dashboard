@@ -191,54 +191,47 @@ except Exception as e:
     st.stop()
 
 if not full_df.empty:
-    # 🎯 1. 숫자 데이터 타입 통합 변환 (매입후최저가 삭제, 목표가 추가)
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가']
-    
-    # 컬럼명 공백 제거 (KeyError 방지용 안전장치)
+    # 🎯 1. 컬럼명 공백 제거 (구글 시트의 보이지 않는 공백 방어)
     full_df.columns = [c.strip() for c in full_df.columns]
 
+    # 🎯 2. 숫자 데이터 타입 통합 변환 (매입후최저가 삭제, 목표가 추가)
+    # 리스트에 '목표가'가 반드시 있어야 합니다!
+    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가']
+    
     for c in target_num_cols:
         if c in full_df.columns:
-            # 콤마 제거 후 숫자로 변환, 실패 시 0으로 채움
+            # 콤마 제거 후 숫자로 변환
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         elif c == '목표가':
-            # 시트에 '목표가' 열이 아예 없을 경우를 대비해 0으로 초기화
+            # 🎯 안전장치: 시트에서 '목표가'를 못 읽어왔을 경우 앱이 죽지 않게 0으로 생성
             full_df['목표가'] = 0
 
-    # 🎯 2. 기대 상승 여력 계산 로직 (숫자로 변환된 후 실행되어야 함)
-    full_df['목표대비상승여력'] = full_df.apply(
-        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, 
-        axis=1
-    )
-    
-    # 2. [최적화] 표준 날짜 엔진 (YYYY-MM-DD 대응)
+    # 🎯 3. [최적화] 표준 날짜 및 보유일수 계산
     if '최초매입일' in full_df.columns:
-        # 표준 형식은 추가 옵션 없이도 가장 빠르게 해석됩니다.
         full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
-        
-        # 오늘 날짜와의 차이 계산 (벡터 연산으로 속도 최적화)
         today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         full_df['보유일수'] = (today_date - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int)
-        
-        # 연환산 수익률 에러 방지 (최소 1일 보정)
         full_df['보유일수'] = full_df['보유일수'].clip(lower=1)
     else:
         full_df['보유일수'] = 365
 
-    # 3. 실시간 가격 수집 (v36.64 핵심 로직)
+    # 🎯 4. 실시간 가격 수집
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
     
-    # 4. 수익 지표 및 리스크 관제용 연산
+    # 🎯 5. 기대 상승 여력 계산 (KeyError 방지형 로직)
+    # 현재가와 목표가 컬럼이 확실히 있을 때만 계산합니다.
+    full_df['목표대비상승여력'] = full_df.apply(
+        lambda x: ((x.get('목표가', 0) / x.get('현재가', 1) - 1) * 100) 
+        if x.get('현재가', 0) > 0 and x.get('목표가', 0) > 0 else 0, 
+        axis=1
+    )
+
+    # 🎯 6. 나머지 수익 지표 연산
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
-    full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
-    
-    # 수익률 계산 (분모가 0인 경우를 대비한 replace 처리)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
@@ -533,4 +526,5 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
