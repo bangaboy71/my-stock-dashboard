@@ -438,17 +438,90 @@ with st.sidebar:
     st.header("⚙️ 관리 메뉴")
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
     st.divider()
-    sel_date = st.date_input("결과 저장 날짜", value=pd.Timestamp("2026-03-06"))
-    if st.button(f"{sel_date} 결과 확정 저장"):
-        save_ts = pd.Timestamp(sel_date)
-        original_cols = [c for c in history_df.columns if c != 'KOSPI_Relative']
-        new_row = pd.Series(index=original_cols, dtype='object')
-        new_row['Date'] = save_ts
-        new_row['KOSPI'] = get_market_status()['KOSPI']['val'].replace(',', '')
-        # ... (이전 v36.39 저장 로직 동일 적용)
-        st.success(f"✅ {sel_date} 저장 완료!")
+    sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
+    # --- [v37.7 패치: 과거 데이터 정밀 복구 및 저장 엔진] ---
+    if st.button(f"🚀 {sel_date} 결과 확정 저장"):
+        try:
+            save_date_str = sel_date.strftime('%Y-%m-%d')
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            is_past = save_date_str < today_str
+            
+            with st.status(f"🔍 {save_date_str} 데이터를 정밀 수집 중입니다...", expanded=True) as status:
+                import yfinance as yf
+                
+                # 1. KOSPI 지수 정밀 수집 (과거/현재 구분)
+                if is_past:
+                    # 과거 날짜는 해당일의 종가(Close)를 가져옵니다.
+                    k_df = yf.Ticker("^KS11").history(start=sel_date, end=sel_date + timedelta(days=1))
+                    kospi_val = k_df['Close'].iloc[-1] if not k_df.empty else 0
+                else:
+                    # 오늘 날짜는 실시간 지수 사용
+                    m_status = get_market_status()
+                    kospi_val = float(m_status['KOSPI']['val'].replace(',', ''))
+
+                # 2. 새 데이터 행(Entry) 준비
+                # 시트의 모든 열 이름을 가져와서 빈 그릇을 만듭니다.
+                new_entry = pd.Series(index=history_df.columns, dtype='object')
+                
+                # 🎯 [해결] 날짜/Date 열 중복 대응 (둘 다 채워 빈칸 방지)
+                if '날짜' in new_entry.index: new_entry['날짜'] = save_date_str
+                if 'Date' in new_entry.index: new_entry['Date'] = save_date_str
+                new_entry['KOSPI'] = kospi_val
+
+                # 3. 계좌 및 종목별 수익률 재계산 (타임머신 로직)
+                for acc in full_df['계좌명'].unique():
+                    acc_df = full_df[full_df['계좌명'] == acc]
+                    acc_eval_sum = 0
+                    acc_buy_sum = acc_df['매입금액'].sum()
+                    
+                    for _, row in acc_df.iterrows():
+                        stock_name = row['종목명'].strip()
+                        ticker = str(row.get('종목코드', '')).strip()
+                        
+                        # 🎯 과거 종가 또는 실시간가 결정
+                        target_price = row['현재가']
+                        if is_past and ticker and ticker != 'nan':
+                            # 해당 날짜의 종가를 가져옵니다.
+                            h_data = yf.Ticker(ticker).history(start=sel_date, end=sel_date + timedelta(days=1))
+                            if not h_data.empty:
+                                target_price = h_data['Close'].iloc[-1]
+                        
+                        # 수익률 연산
+                        s_ret = ((target_price / row['매입단가']) - 1) * 100
+                        acc_eval_sum += (target_price * row['수량'])
+                        
+                        # 종목별 수익률 칸 채우기 (공백 제거 매핑)
+                        s_col = find_matching_col(history_df, acc, stock_name)
+                        if s_col: new_entry[s_col] = s_ret
+
+                    # 계좌 전체 수익률 칸 채우기
+                    a_ret = ((acc_eval_sum / acc_buy_sum) - 1) * 100 if acc_buy_sum > 0 else 0
+                    a_col = find_matching_col(history_df, acc)
+                    if a_col: new_entry[a_col] = a_ret
+
+                # 4. 시트 병합 (기존 3월 9일 데이터가 있다면 덮어쓰기)
+                history_df_tmp = history_df.copy()
+                # 날짜 형식 통일 후 중복 행 제거
+                if 'Date' in history_df_tmp.columns:
+                    history_df_tmp['Date'] = pd.to_datetime(history_df_tmp['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                    history_df_tmp = history_df_tmp[history_df_tmp['Date'] != save_date_str]
+                
+                updated_trend = pd.concat([history_df_tmp, pd.DataFrame([new_entry])], ignore_index=True)
+                # 날짜순 정렬하여 저장
+                updated_trend = updated_trend.sort_values('Date').reset_index(drop=True)
+                
+                # 5. 구글 시트 전송
+                conn.update(worksheet="trend", data=updated_trend)
+                status.update(label=f"✅ {save_date_str} 데이터가 완벽하게 복구되었습니다!", state="complete")
+
+            st.cache_data.clear()
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"❌ 저장 실패: {e}")
 
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
