@@ -440,91 +440,81 @@ with st.sidebar:
     st.divider()
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
    
-# --- [v38.6 패치: 3월 9일 전 종목 팩트 체크 및 강제 주입 버전] ---
-    if st.button(f"🚀 {sel_date} 결과 확정 저장"):
-        try:
-            save_date_str = sel_date.strftime('%Y-%m-%d')
-            
-            # 🎯 [데이터 검증 센터] 3월 9일의 실제 시장 종가 (사용자님 보유 종목 전수 조사)
-            # 이 수치들은 3월 10일의 반등이 전혀 섞이지 않은 3월 9일 장 마감 기준입니다.
-            BLACK_MONDAY_PRICES = {
-                "005930": 111400.0, # 삼성전자
-                "033780": 158500.0, # KT&G
-                "373220": 427000.0, # LG에너지솔루션
-                "086280": 243500.0, # 현대글로비스
-                "005387": 282500.0, # 현대차2우B
-                "498400": 16515.0,  # KODEX 200타겟위클리커버드콜 (팩트)
-                "237690": 132000.0, # 에스티팜
-                "095610": 34500.0,  # 테스
-                "103590": 85300.0,  # 일진전기
-                "402340": 62100.0   # SK스퀘어
-            }
+# --- [v38.7 패치: 데이터 확정권 및 수동 보정 시스템] ---
+    st.header("⚙️ 기록 관리자 모드")
+    sel_date = st.date_input("📅 저장/복구 날짜 선택", value=datetime.now())
+    
+    if st.button(f"🔍 {sel_date} 데이터 불러오기/검증"):
+        save_date_str = sel_date.strftime('%Y-%m-%d')
+        is_past = save_date_str < datetime.now().strftime('%Y-%m-%d')
+        
+        # 3월 9일 팩트 기본 세팅
+        if save_date_str == "2026-03-09":
+            st.session_state['tmp_kospi'] = 5251.87
+            st.session_state['tmp_prices'] = {"KODEX200타겟위클리커버드콜": 16515.0, "삼성전자": 111400.0} # 주요 팩트
+        else:
+            k_tk = yf.Ticker("^KS11")
+            k_h = k_tk.history(period="1d")
+            st.session_state['tmp_kospi'] = float(k_h['Close'].iloc[-1]) if not k_h.empty else 0.0
 
-            with st.status(f"📡 {save_date_str} 데이터 무결성 검증 및 복구 중...", expanded=True) as status:
-                # 1. KOSPI 지수 강제 교정 (팩트: 5251.87)
-                k_val = 5251.87 if save_date_str == "2026-03-09" else float(m_status["KOSPI"]["val"].replace(",",""))
+    # 데이터가 로드된 상태라면 편집창 활성화
+    if 'tmp_kospi' in st.session_state:
+        st.divider()
+        st.subheader(f"🛠️ {sel_date} 수치 최종 확정")
+        
+        # 1. KOSPI 지수 확정
+        final_kospi = st.number_input("KOSPI 지수 확정", value=st.session_state['tmp_kospi'])
+        
+        # 2. 종목별 종가 확인 및 수정 (모든 종목 리스팅)
+        st.write("📋 종목별 종가(Close)를 확인하세요.")
+        final_prices = {}
+        for idx, row in full_df.iterrows():
+            s_name = row['종목명']
+            # 기존에 저장된 팩트가 있으면 우선 적용, 없으면 현재가 노출
+            default_p = st.session_state.get('tmp_prices', {}).get(s_name, float(row['현재가']))
+            final_prices[s_name] = st.number_input(f"{s_name} 종가", value=default_p, key=f"edit_{s_name}")
 
+        if st.button("🚀 위 수치로 시트 최종 기록"):
+            try:
+                save_date_str = sel_date.strftime('%Y-%m-%d')
                 new_entry = pd.Series(index=history_df.columns, dtype='object')
                 new_entry['Date'] = save_date_str
                 if '날짜' in new_entry.index: new_entry['날짜'] = save_date_str
-                if 'KOSPI' in new_entry.index: new_entry['KOSPI'] = k_val
+                new_entry['KOSPI'] = final_kospi
 
-                # 2. 계좌별/종목별 수익률 정밀 연산
+                # 계좌별 수익률 연산
                 for acc in full_df['계좌명'].unique():
                     acc_df = full_df[full_df['계좌명'] == acc]
                     acc_eval_sum = 0.0
                     acc_buy_total = float(acc_df['매입금액'].sum())
                     
-                    for _, row in acc_df.iterrows():
-                        s_name = row['종목명'].strip()
-                        raw_ticker = str(row.get('종목코드', '')).split('.')[0].zfill(6)
+                    for _, r in acc_df.iterrows():
+                        target_p = final_prices[r['종목명']]
+                        buy_p = float(r['매입단가'])
                         
-                        target_price = 0.0
-                        
-                        # 🎯 3월 9일인 경우 무조건 팩트 테이블에서만 가져옴 (현재가 혼입 100% 차단)
-                        if save_date_str == "2026-03-09":
-                            target_price = BLACK_MONDAY_PRICES.get(raw_ticker, 0.0)
-                            # 만약 팩트 테이블에 없는 종목이면 그때만 크롤링 시도
-                            if target_price == 0:
-                                try:
-                                    url = f"https://finance.naver.com/item/sise_day.naver?code={raw_ticker}&page=1"
-                                    res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                                    soup = BeautifulSoup(res.text, 'html.parser')
-                                    price_text = soup.select('table.type2 tr td.num')[1].text.replace(',','')
-                                    target_price = float(price_text)
-                                except: target_price = float(row['현재가']) # 최후의 수단
-                        else:
-                            # 3월 9일이 아닌 평소에는 실시간 현재가 사용
-                            target_price = float(row['현재가'])
+                        # 종목별 수익률 기록
+                        s_col = find_matching_col(history_df, acc, r['종목명'])
+                        if s_col: new_entry[s_col] = ((target_p / buy_p) - 1) * 100
+                        acc_eval_sum += (target_p * float(r['수량']))
 
-                        # 수익률 및 자산 합산 연산
-                        buy_p = float(row['매입단가'])
-                        stock_ret = ((target_price / buy_p) - 1) * 100
-                        acc_eval_sum += (target_price * float(row['수량']))
-                        
-                        # 종목별 수익률 칸 채우기
-                        s_col = find_matching_col(history_df, acc, s_name)
-                        if s_col: new_entry[s_col] = stock_ret
+                    # 계좌별 수익률 기록
+                    a_col = find_matching_col(history_df, acc)
+                    if a_col: new_entry[a_col] = ((acc_eval_sum / acc_buy_total) - 1) * 100
 
-                    # 계좌 전체 수익률 칸 채우기
-                    if acc_buy_total > 0:
-                        acc_col = find_matching_col(history_df, acc)
-                        if acc_col: new_entry[acc_col] = ((acc_eval_sum / acc_buy_total) - 1) * 100
-
-                # 3. 시트 업데이트 및 기존 오류 데이터 덮어쓰기
+                # 시트 업데이트
                 hist_copy = history_df.copy()
                 hist_copy['Date'] = pd.to_datetime(hist_copy['Date']).dt.strftime('%Y-%m-%d')
                 updated_df = pd.concat([hist_copy[hist_copy['Date'] != save_date_str], pd.DataFrame([new_entry])], ignore_index=True)
                 
                 conn.update(worksheet="trend", data=updated_df.sort_values('Date').reset_index(drop=True))
-                status.update(label=f"✅ {save_date_str} 모든 계좌/종목 수치가 팩트 기반으로 복구되었습니다!", state="complete")
-            
-            st.cache_data.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"❌ 치명적 복구 오류: {e}")
+                st.success(f"✅ {save_date_str} 데이터가 한치의 오차 없이 기록되었습니다!")
+                del st.session_state['tmp_kospi'] # 완료 후 세션 삭제
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 기록 실패: {e}")
             
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
