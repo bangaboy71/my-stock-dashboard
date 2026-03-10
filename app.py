@@ -344,45 +344,60 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_final_{acc_name}")
         
         # --- [v36.64-RS: 전략 보고서 (보유일수 표출 삭제 버전)] ---
-# --- [v36.64-RS: 인텔리전스 전략 보고서 (들여쓰기 교정본)] ---
+# --- [v39.1 교정: 들여쓰기 및 목표가 UI] ---
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
-        if res:
-            # --- [v39.0 UI: 목표가 기반 전략 모니터] ---
-        s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
-        curr_p = s_row['현재가']
-        target_p = s_row.get('목표가', 0)
-        upside = s_row.get('목표대비상승여력', 0)
-        high_post = s_row.get('매입후최고가', curr_p) # 최저가 대신 최고가만 참조
-
-        st.markdown(f"##### 🔍 {sel} 실시간 전략 모니터")
         
-        # UI 레이아웃 구성
-        col_info, col_target = st.columns([1, 1])
+        # 🎯 [핵심] if 문 뒤에는 반드시 아래처럼 들여쓰기가 되어야 합니다.
+        if res:
+            s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
+            curr_p = s_row['현재가']
+            target_p = s_row.get('목표가', 0)
+            upside = s_row.get('목표대비상승여력', 0)
+            high_post = s_row.get('매입후최고가', curr_p)
 
-        with col_info:
-            st.markdown(f"""
-                <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 180px;'>
-                    <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📈 가격 모니터링</div>
-                    <div style='margin-bottom: 8px;'>현재가: <b>{curr_p:,.0f}원</b></div>
-                    <div style='margin-bottom: 8px;'>매입후 최고가: <span style='color: #FF4B4B;'>{high_post:,.0f}원</span></div>
-                    <div style='font-size: 0.8rem; color: #888;'>* 매입후최저가 지표는 관리 중단됨</div>
-                </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"##### 🔍 {sel} 인텔리전스 전략 보고서")
+            
+            col_res, col_strat = st.columns([1, 1])
 
-        with col_target:
-            # 🎯 시트 '목표가'와 '상승여력' 강조
-            st.markdown(f"""
-                <div style='background: rgba(255,215,0,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,215,0,0.3); height: 180px; text-align: center;'>
-                    <div style='color: #FFD700; font-size: 0.9rem; font-weight: bold; margin-bottom: 15px;'>🎯 시트 설정 목표가</div>
-                    <div style='font-size: 1.6rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
-                    <div style='margin-top: 15px;'>
-                        <div style='font-size: 0.75rem; opacity: 0.7;'>기대 상승 여력</div>
-                        <div style='font-size: 1.8rem; font-weight: bold; color: {"#00FF00" if upside > 0 else "#FF4B4B"};'>
-                            {upside:+.1f}%
+            with col_res:
+                # RESEARCH_DATA 기반 재무 지표 (RESEARCH_DATA 딕셔너리 참조)
+                metrics_html = "".join([f"<tr><td>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span style='color:#FFD700;'>{m[2]}</span></td></tr>" for m in res['metrics']])
+                st.markdown(f"""
+                    <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 200px;'>
+                        <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 핵심 재무 목표 (Long-term)</div>
+                        <table style='width: 100%; font-size: 0.9rem;'>{metrics_html}</table>
+                        <div style='margin-top: 10px; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;'>
+                            <span style='color: #FFD700;'>💡 인사이트:</span> {res['implications'][0]}
                         </div>
                     </div>
-                </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+
+            with col_strat:
+                # 🎯 시트 '목표가' 기반 실시간 모니터
+                st.markdown(f"""
+                    <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.2); height: 200px;'>
+                        <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>⚡ 실시간 전략 모니터 (Target Base)</div>
+                        <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px;'>
+                            <div>
+                                <div style='font-size: 0.75rem; opacity: 0.6;'>현재가</div>
+                                <div style='font-size: 1.2rem; font-weight: bold;'>{curr_p:,.0f}원</div>
+                            </div>
+                            <div>
+                                <div style='font-size: 0.75rem; color: #FFD700;'>🎯 시트 목표가</div>
+                                <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
+                            </div>
+                            <div style='grid-column: span 2; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px; margin-top: 5px;'>
+                                <div style='font-size: 0.75rem; opacity: 0.6;'>기대 상승 여력</div>
+                                <div style='font-size: 1.8rem; font-weight: bold; color: {"#00FF00" if upside > 0 else "#FF4B4B"};'>
+                                    {upside:+.1f}%
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+        else:
+            # RESEARCH_DATA에 없는 종목일 경우 메시지 표시
+            st.info(f"💡 {sel} 종목은 상세 분석 데이터가 없습니다. 시트의 현재 수치 위주로 확인하세요.")
             
             # 보유일수 (표출은 안 하지만 연환산수익률 계산용으로 사용)
             days = s_row.get('보유일수', 365)
@@ -557,6 +572,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
