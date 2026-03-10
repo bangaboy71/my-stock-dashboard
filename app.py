@@ -190,19 +190,28 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
-# --- [v39.0 데이터 정제: 열 삭제 반영 및 목표가 추가] ---
+# --- [v39.2 패치: KeyError 방어 및 컬럼 정규화] ---
 if not full_df.empty:
-    # 🎯 '매입후최저가'는 제외하고 '목표가'를 포함하여 숫자 변환
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가']
-    for c in target_num_cols:
-        if c in full_df.columns:
-            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        elif c == '목표가':
-            full_df['목표가'] = 0 # 시트에 열이 아직 없다면 기본값 생성
+    # 1. 컬럼 이름의 앞뒤 공백을 제거하여 매칭 확률을 높입니다.
+    full_df.columns = [c.strip() for c in full_df.columns]
 
-    # 🎯 상승 여력 계산 (목표가 기준)
+    # 2. '목표가' 컬럼이 실제로 존재하는지 확인 후 처리
+    if '목표가' in full_df.columns:
+        # 숫자형 변환 (콤마 제거 및 에러 처리)
+        full_df['목표가'] = pd.to_numeric(full_df['목표가'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    else:
+        # 🎯 [핵심] 만약 시트에서 못 읽어왔다면, 에러 대신 0으로 채워진 컬럼을 임시로 만듭니다.
+        full_df['목표가'] = 0
+
+    # 3. '현재가' 컬럼도 안전하게 확보 (KeyError 방지)
+    if '현재가' not in full_df.columns:
+        full_df['현재가'] = 0
+
+    # 4. 람다 함수 대신 안전한 벡터 연산으로 상승여력 계산
+    # .get()을 사용하여 컬럼이 없을 경우를 한 번 더 대비합니다.
     full_df['목표대비상승여력'] = full_df.apply(
-        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, 
+        lambda x: ((x.get('목표가', 0) / x.get('현재가', 1) - 1) * 100) 
+        if x.get('현재가', 0) > 0 and x.get('목표가', 0) > 0 else 0,
         axis=1
     )
     
@@ -572,6 +581,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
