@@ -440,72 +440,93 @@ with st.sidebar:
     st.divider()
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
    
-# --- [v38.3 패치: 종목코드 교정 및 네이버 정밀 확정 버전] ---
+# --- [v38.4 패치: 제로-폴백 과거 데이터 무결성 엔진] ---
     if st.button(f"🚀 {sel_date} 결과 확정 저장"):
         try:
             save_date_str = sel_date.strftime('%Y-%m-%d')
-            # 네이버용 날짜 포맷 (2026.03.09)
             target_naver_fmt = sel_date.strftime('%Y.%m.%d')
             
-            with st.status(f"📡 {save_date_str} 데이터를 네이버에서 정밀 복구 중...") as status:
-                # 1. KOSPI 지수 복구 (3월 9일: 5251.87)
-                k_val = 5251.87 if save_date_str == "2026-03-09" else float(m_status["KOSPI"]["val"].replace(",",""))
-                
+            with st.status(f"📡 {save_date_str} 데이터를 정밀 복구 중...", expanded=True) as status:
+                # 🎯 1. KOSPI 지수 강제 교정 (3월 9일 팩트 반영)
+                if save_date_str == "2026-03-09":
+                    k_val = 5251.87
+                else:
+                    k_val = float(m_status["KOSPI"]["val"].replace(",",""))
+
                 new_entry = pd.Series(index=history_df.columns, dtype='object')
                 new_entry['Date'] = save_date_str
-                new_entry['KOSPI'] = k_val
+                if '날짜' in new_entry.index: new_entry['날짜'] = save_date_str
+                if 'KOSPI' in new_entry.index: new_entry['KOSPI'] = k_val
 
-                # 2. 종목별 과거 종가 강제 추적
+                # 🎯 2. 종목별 과거 종가 정밀 추적 로직
                 for acc in full_df['계좌명'].unique():
                     acc_df = full_df[full_df['계좌명'] == acc]
                     acc_eval_sum = 0.0
                     
                     for _, row in acc_df.iterrows():
                         s_name = row['종목명'].strip()
-                        # 종목코드가 486740이면 코드를 498400으로 임시 교정하여 검색
-                        raw_code = str(row.get('종목코드', '')).split('.')[0]
-                        code = "498400" if "KODEX" in s_name and "위클리" in s_name else raw_code
+                        raw_ticker = str(row.get('종목코드', '')).split('.')[0]
+                        # KODEX 코드 교정 및 다른 종목 코드 준비
+                        code = "498400" if "KODEX" in s_name else raw_ticker
                         
                         target_price = 0.0
-                        # 🎯 네이버 증권 '일별 시세' 크롤링
-                        try:
-                            url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page=1"
-                            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                            soup = BeautifulSoup(res.text, 'html.parser')
-                            rows = soup.select('table.type2 tr')
-                            for r in rows:
-                                if r.select_one('td.num') and target_naver_fmt in r.select_one('td.num').text:
-                                    target_price = float(r.select('td.num')[1].text.replace(',',''))
-                                    break
-                        except: pass
                         
-                        # 과거 데이터 못 찾을 시 현재가 (비상용)
-                        if target_price == 0: target_price = float(row['현재가'])
+                        # A. 3월 9일 KODEX 전용 팩트 주입
+                        if save_date_str == "2026-03-09" and code == "498400":
+                            target_price = 16515.0
+                        else:
+                            # B. 네이버 증권 일별 시세 아이프레임 정밀 크롤링
+                            try:
+                                # 네이버 일별 시세는 iframe 구조이므로 직접 주소를 호출해야 정확합니다.
+                                url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page=1"
+                                headers = {'User-Agent': 'Mozilla/5.0'}
+                                res = requests.get(url, headers=headers, timeout=5)
+                                soup = BeautifulSoup(res.text, 'html.parser')
+                                trs = soup.select('table.type2 tr')
+                                for tr in trs:
+                                    date_td = tr.select_one('td.num')
+                                    if date_td and target_naver_fmt in date_td.text:
+                                        target_price = float(tr.select('td.num')[1].text.replace(',',''))
+                                        break
+                            except: pass
+
+                        # 🎯 C. [보안 로직] 과거 데이터 수집 실패 시 저장 중단 (오염 방지)
+                        if target_price == 0:
+                            st.error(f"❌ {s_name}의 {save_date_str} 종가를 찾을 수 없습니다. 시트의 종목코드를 확인해 주세요.")
+                            st.stop()
                         
-                        # 수익률 연산 (16,515 / 19,800 기준)
-                        s_ret = ((target_price / float(row['매입단가'])) - 1) * 100
+                        # 수익률 및 합산 연산 (매입가 기준)
+                        # 예: 삼성전자 매입가 123,800원 대비 수익률 계산
+                        buy_price = float(row['매입단가'])
+                        s_ret = ((target_price / buy_price) - 1) * 100
                         acc_eval_sum += (target_price * float(row['수량']))
                         
+                        # 매핑 (공백 제거 로직 적용)
                         s_col = find_matching_col(history_df, acc, s_name)
                         if s_col: new_entry[s_col] = s_ret
 
                     # 계좌 전체 수익률
-                    a_ret = ((acc_eval_sum / float(acc_df['매입금액'].sum())) - 1) * 100
+                    acc_buy_total = float(acc_df['매입금액'].sum())
+                    a_ret = ((acc_eval_sum / acc_buy_total) - 1) * 100 if acc_buy_total > 0 else 0
                     a_col = find_matching_col(history_df, acc)
                     if a_col: new_entry[a_col] = a_ret
 
-                # 3. 시트 업데이트
-                hist_tmp = history_df.copy()
-                hist_tmp['Date'] = pd.to_datetime(hist_tmp['Date']).dt.strftime('%Y-%m-%d')
-                updated = pd.concat([hist_tmp[hist_tmp['Date'] != save_date_str], pd.DataFrame([new_entry])], ignore_index=True)
-                conn.update(worksheet="trend", data=updated.sort_values('Date'))
-                status.update(label=f"✅ {save_date_str} 데이터 복구 완료! (KODEX: 16,515원 기록)", state="complete")
+                # 🎯 3. 최종 저장 및 정렬
+                hist_copy = history_df.copy()
+                hist_copy['Date'] = pd.to_datetime(hist_copy['Date']).dt.strftime('%Y-%m-%d')
+                updated_df = pd.concat([hist_copy[hist_copy['Date'] != save_date_str], pd.DataFrame([new_entry])], ignore_index=True)
+                updated_df = updated_df.sort_values('Date').reset_index(drop=True)
+                
+                conn.update(worksheet="trend", data=updated_df)
+                status.update(label=f"✅ {save_date_str} 모든 수치가 팩트 기반으로 복구되었습니다!", state="complete")
             
             st.cache_data.clear()
             st.rerun()
-        except Exception as e: st.error(f"❌ 오류: {e}")
+        except Exception as e:
+            st.error(f"❌ 복구 중 치명적 오류: {e}")
             
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
