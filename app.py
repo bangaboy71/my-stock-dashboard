@@ -191,12 +191,26 @@ except Exception as e:
     st.stop()
 
 if not full_df.empty:
-    # 1. 숫자 데이터 타입 통합 변환
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
+    # 🎯 1. 숫자 데이터 타입 통합 변환 (매입후최저가 삭제, 목표가 추가)
+    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가']
+    
+    # 컬럼명 공백 제거 (KeyError 방지용 안전장치)
+    full_df.columns = [c.strip() for c in full_df.columns]
+
     for c in target_num_cols:
         if c in full_df.columns:
+            # 콤마 제거 후 숫자로 변환, 실패 시 0으로 채움
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        elif c == '목표가':
+            # 시트에 '목표가' 열이 아예 없을 경우를 대비해 0으로 초기화
+            full_df['목표가'] = 0
 
+    # 🎯 2. 기대 상승 여력 계산 로직 (숫자로 변환된 후 실행되어야 함)
+    full_df['목표대비상승여력'] = full_df.apply(
+        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, 
+        axis=1
+    )
+    
     # 2. [최적화] 표준 날짜 엔진 (YYYY-MM-DD 대응)
     if '최초매입일' in full_df.columns:
         # 표준 형식은 추가 옵션 없이도 가장 빠르게 해석됩니다.
@@ -519,3 +533,4 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
