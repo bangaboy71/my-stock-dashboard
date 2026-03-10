@@ -190,29 +190,13 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
-# --- [v39.7 데이터 정제: 모든 KeyError 원천 차단] ---
 if not full_df.empty:
-    # 1. 컬럼명 공백 제거
-    full_df.columns = [c.strip() for c in full_df.columns]
+    # 1. 숫자 데이터 타입 통합 변환
+    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '매입후최저가']
+    for c in target_num_cols:
+        if c in full_df.columns:
+            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-    # 2. 필수 컬럼 리스트 (없으면 0으로 자동 생성하여 KeyError 방지)
-    essential_cols = ['매입단가', '현재가', '매입후최고가', '목표가']
-    for col in essential_cols:
-        if col not in full_df.columns:
-            full_df[col] = 0
-        # 3. 숫자형 강제 변환 (콤마 제거 포함)
-        full_df[col] = pd.to_numeric(full_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
-    # 4. 기대상승여력 안전 연산 (현재가/목표가가 0인 경우 0% 처리)
-    def calculate_upside(row):
-        curr = float(row['현재가'])
-        target = float(row['목표가'])
-        if curr > 0 and target > 0:
-            return (target / curr - 1) * 100
-        return 0.0
-
-    full_df['목표대비상승여력'] = full_df.apply(calculate_upside, axis=1)
-    
     # 2. [최적화] 표준 날짜 엔진 (YYYY-MM-DD 대응)
     if '최초매입일' in full_df.columns:
         # 표준 형식은 추가 옵션 없이도 가장 빠르게 해석됩니다.
@@ -349,83 +333,18 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         
         # 🎯 중복 키 방지 및 종목 선택
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_final_{acc_name}")
-              
-        # --- [v39.7 UI: 폰트 조화 및 리스크 가이드 복구] ---
-        res = RESEARCH_DATA.get(sel.replace(" ", ""))
         
+        # --- [v36.64-RS: 전략 보고서 (보유일수 표출 삭제 버전)] ---
+# --- [v36.64-RS: 인텔리전스 전략 보고서 (들여쓰기 교정본)] ---
+        res = RESEARCH_DATA.get(sel.replace(" ", ""))
         if res:
+            # 1. 수치 데이터 추출 및 계산 (내부 연산용)
             s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
-            
-            # 데이터 추출
-            curr_p = float(s_row['현재가'])
-            buy_p = float(s_row['매입단가'])
-            target_p = float(s_row.get('목표가', 0))
-            high_p = float(s_row.get('매입후최고가', curr_p))
-            upside = float(s_row.get('목표대비상승여력', 0))
-            
-            # 🛡️ 리스크 관리 기준선 계산
-            sl_price = buy_p * 0.85      # 손절 가이드 (-15%)
-            tp_price = high_p * 0.80     # 익절/추세 가이드 (최고가 대비 -20%)
-
-            st.markdown(f"##### 🔍 {sel} 실시간 전략 모니터")
-            
-            col1, col2 = st.columns([1, 1])
-
-            with col1:
-                st.markdown(f"""
-                    <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 180px;'>
-                        <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 가격 정보</div>
-                        <table style='width: 100%; font-size: 0.95rem;'>
-                            <tr><td>현재가</td><td style='text-align:right;'><b>{curr_p:,.0f}원</b></td></tr>
-                            <tr><td>매입단가</td><td style='text-align:right; color:#888;'>{buy_p:,.0f}원</td></tr>
-                            <tr><td>매입후 최고</td><td style='text-align:right; color:#FF4B4B;'>{high_p:,.0f}원</td></tr>
-                        </table>
-                    </div>
-                """, unsafe_allow_html=True)
-
-            with col2:
-                # 🎯 목표가 & 상승여력 (폰트 크기 1.2rem으로 통일)
-                st.markdown(f"""
-                    <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.2); height: 180px;'>
-                        <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>⚡ 목표가 분석</div>
-                        <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px;'>
-                            <div>
-                                <div style='font-size: 0.75rem; color: #FFD700;'>🎯 목표가</div>
-                                <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
-                            </div>
-                            <div>
-                                <div style='font-size: 0.75rem; opacity: 0.6;'>기대상승여력</div>
-                                <div style='font-size: 1.2rem; font-weight: bold; color: {"#00FF00" if upside > 0 else "#FF4B4B"};'>
-                                    {upside:+.1f}%
-                                </div>
-                            </div>
-                        </div>
-                        <div style='margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem;'>
-                            💡 <b>상태:</b> 목표가까지 <span style='color:#FFD700;'>{(target_p - curr_p):,.0f}원</span> 남았습니다.
-                        </div>
-                    </div>
-                """, unsafe_allow_html=True)
-
-            # 🚨 익절/손절 실시간 경보 시스템 (복구)
-            st.markdown(f"""
-                <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"}; margin-top: 15px;'>
-                    <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>🚨 익절/손절 실시간 경보 시스템</div>
-                    <div style='display: flex; justify-content: space-between; font-size: 0.95rem;'>
-                        <span>🛡️ <b>손절선 (-15%):</b> {sl_price:,.0f}원 <small>(매입가 기준)</small></span>
-                        <span style='color: {"#FF4B4B" if curr_p <= sl_price else "#00FF00"}; font-weight: bold;'>
-                            {"⚠️ 즉시 대응" if curr_p <= sl_price else "✅ 보유 구간"}
-                        </span>
-                    </div>
-                    <div style='display: flex; justify-content: space-between; font-size: 0.95rem; margin-top: 8px;'>
-                        <span>🚨 <b>익절선 (-20%):</b> {tp_price:,.0f}원 <small>(최고가 대비)</small></span>
-                        <span style='color: {"#FFA500" if curr_p <= tp_price else "#00FF00"}; font-weight: bold;'>
-                            {"⚠️ 추세 주의" if curr_p <= tp_price else "✅ 추세 유지"}
-                        </span>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.info(f"💡 {sel} 종목은 상세 분석 데이터가 없습니다. 시트의 목표가를 확인하세요.")
+            buy_p = s_row['매입단가']
+            curr_p = s_row['현재가']
+            total_ret = s_row['누적수익률']
+            high_52w = s_row.get('52주최고가', 0)
+            post_high = s_row.get('매입후최고가', curr_p)
             
             # 보유일수 (표출은 안 하지만 연환산수익률 계산용으로 사용)
             days = s_row.get('보유일수', 365)
@@ -600,36 +519,3 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
