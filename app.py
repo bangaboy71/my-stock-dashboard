@@ -347,84 +347,87 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         # 🎯 중복 키 방지 및 종목 선택
         sel = st.selectbox(f"📍 {acc_name} 종목 분석/대조", sub_df['종목명'].unique(), key=f"sel_final_{acc_name}")
         
-        # --- [v39.4 교정 버전] ---
+        
+            # --- [v39.5 완결형 패치: 구문 오류 및 리스크 가이드 복구] ---
         res = RESEARCH_DATA.get(sel.replace(" ", ""))
         
-        # 🎯 if res: 다음 줄은 반드시 4칸 들여쓰기가 되어야 합니다.
         if res:
             s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
+            
+            # 데이터 안전 추출 (숫자형 강제 변환)
             curr_p = float(s_row['현재가'])
             buy_p = float(s_row['매입단가'])
             target_p = float(s_row.get('목표가', 0))
             high_post = float(s_row.get('매입후최고가', curr_p))
-            upside = float(s_row.get('목표대비상승여력', 0))
-
+            
+            # 기대상승여력 재연산 (0% 방지용 안전 장치)
+            upside = ((target_p / curr_p - 1) * 100) if curr_p > 0 and target_p > 0 else 0
+            
             # 리스크 가이드라인 계산
-            sl_price = buy_p * 0.85      # 손절 (-15%)
-            tp_price = high_post * 0.80  # 익절 (최고가 대비 -20%)
+            sl_price = buy_p * 0.85      # 손절선 (-15%)
+            tp_price = high_post * 0.80  # 익절선 (최고가 대비 -20%)
 
             st.markdown(f"##### 🔍 {sel} 실시간 전략 모니터")
             
             col_res, col_strat = st.columns([1, 1])
 
             with col_res:
+                # 📋 가격 모니터링 섹션
                 st.markdown(f"""
                     <div style='background: rgba(255,255,255,0.02); padding: 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); height: 180px;'>
-                        <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 가격 모니터</div>
+                        <div style='color: #aaa; font-size: 0.85rem; margin-bottom: 10px;'>📋 가격 지표</div>
                         <table style='width: 100%; font-size: 0.95rem;'>
                             <tr><td>현재가</td><td style='text-align:right;'><b>{curr_p:,.0f}원</b></td></tr>
                             <tr><td>매입단가</td><td style='text-align:right; color:#888;'>{buy_p:,.0f}원</td></tr>
-                            <tr><td>매입후 최고</td><td style='text-align:right; color:#FF4B4B;'>{high_post:,.0f}원</td></tr>
+                            <tr><td>매입후 최고가</td><td style='text-align:right; color:#FF4B4B;'>{high_post:,.0f}원</td></tr>
                         </table>
                     </div>
                 """, unsafe_allow_html=True)
 
             with col_strat:
+                # 🎯 목표가 및 상승여력 섹션 (폰트 크기 통일: 1.2rem)
                 st.markdown(f"""
                     <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.2); height: 180px;'>
                         <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>⚡ 목표가 분석</div>
                         <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px;'>
                             <div>
-                                <div style='font-size: 0.75rem; color: #FFD700;'>🎯 목표가</div>
+                                <div style='font-size: 0.75rem; color: #FFD700;'>🎯 시트 목표가</div>
                                 <div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}원</div>
                             </div>
                             <div>
-                                <div style='font-size: 0.75rem; opacity: 0.6;'>상승여력</div>
+                                <div style='font-size: 0.75rem; opacity: 0.6;'>기대상승여력</div>
                                 <div style='font-size: 1.2rem; font-weight: bold; color: {"#00FF00" if upside > 0 else "#FF4B4B"};'>
                                     {upside:+.1f}%
                                 </div>
                             </div>
                         </div>
                         <div style='margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem;'>
-                            💡 <b>상태:</b> 현재 목표가까지 <span style='color:#FFD700;'>{(target_p - curr_p):,.0f}원</span> 남았습니다.
+                            💡 <b>상황:</b> 목표가 도달까지 <span style='color:#FFD700;'>{(target_p - curr_p):,.0f}원</span> 남았습니다.
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
 
-            # 🚨 익절/손절 경보 시스템 (하단 고정)
+            # 🚨 익절/손절 실시간 경보 시스템 (하단 배치)
             st.markdown(f"""
                 <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"}; margin-top: 15px;'>
                     <div style='font-size: 0.85rem; font-weight: bold; margin-bottom: 10px;'>🚨 리스크 관리 가이드</div>
-                    <div style='display: flex; justify-content: space-between; font-size: 0.9rem;'>
-                        <span>🛡️ <b>손절선 (-15%):</b> {sl_price:,.0f}원</span>
+                    <div style='display: flex; justify-content: space-between; font-size: 0.95rem;'>
+                        <span>🛡️ <b>손절 기준선 (-15%):</b> {sl_price:,.0f}원</span>
                         <span style='color: {"#FF4B4B" if curr_p <= sl_price else "#00FF00"}; font-weight: bold;'>
-                            {"⚠️ 즉시 대응" if curr_p <= sl_price else "✅ 안전"}
+                            {"⚠️ 즉시 대응 필요" if curr_p <= sl_price else "✅ 보유 구간"}
                         </span>
                     </div>
-                    <div style='display: flex; justify-content: space-between; font-size: 0.9rem; margin-top: 8px;'>
-                        <span>🚨 <b>익절선 (-20%):</b> {tp_price:,.0f}원</span>
+                    <div style='display: flex; justify-content: space-between; font-size: 0.95rem; margin-top: 8px;'>
+                        <span>🚨 <b>익절 기준선 (-20%):</b> {tp_price:,.0f}원 <small>(최고가 대비)</small></span>
                         <span style='color: {"#FFA500" if curr_p <= tp_price else "#00FF00"}; font-weight: bold;'>
-                            {"⚠️ 추세 주의" if curr_p <= tp_price else "✅ 추세 유지"}
+                            {"⚠️ 추세 이탈 주의" if curr_p <= tp_price else "✅ 추세 유지 중"}
                         </span>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
         else:
-            st.info(f"💡 {sel} 종목은 상세 분석 데이터(RESEARCH_DATA)가 없습니다.")
-        
-        else:
-            # RESEARCH_DATA에 없는 종목일 경우 메시지 표시
-            st.info(f"💡 {sel} 종목은 상세 분석 데이터가 없습니다. 시트의 현재 수치 위주로 확인하세요.")
+            # 🎯 SyntaxError 방지를 위해 else와 if의 줄을 완벽히 맞췄습니다.
+            st.info(f"💡 {sel} 종목은 상세 분석 데이터(RESEARCH_DATA)가 없습니다. 시트의 목표가를 확인하세요.")
             
             # 보유일수 (표출은 안 하지만 연환산수익률 계산용으로 사용)
             days = s_row.get('보유일수', 365)
@@ -599,6 +602,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
