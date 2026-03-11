@@ -471,32 +471,31 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         # (기존 그래프/차트 코드가 끝난 직후 배치)
         st.divider()
         
-        # --- [v40.11 와이드 뉴스 섹션: 그래프 폰트 매칭 버전] ---
-        st.markdown(f"#### 📰 {sel} 실시간 주요 뉴스 및 공시")
+        # --- [v40.12 와이드 뉴스 섹션: 폰트 하모니 최적화 버전] ---
+        # 섹션 타이틀 크기를 전략 모니터 수치와 동일한 1.2rem 수준으로 조정
+        st.markdown(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>", unsafe_allow_html=True)
         
-        with st.spinner(f'{sel}의 최신 소식을 연결 중...'):
+        with st.spinner(f'{sel} 소식 업데이트 중...'):
             news_items = get_stock_news(sel)
         
         if news_items:
-            # 좌우 2열로 넓게 배치
             n_col1, n_col2 = st.columns([1, 1])
             for idx, item in enumerate(news_items):
                 target_col = n_col1 if idx % 2 == 0 else n_col2
                 with target_col:
                     st.markdown(f"""
-                        <div style='margin-bottom: 15px; padding: 15px; border-radius: 10px; background: rgba(135,206,235,0.03); border-left: 4px solid #87CEEB;'>
-                            <a href='{item['link']}' target='_blank' style='text-decoration: none; color: #87CEEB; font-weight: bold; font-size: 1.1rem;'>
+                        <div style='margin-bottom: 12px; padding: 12px; border-radius: 8px; background: rgba(135,206,235,0.02); border-left: 3px solid rgba(135,206,235,0.3);'>
+                            <a href='{item['link']}' target='_blank' style='text-decoration: none; color: #87CEEB; font-weight: 500; font-size: 1.0rem; line-height: 1.4;'>
                                 {item['title']}
                             </a><br>
-                            <div style='margin-top: 10px; font-size: 0.85rem; color: #888; display: flex; justify-content: space-between;'>
+                            <div style='margin-top: 8px; font-size: 0.8rem; color: #888; display: flex; justify-content: space-between; opacity: 0.8;'>
                                 <span>🏢 {item['info']}</span>
                                 <span>📅 {item['date']}</span>
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
         else:
-            # 🎯 에러 로그 확인을 위한 메시지 강화
-            st.warning(f"현재 {sel}({STOCK_CODES.get(sel, '코드없음')})의 뉴스 서버 응답이 없습니다. 잠시 후 갱신 버튼을 눌러주세요.")
+            st.caption(f"현재 {sel}에 대한 새로운 뉴스 데이터가 없습니다.")
                 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
@@ -587,6 +586,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
