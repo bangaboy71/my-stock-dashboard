@@ -158,31 +158,37 @@ def get_stock_data(name):
         return now_p, prev_p
     except: return 0, 0
 
-# --- [v40.9 뉴스 수집 엔진 추가] ---
+# --- [v40.10 뉴스 엔진: 정밀 셀렉터 수정본] ---
 def get_stock_news(name):
     code = STOCK_CODES.get(str(name).replace(" ", ""))
     if not code: return []
     
     news_list = []
-    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+    # 네이버 금융 뉴스 iframe 전용 헤더와 URL
+    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     try:
-        # 네이버 증권 뉴스 섹션 (iframe 소스)
+        # 종목 뉴스 리스트 페이지 (iframe 소스 주소)
         url = f"https://finance.naver.com/item/news_news.naver?code={code}"
-        res = requests.get(url, headers=header, timeout=3)
+        res = requests.get(url, headers=header, timeout=5)
+        res.encoding = 'cp949' # 네이버 금융은 한글 깨짐 방지를 위해 cp949 인코딩 필요
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 기사 제목, 언론사, 날짜 추출
-        titles = soup.select('.title a')
-        infos = soup.select('.info')
-        dates = soup.select('.date')
+        # 실제 뉴스 데이터가 담긴 테이블 행(tr) 추출
+        rows = soup.select('table.type5 tbody tr')
         
-        for i in range(min(len(titles), 5)): # 최신 5개만 수집
-            news_list.append({
-                'title': titles[i].get_text(strip=True),
-                'link': "https://finance.naver.com" + titles[i]['href'],
-                'info': infos[i].get_text(strip=True),
-                'date': dates[i].get_text(strip=True)
-            })
+        for row in rows:
+            title_el = row.select_one('td.title a')
+            info_el = row.select_one('td.info')
+            date_el = row.select_one('td.date')
+            
+            if title_el and info_el and date_el:
+                news_list.append({
+                    'title': title_el.get_text(strip=True),
+                    'link': "https://finance.naver.com" + title_el['href'],
+                    'info': info_el.get_text(strip=True),
+                    'date': date_el.get_text(strip=True)
+                })
+            if len(news_list) >= 6: break # 최신 6개만
     except:
         pass
     return news_list
@@ -459,26 +465,34 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
-         # --- [v40.9 뉴스/공시 출력 섹션] ---
-            st.write("") # 간격 조절
-            st.markdown(f"##### 📰 {sel} 실시간 주요 뉴스 및 공시")
-            
-            with st.spinner(f'{sel}의 최신 소식을 가져오는 중...'):
-                news_items = get_stock_news(sel)
-            
-            if news_items:
-                for item in news_items:
-                    # 링크를 포함한 카드형 디자인
+         # (차트 레이아웃 g_left, g_right 코드가 끝난 직후에 배치하세요)
+        st.divider()
+        
+        # --- [v40.10 와이드 뉴스 섹션: 좌측 정렬 및 가독성 개선] ---
+        st.markdown(f"#### 📰 {sel} 실시간 주요 뉴스 및 공시")
+        
+        with st.spinner('최신 시장 이슈 수집 중...'):
+            news_items = get_stock_news(sel)
+        
+        if news_items:
+            # 뉴스를 2열로 배치하여 공간 활용도 높임 (좌측 편중 제거)
+            n_col1, n_col2 = st.columns([1, 1])
+            for idx, item in enumerate(news_items):
+                target_col = n_col1 if idx % 2 == 0 else n_col2
+                with target_col:
                     st.markdown(f"""
-                        <div style='margin-bottom: 10px; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.03); border-left: 3px solid #87CEEB;'>
-                            <a href='{item['link']}' target='_blank' style='text-decoration: none; color: #87CEEB; font-weight: bold; font-size: 0.95rem;'>
+                        <div style='margin-bottom: 12px; padding: 15px; border-radius: 10px; background: rgba(135,206,235,0.03); border-left: 4px solid #87CEEB;'>
+                            <a href='{item['link']}' target='_blank' style='text-decoration: none; color: #87CEEB; font-weight: bold; font-size: 1rem;'>
                                 {item['title']}
                             </a><br>
-                            <span style='font-size: 0.8rem; color: #888;'>{item['info']} | {item['date']}</span>
+                            <div style='margin-top: 8px; font-size: 0.85rem; color: #888; display: flex; justify-content: space-between;'>
+                                <span>🏢 {item['info']}</span>
+                                <span>📅 {item['date']}</span>
+                            </div>
                         </div>
                     """, unsafe_allow_html=True)
-            else:
-                st.caption("현재 표시할 최신 뉴스나 공시가 없습니다.")
+        else:
+            st.warning(f"현재 {sel}에 대한 검색된 뉴스 데이터가 없습니다. 종목명과 코드를 확인해 주세요.")
                 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
@@ -569,6 +583,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
