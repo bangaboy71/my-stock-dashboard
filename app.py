@@ -422,26 +422,28 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             '누적수익률': '      누적수익률'
         }
         
-        # 2. 데이터프레임 변환 및 컬럼 리스트 생성
-        plot_df = sub_df.rename(columns=rename_map)
-        display_cols = list(rename_map.values())
-
-        # 3. 테이블 출력 (기본 우측 정렬 활용)
-        st.dataframe(
-            plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
+        # --- [v40.31: 괄호 및 문법 정밀 수선본] ---
+        plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
         
+        # 여기서부터 괄호가 시작됩니다.
         st.dataframe(
             plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
                 'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
                 for i, val in enumerate(x)
             ], axis=1).format({
-                '         수량': '{:,.0f}', '      매입단가': '{:,.0f}원', '      매입금액': '{:,.0f}원', 
-                '        현재가': '{:,.0f}원', '      평가금액': '{:,.0f}원', '          손익': '{:+,.0f}원', 
-                '    전일대비(원)': '{:+,.0f}원', '    전일대비(%)': '{:+.2f}%', '      누적수익률': '{:+.2f}%'
+                '         수량': '{:,.0f}', 
+                '      매입단가': '{:,.0f}원', 
+                '      매입금액': '{:,.0f}원', 
+                '        현재가': '{:,.0f}원', 
+                '      평가금액': '{:,.0f}원', 
+                '          손익': '{:+,.0f}원', 
+                '    전일대비(원)': '{:+,.0f}원', 
+                '    전일대비(%)': '{:+.2f}%', 
+                '      누적수익률': '{:+.2f}%'
             }), 
             hide_index=True, 
             use_container_width=True
-        )
+        ) # <--- 이 닫는 괄호가 누락되었던 것이 범인입니다!
 
         st.divider()
         
@@ -713,6 +715,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
