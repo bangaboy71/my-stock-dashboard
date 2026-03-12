@@ -335,9 +335,23 @@ with tabs[0]:
     sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']]
     
-    st.dataframe(sum_acc.style.apply(lambda x: ['color: #FF4B4B' if (i >= 3 and val > 0) else 'color: #87CEEB' if (i >= 3 and val < 0) else '' for i, val in enumerate(x)], axis=1).format({
-        '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-    }), use_container_width=True, hide_index=True)
+    # --- [v40.29: 총괄탭 하이브리드 정렬 적용] ---
+            
+    # 총괄 데이터는 full_df를 사용하되 컬럼명만 동일하게 변경
+    total_plot_df = full_df.rename(columns=rename_map)
+        
+    st.dataframe(
+        total_plot_df[display_cols].style.apply(lambda x: [
+            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+            for i, val in enumerate(x)
+        ], axis=1).format({
+            '         수량': '{:,.0f}', '      매입단가': '{:,.0f}원', '      매입금액': '{:,.0f}원', 
+            '        현재가': '{:,.0f}원', '      평가금액': '{:,.0f}원', '          손익': '{:+,.0f}원', 
+            '    전일대비(원)': '{:+,.0f}원', '    전일대비(%)': '{:+.2f}%', '      누적수익률': '{:+.2f}%'
+        }), 
+        hide_index=True, 
+        use_container_width=True
+    )
 
     if not history_df.empty:
         fig = go.Figure()
@@ -379,24 +393,45 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             '전일대비변동율': '전일대비(%)'
         })
 
-        # 3. 테이블 출력 (에러 해결 핵심: 생략 없이 스타일 함수 적용)
+        # --- [v40.29: 개별 계좌탭 하이브리드 정렬 적용] ---
+        
+        # 1. 컬럼명 매핑 (제목 중앙 효과를 위한 공백 주입)
+        rename_map = {
+            '종목명': '       종목명',
+            '수량': '         수량',
+            '매입단가': '      매입단가',
+            '매입금액': '      매입금액',
+            '현재가': '        현재가',
+            '평가금액': '      평가금액',
+            '손익': '          손익',
+            '전일대비손익': '    전일대비(원)', 
+            '전일대비변동율': '    전일대비(%)',
+            '누적수익률': '      누적수익률'
+        }
+        
+        # 2. 데이터프레임 변환 및 컬럼 리스트 생성
+        plot_df = sub_df.rename(columns=rename_map)
+        display_cols = list(rename_map.values())
+
+        # 3. 테이블 출력 (기본 우측 정렬 활용)
         st.dataframe(
             plot_df[display_cols].style.apply(lambda x: [
                 'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
                 for i, val in enumerate(x)
             ], axis=1).format({
-                '수량': '{:,.0f}', 
-                '매입단가': '{:,.0f}원', 
-                '매입금액': '{:,.0f}원', 
-                '현재가': '{:,.0f}원', 
-                '평가금액': '{:,.0f}원', 
-                '손익': '{:+,.0f}원', 
-                '전일대비(원)': '{:+,.0f}원', 
-                '전일대비(%)': '{:+.2f}%', 
-                '누적수익률': '{:+.2f}%'
+                '         수량': '{:,.0f}', 
+                '      매입단가': '{:,.0f}원', 
+                '      매입금액': '{:,.0f}원', 
+                '        현재가': '{:,.0f}원', 
+                '      평가금액': '{:,.0f}원', 
+                '          손익': '{:+,.0f}원', 
+                '    전일대비(원)': '{:+,.0f}원', 
+                '    전일대비(%)': '{:+.2f}%', 
+                '      누적수익률': '{:+.2f}%'
             }), 
             hide_index=True, 
             use_container_width=True
+            # column_config의 alignment="center"를 제거하여 수치는 우측 정렬로 복구됨
         )
 
         st.divider()
@@ -669,6 +704,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
