@@ -56,9 +56,9 @@ STOCK_CODES = {
     "SK스퀘어": "402340"
 }
 
-# --- [2. 엔진 및 헬퍼 함수: 네이버 + 야후 하이브리드 지수 엔진] ---
+# --- [v40.19 시장 지수 엔진: Naver 실시간 변동분 수집 강화] ---
 def get_market_status():
-    # 🎯 [기본값 설정] KeyError 방지를 위해 모든 항목을 초기화
+    # 기본값 설정
     data = {
         "KOSPI": {"val": "-", "diff": "0.00", "pct": "0.00%", "color": "white"},
         "KOSDAQ": {"val": "-", "diff": "0.00", "pct": "0.00%", "color": "white"},
@@ -66,84 +66,74 @@ def get_market_status():
         "VOLUME": {"val": "-", "diff": "KOSPI", "pct": "천주", "color": "white"}
     }
     
-    header = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+    header = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Referer': 'https://finance.naver.com/'
+    }
     
-    # 🎯 [1단계: Naver Finance] 정밀 크롤링 시도
+    # 🎯 1단계: Naver Finance 정밀 크롤링 (현재가 + 변동액 + 변동률)
     try:
         for code in ["KOSPI", "KOSDAQ"]:
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
-            res = requests.get(url, headers=header, timeout=3)
+            res = requests.get(url, headers=header, timeout=5)
+            res.encoding = 'euc-kr'
             soup = BeautifulSoup(res.text, 'html.parser')
             
             now_el = soup.select_one("#now_value")
-            prev_el = soup.select_one("td.first") # 전일종가 영역
+            diff_el = soup.select_one("#change_value_and_rate")
             
-            if now_el and prev_el:
-                now_val = float(now_el.get_text(strip=True).replace(',', ''))
-                import re
-                prev_text = prev_el.get_text(strip=True).replace(',', '')
-                prev_nums = re.findall(r"\d+\.\d+|\d+", prev_text)
+            if now_el and diff_el:
+                now_val = now_el.get_text(strip=True)
+                diff_text = diff_el.get_text(strip=True).split() # [변동액, 변동률]
                 
-                if prev_nums:
-                    prev_val = float(prev_nums[0])
-                    diff_val = now_val - prev_val
-                    pct_val = (diff_val / prev_val) * 100
-                    color = "#FF4B4B" if diff_val > 0 else "#87CEEB" if diff_val < 0 else "white"
-                    
-                    data[code] = {
-                        "val": f"{now_val:,.2f}",
-                        "diff": f"{diff_val:+,.2f}",
-                        "pct": f"{pct_val:+.2f}%",
-                        "color": color
-                    }
+                # 상승/하락 색상 판별
+                change_type = soup.select_one("#quotation_img_margin")
+                color = "white"
+                if change_type:
+                    if "상승" in str(change_type) or "상한" in str(change_type): color = "#FF4B4B"
+                    elif "하락" in str(change_type) or "하한" in str(change_type): color = "#87CEEB"
+                
+                data[code] = {
+                    "val": now_val,
+                    "diff": diff_text[0] if len(diff_text) > 0 else "0.00",
+                    "pct": diff_text[1] if len(diff_text) > 1 else "0.00%",
+                    "color": color
+                }
+            
+            # 거래량 수집 (KOSPI 기준)
             if code == "KOSPI":
                 vol_el = soup.select_one("#quant")
                 if vol_el: data["VOLUME"]["val"] = vol_el.get_text(strip=True)
 
-        # 환율 (Naver)
-        ex_res = requests.get("https://finance.naver.com/marketindex/", headers=header, timeout=3)
+        # 환율 수집
+        ex_res = requests.get("https://finance.naver.com/marketindex/", headers=header, timeout=5)
         ex_soup = BeautifulSoup(ex_res.text, 'html.parser')
-        ex_val_el = ex_soup.select_one("span.value")
-        if ex_val_el:
-            data["USD/KRW"]["val"] = ex_val_el.get_text(strip=True)
-            ex_change = ex_soup.select_one("span.change")
-            ex_blind = ex_soup.select_one("div.head_info > span.blind")
-            if ex_change and ex_blind:
-                is_down = "하락" in ex_blind.get_text()
-                data["USD/KRW"]["diff"] = f"-{ex_change.get_text()}" if is_down else f"+{ex_change.get_text()}"
-                data["USD/KRW"]["color"] = "#87CEEB" if is_down else "#FF4B4B"
-    except:
-        pass # 네이버 실패 시 조용히 야후로 넘어감
+        ex_val = ex_soup.select_one("span.value")
+        if ex_val: data["USD/KRW"]["val"] = ex_val.get_text(strip=True)
+            
+    except Exception as e:
+        print(f"Naver Index Error: {e}")
 
-    # 🎯 [2단계: Yahoo Finance 백업] 데이터가 비어있는 항목 보완
+    # 🎯 2단계: Yahoo Finance 백업 (Naver 실패 시에만 작동)
     yf_mapping = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
-    
     for name, ticker in yf_mapping.items():
-        if data[name]["val"] == "-": # 네이버 데이터가 없을 때만 실행
+        if data[name]["val"] == "-":
             try:
                 tk = yf.Ticker(ticker)
                 hist = tk.history(period="2d")
                 if not hist.empty:
                     latest = hist.iloc[-1]
                     prev = hist.iloc[-2]
-                    now_p = latest['Close']
-                    diff = now_p - prev['Close']
+                    diff = latest['Close'] - prev['Close']
                     pct = (diff / prev['Close']) * 100
-                    
                     color = "#FF4B4B" if diff > 0 else "#87CEEB" if diff < 0 else "white"
-                    
                     data[name] = {
-                        "val": f"{now_p:,.2f}",
+                        "val": f"{latest['Close']:,.2f}",
                         "diff": f"{diff:+,.2f}",
                         "pct": f"{pct:+.2f}%",
                         "color": color
                     }
-                    # 거래량이 비어있다면 야후 데이터로 보완
-                    if name == "KOSPI" and data["VOLUME"]["val"] == "-":
-                        data["VOLUME"]["val"] = f"{latest['Volume']/1000:,.0f}"
-                        data["VOLUME"]["diff"] = "YF_VOL"
-            except:
-                continue
+            except: continue
 
     return data
     
@@ -575,6 +565,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
