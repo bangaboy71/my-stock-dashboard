@@ -209,16 +209,16 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
-# --- [v40.5 데이터 정제: 수익률표 복구 및 목표가 인식] ---
+# --- [v40.71: 데이터 정제 로직에 배당금 연산 추가] ---
 if not full_df.empty:
     full_df.columns = [c.strip() for c in full_df.columns]
     
-    # 1. 숫자 변환 (매입후최저가 제외, 목표가 추가)
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가']
+    # 1. 숫자 변환 대상에 '주당 배당금' 추가
+    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금']
     for c in target_num_cols:
         if c in full_df.columns:
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        elif c == '목표가': full_df['목표가'] = 0
+        elif c == '주당 배당금': full_df['주당 배당금'] = 0 # 컬럼 없을 경우 대비
 
     # 2. 실시간 가격 및 기초 수익 지표 연산
     prices = full_df['종목명'].apply(get_stock_data).tolist()
@@ -227,6 +227,7 @@ if not full_df.empty:
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
     full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
+    full_df['예상배당금'] = full_df['수량'] * full_df['주당 배당금']
     
     # 3. 수익률 및 변동율 (v36.50 표 전용 지표)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
@@ -300,8 +301,9 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황
+# [Tab 0] 총괄 현황 (v40.71 배당 HUD 통합 버전)
 with tabs[0]:
+    # --- [기존 요약 지표 Row 1] ---
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
@@ -313,7 +315,21 @@ with tabs[0]:
     m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
+    # --- [신규 배당 요약 Row 2: v40.71 캐시플로우 HUD] ---
+    total_div = full_df['예상배당금'].sum()
+    # 세후 월 평균 수령액 계산 (배당소득세 15.4% 차감)
+    monthly_after_tax = (total_div * (1 - 0.154)) / 12
+    # 현재가 대비 배당 수익률
+    div_yield = (total_div / t_eval * 100) if t_eval != 0 else 0
+    
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("연간 예상 총 배당금", f"₩{total_div:,.0f}", help="포트폴리오 내 모든 종목의 연간 배당금 합계")
+    d2.metric("세후 월 평균 수령액", f"₩{monthly_after_tax:,.0f}", help="배당소득세(15.4%) 차감 후 매달 들어오는 현금흐름")
+    d3.metric("포트 배당수익률", f"{div_yield:.2f}%", help="현재 평가액 대비 연간 배당수익률")
+    d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard", help="월 평균 수령액 기준 등급")
+
     st.divider()
+    # (이하 테이블 출력 로직 유지...)
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
     sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
     sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
@@ -634,6 +650,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
