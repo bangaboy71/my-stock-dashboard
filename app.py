@@ -8,6 +8,22 @@ import plotly.graph_objects as go
 import time
 import yfinance as yf # 코드 최상단 import문에 추가해주세요
 
+# --- [v40.30: 앱 전역에서 사용할 공용 컬럼 맵] ---
+GLOBAL_RENAME_MAP = {
+    '종목명': '       종목명',
+    '수량': '         수량',
+    '매입단가': '      매입단가',
+    '매입금액': '      매입금액',
+    '현재가': '        현재가',
+    '평가금액': '      평가금액',
+    '손익': '          손익',
+    '전일대비손익': '    전일대비(원)', 
+    '전일대비변동율': '    전일대비(%)',
+    '누적수익률': '      누적수익률'
+}
+# 공용 컬럼 리스트
+GLOBAL_DISPLAY_COLS = list(GLOBAL_RENAME_MAP.values())
+
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v36.50", layout="wide")
 
@@ -337,11 +353,8 @@ with tabs[0]:
     
     # --- [v40.29: 총괄탭 하이브리드 정렬 적용] ---
             
-    # 총괄 데이터는 full_df를 사용하되 컬럼명만 동일하게 변경
-    total_plot_df = full_df.rename(columns=rename_map)
-        
     st.dataframe(
-        total_plot_df[display_cols].style.apply(lambda x: [
+        total_plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
             'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
             for i, val in enumerate(x)
         ], axis=1).format({
@@ -415,23 +428,19 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
 
         # 3. 테이블 출력 (기본 우측 정렬 활용)
         st.dataframe(
-            plot_df[display_cols].style.apply(lambda x: [
+            plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
+        
+        st.dataframe(
+            plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
                 'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
                 for i, val in enumerate(x)
             ], axis=1).format({
-                '         수량': '{:,.0f}', 
-                '      매입단가': '{:,.0f}원', 
-                '      매입금액': '{:,.0f}원', 
-                '        현재가': '{:,.0f}원', 
-                '      평가금액': '{:,.0f}원', 
-                '          손익': '{:+,.0f}원', 
-                '    전일대비(원)': '{:+,.0f}원', 
-                '    전일대비(%)': '{:+.2f}%', 
-                '      누적수익률': '{:+.2f}%'
+                '         수량': '{:,.0f}', '      매입단가': '{:,.0f}원', '      매입금액': '{:,.0f}원', 
+                '        현재가': '{:,.0f}원', '      평가금액': '{:,.0f}원', '          손익': '{:+,.0f}원', 
+                '    전일대비(원)': '{:+,.0f}원', '    전일대비(%)': '{:+.2f}%', '      누적수익률': '{:+.2f}%'
             }), 
             hide_index=True, 
             use_container_width=True
-            # column_config의 alignment="center"를 제거하여 수치는 우측 정렬로 복구됨
         )
 
         st.divider()
@@ -704,6 +713,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
