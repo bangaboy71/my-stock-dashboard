@@ -158,13 +158,12 @@ def get_stock_data(name):
         return now_p, prev_p
     except: return 0, 0
 
-# --- [v40.11 뉴스 엔진: 보안 우회 및 인코딩 정밀 수정] ---
+# --- [v40.13 수집 엔진: 시간 파싱 로직 주입] ---
 def get_stock_news(name):
     code = STOCK_CODES.get(str(name).replace(" ", ""))
     if not code: return []
     
     news_list = []
-    # 네이버 보안 우회를 위한 강화된 헤더
     header = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Referer': f'https://finance.naver.com/item/main.naver?code={code}'
@@ -172,28 +171,38 @@ def get_stock_news(name):
     try:
         url = f"https://finance.naver.com/item/news_news.naver?code={code}"
         res = requests.get(url, headers=header, timeout=5)
-        # 네이버 금융의 표준 인코딩인 'euc-kr'로 강제 설정
         res.encoding = 'euc-kr' 
-        
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 뉴스 항목 추출 (네이버 iframe 구조에 최적화)
         titles = soup.find_all('td', class_='title')
         infos = soup.find_all('td', class_='info')
         dates = soup.find_all('td', class_='date')
         
         for i in range(min(len(titles), 6)):
-            # 제목 내부의 'a' 태그 찾기
             link_el = titles[i].find('a')
+            date_str = dates[i].get_text(strip=True) if i < len(dates) else "-"
+            
+            # 🕒 24시간 이내 판별
+            is_recent = False
+            try:
+                if "전" in date_str: # '10분 전', '1시간 전' 등
+                    is_recent = True
+                else: # '2026.03.12 09:43' 형식
+                    n_time = datetime.strptime(date_str, '%Y.%m.%d %H:%M')
+                    # 현재 시간과 비교 (86400초 = 24시간)
+                    if (datetime.now() - n_time).total_seconds() < 86400:
+                        is_recent = True
+            except: pass
+
             if link_el:
                 news_list.append({
                     'title': link_el.get_text(strip=True),
                     'link': "https://finance.naver.com" + link_el['href'],
                     'info': infos[i].get_text(strip=True) if i < len(infos) else "정보없음",
-                    'date': dates[i].get_text(strip=True) if i < len(dates) else "-"
+                    'date': date_str,
+                    'is_recent': is_recent # 이 플래그가 중요합니다!
                 })
-    except Exception as e:
-        print(f"News Error: {e}")
+    except: pass
     return news_list
 
 def find_matching_col(df, account, stock=None):
@@ -468,14 +477,11 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
-        # (기존 그래프/차트 코드가 끝난 직후 배치)
+        # --- [v40.13 UI: 24시간 골든-타임 강조] ---
         st.divider()
-        
-        # --- [v40.12 와이드 뉴스 섹션: 폰트 하모니 최적화 버전] ---
-        # 섹션 타이틀 크기를 전략 모니터 수치와 동일한 1.2rem 수준으로 조정
         st.markdown(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>", unsafe_allow_html=True)
         
-        with st.spinner(f'{sel} 소식 업데이트 중...'):
+        with st.spinner('새로운 소식을 확인하는 중...'):
             news_items = get_stock_news(sel)
         
         if news_items:
@@ -483,8 +489,17 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             for idx, item in enumerate(news_items):
                 target_col = n_col1 if idx % 2 == 0 else n_col2
                 with target_col:
+                    # 🕒 조건에 따른 스타일 정의 (황금 vs 스카이블루)
+                    if item['is_recent']:
+                        border_style = "border-left: 4px solid #FFD700; background: rgba(255, 215, 0, 0.04);"
+                        new_badge = "<span style='color:#FFD700; font-weight:bold; font-size:0.85rem; margin-right:5px;'>[NEW]</span>"
+                    else:
+                        border_style = "border-left: 3px solid rgba(135,206,235,0.3); background: rgba(135,206,235,0.02);"
+                        new_badge = ""
+                    
                     st.markdown(f"""
-                        <div style='margin-bottom: 12px; padding: 12px; border-radius: 8px; background: rgba(135,206,235,0.02); border-left: 3px solid rgba(135,206,235,0.3);'>
+                        <div style='margin-bottom: 12px; padding: 12px; border-radius: 8px; {border_style}'>
+                            {new_badge}
                             <a href='{item['link']}' target='_blank' style='text-decoration: none; color: #87CEEB; font-weight: 500; font-size: 1.0rem; line-height: 1.4;'>
                                 {item['title']}
                             </a><br>
@@ -495,7 +510,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                         </div>
                     """, unsafe_allow_html=True)
         else:
-            st.caption(f"현재 {sel}에 대한 새로운 뉴스 데이터가 없습니다.")
+            st.caption("현재 표시할 뉴스 데이터가 없습니다.")
                 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
@@ -586,6 +601,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
