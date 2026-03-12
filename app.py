@@ -477,7 +477,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             fig_p = go.Figure(data=[go.Pie(labels=sub_df['종목명'], values=sub_df['평가금액'], hole=.3, textinfo='percent+label')])
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
-        # --- [v40.13 UI: 24시간 골든-타임 강조] ---
+        # --- [v40.14 UI: HTML 렌더링 오류 수정 및 폰트 최적화] ---
         st.divider()
         st.markdown(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>", unsafe_allow_html=True)
         
@@ -489,26 +489,27 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             for idx, item in enumerate(news_items):
                 target_col = n_col1 if idx % 2 == 0 else n_col2
                 with target_col:
-                    # 🕒 조건에 따른 스타일 정의 (황금 vs 스카이블루)
-                    if item['is_recent']:
+                    # 🕒 24시간 이내 뉴스 스타일링 (황금 vs 스카이블루)
+                    if item.get('is_recent', False):
                         border_style = "border-left: 4px solid #FFD700; background: rgba(255, 215, 0, 0.04);"
                         new_badge = "<span style='color:#FFD700; font-weight:bold; font-size:0.85rem; margin-right:5px;'>[NEW]</span>"
                     else:
                         border_style = "border-left: 3px solid rgba(135,206,235,0.3); background: rgba(135,206,235,0.02);"
                         new_badge = ""
                     
+                    # 🎯 핵심: unsafe_allow_html=True가 반드시 포함되어야 합니다.
                     st.markdown(f"""
-                        <div style='margin-bottom: 12px; padding: 12px; border-radius: 8px; {border_style}'>
+                        <div style="margin-bottom: 12px; padding: 12px; border-radius: 8px; {border_style}">
                             {new_badge}
-                            <a href='{item['link']}' target='_blank' style='text-decoration: none; color: #87CEEB; font-weight: 500; font-size: 1.0rem; line-height: 1.4;'>
+                            <a href="{item['link']}" target="_blank" style="text-decoration: none; color: #87CEEB; font-weight: 500; font-size: 1.0rem; line-height: 1.4;">
                                 {item['title']}
                             </a><br>
-                            <div style='margin-top: 8px; font-size: 0.8rem; color: #888; display: flex; justify-content: space-between; opacity: 0.8;'>
+                            <div style="margin-top: 8px; font-size: 0.8rem; color: #888; display: flex; justify-content: space-between; opacity: 0.8;">
                                 <span>🏢 {item['info']}</span>
                                 <span>📅 {item['date']}</span>
                             </div>
                         </div>
-                    """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True) # <-- 이 부분이 누락되면 스크린샷처럼 코드가 보입니다.
         else:
             st.caption("현재 표시할 뉴스 데이터가 없습니다.")
                 
@@ -601,6 +602,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
