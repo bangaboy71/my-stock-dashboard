@@ -56,85 +56,67 @@ STOCK_CODES = {
     "SK스퀘어": "402340"
 }
 
-# --- [v40.19 시장 지수 엔진: Naver 실시간 변동분 수집 강화] ---
+# --- [v40.21 시장 지수 엔진: 거래량 독립 및 텍스트 클리닝] ---
 def get_market_status():
-    # 기본값 설정
     data = {
-        "KOSPI": {"val": "-", "diff": "0.00", "pct": "0.00%", "color": "white"},
-        "KOSDAQ": {"val": "-", "diff": "0.00", "pct": "0.00%", "color": "white"},
-        "USD/KRW": {"val": "-", "diff": "0.00", "pct": "원", "color": "white"},
-        "VOLUME": {"val": "-", "diff": "KOSPI", "pct": "천주", "color": "white"}
+        "KOSPI": {"val": "-", "pct": "0.00%", "color": "#ffffff"},
+        "KOSDAQ": {"val": "-", "pct": "0.00%", "color": "#ffffff"},
+        "USD/KRW": {"val": "-", "pct": "0원", "color": "#ffffff"},
+        "VOLUME": {"val": "-", "pct": "천주", "color": "#ffffff"} # 거래량은 흰색 고정
     }
     
-    header = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://finance.naver.com/'
-    }
+    header = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.naver.com/'}
     
-    # 🎯 1단계: Naver Finance 정밀 크롤링 (현재가 + 변동액 + 변동률)
     try:
+        # 🎯 1. 코스피/코스닥 정밀 수집
         for code in ["KOSPI", "KOSDAQ"]:
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
             res = requests.get(url, headers=header, timeout=5)
             res.encoding = 'euc-kr'
             soup = BeautifulSoup(res.text, 'html.parser')
             
+            # 현재 지수
             now_el = soup.select_one("#now_value")
+            if now_el: data[code]["val"] = now_el.get_text(strip=True)
+            
+            # 변동치 정제 (상승/하락 글자 제거 및 부호 유지)
             diff_el = soup.select_one("#change_value_and_rate")
-            
-            if now_el and diff_el:
-                now_val = now_el.get_text(strip=True)
-                diff_text = diff_el.get_text(strip=True).split() # [변동액, 변동률]
+            if diff_el:
+                raw_txt = diff_el.get_text(" ", strip=True) # 공백을 넣어 가독성 확보
+                # '상승', '하락', '보합' 글자 완전 제거
+                for word in ["상승", "하락", "보합"]: raw_txt = raw_txt.replace(word, "")
                 
-                # 상승/하락 색상 판별
-                change_type = soup.select_one("#quotation_img_margin")
-                color = "white"
-                if change_type:
-                    if "상승" in str(change_type) or "상한" in str(change_type): color = "#FF4B4B"
-                    elif "하락" in str(change_type) or "하한" in str(change_type): color = "#87CEEB"
+                # 색상 결정 (부호 기준)
+                if "+" in raw_txt: data[code]["color"] = "#FF4B4B"
+                elif "-" in raw_txt: data[code]["color"] = "#87CEEB"
                 
-                data[code] = {
-                    "val": now_val,
-                    "diff": diff_text[0] if len(diff_text) > 0 else "0.00",
-                    "pct": diff_text[1] if len(diff_text) > 1 else "0.00%",
-                    "color": color
-                }
-            
-            # 거래량 수집 (KOSPI 기준)
+                data[code]["pct"] = raw_txt.strip()
+
+            # 🎯 2. [거래량] - 코스피 루프에서 독립적으로 수집
             if code == "KOSPI":
                 vol_el = soup.select_one("#quant")
-                if vol_el: data["VOLUME"]["val"] = vol_el.get_text(strip=True)
+                if vol_el: 
+                    data["VOLUME"]["val"] = vol_el.get_text(strip=True)
+                    data["VOLUME"]["pct"] = "천주" # 단위 고정
 
-        # 환율 수집
+        # 🎯 3. 환율 수집
         ex_res = requests.get("https://finance.naver.com/marketindex/", headers=header, timeout=5)
         ex_soup = BeautifulSoup(ex_res.text, 'html.parser')
         ex_val = ex_soup.select_one("span.value")
-        if ex_val: data["USD/KRW"]["val"] = ex_val.get_text(strip=True)
+        if ex_val:
+            data["USD/KRW"]["val"] = ex_val.get_text(strip=True)
+            ex_change = ex_soup.select_one("span.change").get_text(strip=True)
+            ex_blind = ex_soup.select_one("div.head_info > span.blind").get_text()
             
-    except Exception as e:
-        print(f"Naver Index Error: {e}")
-
-    # 🎯 2단계: Yahoo Finance 백업 (Naver 실패 시에만 작동)
-    yf_mapping = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
-    for name, ticker in yf_mapping.items():
-        if data[name]["val"] == "-":
-            try:
-                tk = yf.Ticker(ticker)
-                hist = tk.history(period="2d")
-                if not hist.empty:
-                    latest = hist.iloc[-1]
-                    prev = hist.iloc[-2]
-                    diff = latest['Close'] - prev['Close']
-                    pct = (diff / prev['Close']) * 100
-                    color = "#FF4B4B" if diff > 0 else "#87CEEB" if diff < 0 else "white"
-                    data[name] = {
-                        "val": f"{latest['Close']:,.2f}",
-                        "diff": f"{diff:+,.2f}",
-                        "pct": f"{pct:+.2f}%",
-                        "color": color
-                    }
-            except: continue
-
+            if "상승" in ex_blind:
+                data["USD/KRW"]["color"], sign = "#FF4B4B", "+"
+            elif "하락" in ex_blind:
+                data["USD/KRW"]["color"], sign = "#87CEEB", "-"
+            else:
+                data["USD/KRW"]["color"], sign = "#ffffff", ""
+            data["USD/KRW"]["pct"] = f"{sign}{ex_change}원"
+            
+    except: pass
     return data
     
 def get_stock_data(name):
@@ -292,23 +274,28 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# --- [v40.21 HUD 렌더링: 거래량 레이아웃 최적화] ---
 m_status = get_market_status()
 hud_cols = st.columns(4)
-
 titles = ["KOSPI", "KOSDAQ", "USD/KRW", "MARKET VOL"]
 keys = ["KOSPI", "KOSDAQ", "USD/KRW", "VOLUME"]
 
 for i, col in enumerate(hud_cols):
     with col:
         d = m_status[keys[i]]
+        # 테두리 색상: 거래량은 은은한 회색, 지수는 변동색 적용
+        border = f"{d['color']}44" if keys[i] != "VOLUME" else "rgba(255,255,255,0.1)"
+        
         st.markdown(f"""
-            <div style='text-align: center; padding: 15px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid {d['color']}33;'>
-                <span style='color: #aaa; font-size: 0.85rem; font-weight: bold;'>{titles[i]}</span><br>
-                <span style='color: {d['color']}; font-size: 1.6rem; font-weight: bold;'>{d['val']}</span><br>
-                <span style='color: {d['color']}; font-size: 0.95rem;'>{d['diff']} {d['pct']}</span>
+            <div style='text-align: center; padding: 15px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid {border};'>
+                <div style='color: #aaa; font-size: 0.85rem; font-weight: bold; margin-bottom: 5px;'>{titles[i]}</div>
+                <div style='color: {d['color']}; font-size: 1.8rem; font-weight: bold; line-height: 1.2;'>{d['val']}</div>
+                <div style='color: {d['color'] if keys[i] != "VOLUME" else "#aaa"}; font-size: 1.0rem; font-weight: 500; margin-top: 5px;'>
+                    {d['pct']}
+                </div>
             </div>
         """, unsafe_allow_html=True)
-
+        
 st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
@@ -565,6 +552,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
