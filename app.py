@@ -7,14 +7,14 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 import time
 import yfinance as yf # 코드 최상단 import문에 추가해주세요
-# --- [v40.40 전역 설정: 우측 정렬 및 컬럼 매핑] ---
-# 이름 앞에 공백을 두지 않는 정석적인 매핑입니다.
-RENAME_MAP = {
+# --- [v40.41 최종 전역 설정: 이름표 통일] ---
+GLOBAL_RENAME_MAP = {
     '전일대비손익': '전일대비(원)', 
     '전일대비변동율': '전일대비(%)'
 }
-# 테이블에 표시할 순서
-DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+
+GLOBAL_DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v36.50", layout="wide")
 
@@ -329,8 +329,9 @@ with tabs[0]:
     sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     
-    # 3. [에러 해결 및 하이브리드 정렬] 데이터 테이블 출력
-    # (핵심: 사용 전 total_plot_df를 먼저 정의합니다)
+    st.divider()
+    
+    # 🎯 여기서 에러 발생! 아래 코드로 교체하세요.
     total_plot_df = full_df.rename(columns=GLOBAL_RENAME_MAP)
     
     st.dataframe(
@@ -338,20 +339,13 @@ with tabs[0]:
             'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
             for i, val in enumerate(x)
         ], axis=1).format({
-            '         수량': '{:,.0f}', 
-            '      매입단가': '{:,.0f}원', 
-            '      매입금액': '{:,.0f}원', 
-            '        현재가': '{:,.0f}원', 
-            '      평가금액': '{:,.0f}원', 
-            '          손익': '{:+,.0f}원', 
-            '    전일대비(원)': '{:+,.0f}원', 
-            '    전일대비(%)': '{:+.2f}%', 
-            '      누적수익률': '{:+.2f}%'
+            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
+            '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(원)': '{:+,.0f}원', 
+            '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
         }), 
-        hide_index=True, 
-        use_container_width=True
+        hide_index=True, use_container_width=True
     )
-
+    
     if not history_df.empty:
         fig = go.Figure()
         h_dates = history_df['Date'].dt.date.astype(str)
@@ -662,6 +656,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
