@@ -7,7 +7,14 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 import time
 import yfinance as yf # 코드 최상단 import문에 추가해주세요
-
+# --- [v40.40 전역 설정: 우측 정렬 및 컬럼 매핑] ---
+# 이름 앞에 공백을 두지 않는 정석적인 매핑입니다.
+RENAME_MAP = {
+    '전일대비손익': '전일대비(원)', 
+    '전일대비변동율': '전일대비(%)'
+}
+# 테이블에 표시할 순서
+DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v36.50", layout="wide")
 
@@ -300,8 +307,9 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황
+# [Tab 0] 총괄 현황 (v40.33 통합 버전)
 with tabs[0]:
+    # 1. 상단 요약 지표 (기존 기능 100% 유지)
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
@@ -314,15 +322,35 @@ with tabs[0]:
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
     st.divider()
+
+    # 2. 계좌별 요약 데이터 계산 (내부 로직 유지)
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
     sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
     sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']]
     
-    st.dataframe(sum_acc.style.apply(lambda x: ['color: #FF4B4B' if (i >= 3 and val > 0) else 'color: #87CEEB' if (i >= 3 and val < 0) else '' for i, val in enumerate(x)], axis=1).format({
-        '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-    }), use_container_width=True, hide_index=True)
+    # 3. [에러 해결 및 하이브리드 정렬] 데이터 테이블 출력
+    # (핵심: 사용 전 total_plot_df를 먼저 정의합니다)
+    total_plot_df = full_df.rename(columns=GLOBAL_RENAME_MAP)
+    
+    st.dataframe(
+        total_plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
+            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+            for i, val in enumerate(x)
+        ], axis=1).format({
+            '         수량': '{:,.0f}', 
+            '      매입단가': '{:,.0f}원', 
+            '      매입금액': '{:,.0f}원', 
+            '        현재가': '{:,.0f}원', 
+            '      평가금액': '{:,.0f}원', 
+            '          손익': '{:+,.0f}원', 
+            '    전일대비(원)': '{:+,.0f}원', 
+            '    전일대비(%)': '{:+.2f}%', 
+            '      누적수익률': '{:+.2f}%'
+        }), 
+        hide_index=True, 
+        use_container_width=True
+    )
 
     if not history_df.empty:
         fig = go.Figure()
@@ -634,6 +662,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
