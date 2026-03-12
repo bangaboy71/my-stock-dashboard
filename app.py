@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import time
 import yfinance as yf # 코드 최상단 import문에 추가해주세요
 
-# --- [v40.30: 앱 전역에서 사용할 공용 컬럼 맵] ---
+# 코드 맨 위(import 아래)에 위치해야 함
 GLOBAL_RENAME_MAP = {
     '종목명': '       종목명',
     '수량': '         수량',
@@ -21,7 +21,6 @@ GLOBAL_RENAME_MAP = {
     '전일대비변동율': '    전일대비(%)',
     '누적수익률': '      누적수익률'
 }
-# 공용 컬럼 리스트
 GLOBAL_DISPLAY_COLS = list(GLOBAL_RENAME_MAP.values())
 
 # 1. 설정 및 UI 스타일
@@ -331,8 +330,9 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황
+# [Tab 0] 총괄 현황 (v40.33 통합 버전)
 with tabs[0]:
+    # 1. 상단 요약 지표 (기존 기능 100% 유지)
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
@@ -345,22 +345,31 @@ with tabs[0]:
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
     st.divider()
+
+    # 2. 계좌별 요약 데이터 계산 (내부 로직 유지)
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
     sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
     sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']]
     
-    # --- [v40.29: 총괄탭 하이브리드 정렬 적용] ---
-            
+    # 3. [에러 해결 및 하이브리드 정렬] 데이터 테이블 출력
+    # (핵심: 사용 전 total_plot_df를 먼저 정의합니다)
+    total_plot_df = full_df.rename(columns=GLOBAL_RENAME_MAP)
+    
     st.dataframe(
         total_plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
             'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
             for i, val in enumerate(x)
         ], axis=1).format({
-            '         수량': '{:,.0f}', '      매입단가': '{:,.0f}원', '      매입금액': '{:,.0f}원', 
-            '        현재가': '{:,.0f}원', '      평가금액': '{:,.0f}원', '          손익': '{:+,.0f}원', 
-            '    전일대비(원)': '{:+,.0f}원', '    전일대비(%)': '{:+.2f}%', '      누적수익률': '{:+.2f}%'
+            '         수량': '{:,.0f}', 
+            '      매입단가': '{:,.0f}원', 
+            '      매입금액': '{:,.0f}원', 
+            '        현재가': '{:,.0f}원', 
+            '      평가금액': '{:,.0f}원', 
+            '          손익': '{:+,.0f}원', 
+            '    전일대비(원)': '{:+,.0f}원', 
+            '    전일대비(%)': '{:+.2f}%', 
+            '      누적수익률': '{:+.2f}%'
         }), 
         hide_index=True, 
         use_container_width=True
@@ -715,6 +724,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
