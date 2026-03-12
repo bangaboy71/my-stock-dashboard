@@ -357,7 +357,7 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# --- [v40.17 패치: 차트 레이아웃 복구 및 뉴스 렌더링 통합 버전] ---
+# --- [v40.18 패치: 마크다운 간섭 차단 및 차트 레이아웃 완전 복구] ---
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
@@ -365,7 +365,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             st.warning(f"{acc_name} 데이터가 발견되지 않았습니다.")
             return
         
-        # 1. 상단 계좌 요약 (Metric) - v40.8 기준 유지
+        # 1. 상단 계좌 요약 (Metric)
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_diff = sub_df['전일대비손익'].sum()
         a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
@@ -376,7 +376,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
         
-        # 2. v36.50 종목별 테이블 (10개 컬럼) - 복구 완료
+        # 2. 보유 종목 수익률 테이블 (10개 컬럼)
         display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']
         st.dataframe(sub_df[display_cols].style.apply(lambda x: [
             'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
@@ -389,8 +389,8 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
 
         st.divider()
         
-        # 3. 종목 선택 및 인텔리전스 데이터 계산
-        sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_v4017_{acc_name}")
+        # 3. 종목 분석 선택 및 수치 계산
+        sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_v4018_{acc_name}")
         s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
         
         curr_p, buy_p = float(s_row.get('현재가', 0)), float(s_row.get('매입단가', 0))
@@ -401,17 +401,17 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         ann_ret = ((1 + total_ret/100)**(365/days) - 1) * 100
         sl_price, tp_price = buy_p * 0.85, post_high * 0.80
 
-        # 4. [중앙 배치] 지표 및 전략 모니터 (v40.8 레이아웃)
+        # 4. [중앙] 지표 및 전략 모니터
         col_res, col_strat = st.columns([1, 1])
         with col_res:
             res = RESEARCH_DATA.get(sel.replace(" ", ""))
             if res:
-                metrics_html = "".join([f"<tr><td>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span style='color:#FFD700;'>{m[2]}</span></td></tr>" for m in res['metrics']])
-                st.markdown(f"""<div class='report-box' style='height:210px;'>📋 <b>핵심 재무 지표</b><table style='width:100%'>{metrics_html}</table><div style='margin-top:10px; font-size:0.85rem; border-top:1px solid rgba(255,255,255,0.05); padding-top:8px;'><span style='color:#FFD700;'>💡 인사이트:</span> {res['implications'][0]}</div></div>""", unsafe_allow_html=True)
-            else: st.info("💡 종목 상세 분석 데이터가 없습니다.")
+                m_html = "".join([f"<tr><td>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span style='color:#FFD700;'>{m[2]}</span></td></tr>" for m in res['metrics']])
+                st.html(f"<div class='report-box' style='height:210px;'>📋 <b>핵심 재무 지표</b><table style='width:100%'>{m_html}</table><div style='margin-top:10px; font-size:0.85rem; border-top:1px solid rgba(255,255,255,0.05); padding-top:8px;'><span style='color:#FFD700;'>💡 인사이트:</span> {res['implications'][0]}</div></div>")
+            else: st.info("💡 종목 분석 데이터가 없습니다.")
 
         with col_strat:
-            st.markdown(f"""
+            st.html(f"""
                 <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.1); height: 210px; text-align: center;'>
                     <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 15px;'>⚡ 실시간 전략 모니터</div>
                     <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;'>
@@ -421,10 +421,10 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                     </div>
                     <div style='border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px; margin-top: 15px; font-size: 0.9rem; color: #bbb;'>현재가: <b>{curr_p:,.0f}원</b> / 52주 최고: {high_52:,.0f}원</div>
                 </div>
-            """, unsafe_allow_html=True)
+            """)
 
-        # 5. [하단] 익절/손절 경보 (v40.8 스타일)
-        st.markdown(f"""
+        # 5. [하단] 리스크 경보 시스템
+        st.html(f"""
             <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"}; margin-top: 15px;'>
                 <div style='display: flex; justify-content: space-between; font-size: 0.95rem;'>
                     <span>🛡️ <b>손절 가이드 (-15%):</b> {sl_price:,.0f}원 <small>(매입 {buy_p:,.0f} 대비)</small></span>
@@ -435,9 +435,9 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                     <span style='color: {"#FFA500" if curr_p <= tp_price else "#00FF00"}; font-weight: bold;'>{"⚠️ 추세 이탈" if curr_p <= tp_price else "✅ 추세 유지"}</span>
                 </div>
             </div>
-        """, unsafe_allow_html=True)
+        """)
 
-        # 6. [복구 완료] 차트 레이아웃 (성과 추이 및 자산 비중)
+        # 6. [복구] 성과 추이 및 자산 비중 차트 레이아웃
         g_left, g_right = st.columns([2, 1])
         with g_left:
             if not history_df.empty:
@@ -455,9 +455,9 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             fig_p.update_layout(title="💰 자산 비중", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", showlegend=False)
             st.plotly_chart(fig_p, use_container_width=True)
 
-        # 7. [통합 완료] 와이드 뉴스 섹션 (HTML 렌더링 정상화)
+        # 7. [최종] 실시간 뉴스 섹션 (st.html 사용으로 마크다운 간섭 완전 차단)
         st.divider()
-        st.markdown(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>", unsafe_allow_html=True)
+        st.html(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>")
         
         news_items = get_stock_news(sel)
         if news_items:
@@ -466,11 +466,13 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                 target_col = n_col1 if idx % 2 == 0 else n_col2
                 with target_col:
                     is_hot = item.get('is_recent', False)
-                    b_style = "border-left: 4px solid #FFD700; background: rgba(255, 215, 0, 0.04);" if is_hot else "border-left: 3px solid rgba(135,206,235,0.3); background: rgba(135,206,235,0.02);"
+                    b_color = "#FFD700" if is_hot else "rgba(135,206,235,0.3)"
+                    bg_color = "rgba(255, 215, 0, 0.04)" if is_hot else "rgba(135,206,235,0.02)"
                     badge = "<span style='color:#FFD700; font-weight:bold; font-size:0.85rem; margin-right:5px;'>[NEW]</span>" if is_hot else ""
                     
-                    card_html = f"""
-                        <div style="margin-bottom: 12px; padding: 12px; border-radius: 8px; {b_style}">
+                    # 🎯 핵심: st.html()은 f-string 내부의 들여쓰기를 코드로 오해하지 않습니다.
+                    st.html(f"""
+                        <div style="margin-bottom: 12px; padding: 12px; border-radius: 8px; border-left: 4px solid {b_color}; background: {bg_color};">
                             {badge}
                             <a href="{item['link']}" target="_blank" style="text-decoration: none; color: #87CEEB; font-weight: 500; font-size: 1.0rem; line-height: 1.4;">
                                 {item['title']}
@@ -480,10 +482,9 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                                 <span>📅 {item['date']}</span>
                             </div>
                         </div>
-                    """
-                    st.markdown(card_html, unsafe_allow_html=True)
+                    """)
         else:
-            st.caption(f"현재 {sel}에 대한 새로운 뉴스 데이터가 없습니다.")
+            st.caption("새로운 뉴스 데이터가 없습니다.")
                 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
@@ -574,6 +575,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
