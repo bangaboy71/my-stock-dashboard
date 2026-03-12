@@ -427,24 +427,18 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                 if s_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', name=f'{sel} 실제수익률', line=dict(width=2, dash='dot')))
                 fig_acc.update_layout(title=f"📈 {acc_name} 성과 추이", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
                 st.plotly_chart(fig_acc, use_container_width=True)
-        # --- [v40.24 패치: 계좌 합계 최상단 고정 및 스크롤 차트] ---
+        # --- [v40.25 패치: 차트 타이틀 정리 및 우측 여백 확장 버전] ---
         with g_right:
-            # 1. 데이터 준비 및 합계 계산
+            # 1. 데이터 준비 및 합계 계산 (v40.24 로직 유지)
             acc_total_buy = sub_df['매입금액'].sum()
             acc_total_eval = sub_df['평가금액'].sum()
             acc_total_ret = ((acc_total_eval / acc_total_buy) - 1) * 100 if acc_total_buy > 0 else 0
             
-            # 차트용 데이터 복사
             chart_df = sub_df[['종목명', '매입금액', '평가금액', '누적수익률']].copy()
-            
-            # 2. 이름 줄임 처리 (9자 제한)
             chart_df['Display_Name'] = chart_df['종목명'].apply(lambda x: x[:9] + ".." if len(x) > 9 else x)
             
-            # 3. [최상단 고정 정렬 로직]
-            # (1) 일반 종목: 평가금액순 오름차순 정렬 (Plotly는 아래서 위로 쌓으므로 오름차순이 시각적 내림차순 효과)
+            # 정렬 및 합계 행 결합
             others = chart_df.sort_values('평가금액', ascending=True)
-            
-            # (2) 합계 행 생성 및 리스트의 마지막(최상단)에 결합
             total_row = pd.DataFrame({
                 '종목명': ['[계좌 합계]'],
                 'Display_Name': ['[계좌 합계]'],
@@ -452,59 +446,74 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                 '평가금액': [acc_total_eval],
                 '누적수익률': [acc_total_ret]
             })
-            # 일반 종목들 위에 합계를 마지막으로 붙여서 최상단 고정
             final_chart_df = pd.concat([others, total_row], ignore_index=True)
 
-            # 4. 동적 높이 설정
+            # 2. 동적 높이 설정
             dynamic_height = max(400, len(final_chart_df) * 45 + 80)
 
             fig_bar = go.Figure()
 
-            # 매입금액 막대 (원금)
+            # (1) 매입금액 막대 (원금)
             fig_bar.add_trace(go.Bar(
                 y=final_chart_df['Display_Name'],
                 x=final_chart_df['매입금액'],
                 orientation='h',
-                marker_color='rgba(170, 170, 170, 0.4)',
+                marker_color='rgba(170, 170, 170, 0.3)',
                 hovertemplate='매입: %{x:,.0f}원<extra></extra>'
             ))
 
-            # 평가금액 막대 (현재가)
-            # 합계는 황금색, 나머지는 수익률에 따라 빨강/파랑
+            # (2) 평가금액 막대 (현재가)
             colors = []
-            for n, r in zip(final_chart_df['종목명'], final_chart_df['누적수익률']):
-                if n == '[계좌 합계]': colors.append('#FFD700')
-                else: colors.append('#FF4B4B' if r > 0 else '#87CEEB')
+            text_labels = []
+            for n, v, r in zip(final_chart_df['종목명'], final_chart_df['평가금액'], final_chart_df['누적수익률']):
+                # 색상 결정
+                if n == '[계좌 합계]':
+                    colors.append('#FFD700')
+                    # 계좌 합계는 비중(100%) 생략하고 총 변동비율(수익률)만 강조
+                    text_labels.append(f" <b>{r:+.2f}%</b>")
+                else:
+                    colors.append('#FF4B4B' if r > 0 else '#87CEEB')
+                    # 종목별 비중 + 변동비율(수익률) 표기
+                    weight = (v / acc_total_eval * 100)
+                    text_labels.append(f" {int(weight)}% ({r:+.1f}%)")
             
             fig_bar.add_trace(go.Bar(
                 y=final_chart_df['Display_Name'],
                 x=final_chart_df['평가금액'],
                 orientation='h',
                 marker_color=colors,
-                # 막대 옆에 비중(%)과 수익률 표기
-                text=[f" {int(v/acc_total_eval*100)}% ({r:+.1f}%)" for v, r in zip(final_chart_df['평가금액'], final_chart_df['누적수익률'])],
-                textposition='outside',
+                text=text_labels,
+                textposition='outside', # 막대 바깥쪽에 표시
+                cliponaxis=False,       # 텍스트가 축 밖으로 나가도 잘리지 않게 설정
                 hovertemplate='평가: %{x:,.0f}원<extra></extra>'
             ))
 
+            # 3. 레이아웃 정밀 조정
             fig_bar.update_layout(
-                title=f"💰 자산 성장 및 비중 (합계: {acc_total_eval:,.0f})",
+                title="💰 자산 성장 및 비중 (매입 vs 평가)", # 합계액 삭제
                 height=dynamic_height,
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
                 font_color="white",
                 showlegend=False,
-                margin=dict(l=10, r=90, t=50, b=10),
-                xaxis=dict(showgrid=False, zeroline=True, showticklabels=False),
+                # 🎯 핵심: 우측 여백을 140px로 대폭 늘려 텍스트 잘림 방지
+                margin=dict(l=10, r=140, t=50, b=10), 
+                xaxis=dict(
+                    showgrid=False, 
+                    zeroline=True, 
+                    showticklabels=False,
+                    # 막대 끝 텍스트 공간을 위해 가상의 여백(Range) 추가
+                    range=[0, final_chart_df['평가금액'].max() * 1.25] 
+                ),
                 yaxis=dict(showgrid=False, dtick=1),
                 barmode='group',
                 bargap=0.2,
                 bargroupgap=0.05
             )
             
-            # 스크롤 컨테이너 적용
             with st.container(height=400, border=False):
                 st.plotly_chart(fig_bar, use_container_width=True, config={'displayModeBar': False})
+                
         # 7. [최종] 실시간 뉴스 섹션 (st.html 사용으로 마크다운 간섭 완전 차단)
         st.divider()
         st.html(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>")
@@ -625,6 +634,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
