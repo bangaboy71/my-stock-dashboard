@@ -368,21 +368,36 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
         
-        # --- [v40.26 컬럼명 동기화 작업] ---
-        # 1. 출력할 컬럼 리스트 정의 (이름 변경 반영)
+        # --- [v40.27: 컬럼명 변경 및 스타일 로직 완전 복구] ---
+        
+        # 1. 출력할 컬럼 리스트 (v40.26 명칭 반영)
         display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
 
-        # 2. 데이터프레임 컬럼 이름 변경 (Renaming)
-        # st.dataframe을 호출하기 직전에 수행
+        # 2. 데이터프레임 컬럼 이름 변경
         plot_df = sub_df.rename(columns={
             '전일대비손익': '전일대비(원)', 
             '전일대비변동율': '전일대비(%)'
         })
 
-        # 3. 변경된 plot_df를 사용하여 테이블 출력
-        st.dataframe(plot_df[display_cols].style.apply(...), # 기존 스타일 로직 유지
-             hide_index=True, 
-             use_container_width=True)
+        # 3. 테이블 출력 (에러 해결 핵심: 생략 없이 스타일 함수 적용)
+        st.dataframe(
+            plot_df[display_cols].style.apply(lambda x: [
+                'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+                for i, val in enumerate(x)
+            ], axis=1).format({
+                '수량': '{:,.0f}', 
+                '매입단가': '{:,.0f}원', 
+                '매입금액': '{:,.0f}원', 
+                '현재가': '{:,.0f}원', 
+                '평가금액': '{:,.0f}원', 
+                '손익': '{:+,.0f}원', 
+                '전일대비(원)': '{:+,.0f}원', 
+                '전일대비(%)': '{:+.2f}%', 
+                '누적수익률': '{:+.2f}%'
+            }), 
+            hide_index=True, 
+            use_container_width=True
+        )
 
         st.divider()
         
@@ -654,6 +669,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
