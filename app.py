@@ -11,6 +11,21 @@ import yfinance as yf # 코드 최상단 import문에 추가해주세요
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v36.50", layout="wide")
 
+def main():
+    # 1. 페이지 설정 바로 아래에 배치
+    st.set_page_config(layout="wide")
+
+    # --- [v40.26: 헤더 중앙 정렬용 CSS 적용 위치] ---
+    st.markdown("""
+        <style>
+        /* 데이터프레임 헤더 중앙 정렬 */
+        [data-testid="stHeader"] { text-align: center; } /* 스트림릿 버전에 따른 추가 대응 */
+        .stDataFrame thead tr th {
+            text-align: center !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: bold !important; }
@@ -353,16 +368,29 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
         
-        # 2. 보유 종목 수익률 테이블 (10개 컬럼)
-        display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']
-        st.dataframe(sub_df[display_cols].style.apply(lambda x: [
-            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
-            for i, val in enumerate(x)
-        ], axis=1).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
-            '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', 
-            '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-        }), hide_index=True, use_container_width=True)
+        # --- [v40.26: 컬럼명 변경 및 포맷 적용 코드] ---
+
+# 1. 컬럼 리스트 명칭 변경
+display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+
+# 2. 데이터프레임 내 컬럼명 실제로 변경 (Renaming)
+# 이 작업은 st.dataframe을 호출하기 직전에 수행합니다.
+plot_df = sub_df.rename(columns={
+    '전일대비손익': '전일대비(원)', 
+    '전일대비변동율': '전일대비(%)'
+})
+
+# 3. 스타일 및 포맷 적용 (format 키값도 변경된 이름과 일치해야 함)
+st.dataframe(plot_df[display_cols].style.apply(lambda x: [
+    'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+    for i, val in enumerate(x)
+], axis=1).format({
+    '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
+    '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
+    '전일대비(원)': '{:+,.0f}원', # 변경된 이름 적용
+    '전일대비(%)': '{:+.2f}%',   # 변경된 이름 적용
+    '누적수익률': '{:+.2f}%'
+}), hide_index=True, use_container_width=True)
 
         st.divider()
         
@@ -634,6 +662,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
