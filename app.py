@@ -386,20 +386,21 @@ with tabs[0]:
    
     st.divider()
 
-    # --- [v40.96 배당 연산 및 4단계 등급 적용] ---
+    # --- [v40.97 핵심: 배당 연산 및 4단계 등급 강제 적용] ---
     total_div = full_df['예상배당금'].sum()
     monthly_after_tax = (total_div * (1 - 0.154)) / 12
-    # 🎯 배당수익률 계산식 추가 (NameError 방지)
+    
+    # 🎯 중요: div_yield 변수를 여기서 명확히 계산해야 에러가 안 납니다.
     div_yield = (total_div / t_eval * 100) if t_eval != 0 else 0
     
-    # 🎯 4단계 등급 판정
-    total_grade = get_cashflow_grade(monthly_after_tax)
+    # 🎯 4단계 등급 판정 함수 호출
+    current_grade = get_cashflow_grade(monthly_after_tax)
     
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("연간 예상 총 배당금", f"{total_div:,.0f}원")
     d2.metric("세후 월 평균 수령액", f"{monthly_after_tax:,.0f}원")
     d3.metric("포트 배당수익률", f"{div_yield:.2f}%")
-    d4.metric("통합 현금흐름 등급", total_grade)
+    d4.metric("통합 현금흐름 등급", current_grade)
     
     # 5. 월별 배당 흐름 차트 (DIVIDEND_SCHEDULE 기반)
     monthly_data = {m: 0 for m in range(1, 13)}
@@ -452,20 +453,21 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
 
         st.divider()
 
-        # --- [v40.96 계좌별 배당 연산 및 4단계 등급 적용] ---
+        # --- [v40.97 핵심: 계좌별 배당 연산 및 4단계 등급 적용] ---
         a_total_div = sub_df['예상배당금'].sum()
         a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
-        # 🎯 계좌 배당수익률 계산식 추가 (NameError 방지)
+        
+        # 🎯 중요: a_div_yield 변수를 여기서 계산해야 에러가 안 납니다.
         a_div_yield = (a_total_div / a_eval * 100) if a_eval != 0 else 0
         
         # 🎯 계좌별 4단계 등급 판정
-        account_grade = get_cashflow_grade(a_monthly_tax)
+        acc_grade = get_cashflow_grade(a_monthly_tax)
         
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("연간 예상 배당금", f"{a_total_div:,.0f}원")
         d2.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원")
         d3.metric("계좌 배당수익률", f"{a_div_yield:.2f}%")
-        d4.metric("계좌 현금흐름 등급", account_grade)
+        d4.metric("계좌 현금흐름 등급", acc_grade)
         
         # 🎯 [복구 및 배치] 현금흐름 차트(좌) + 자산 비중 차트(우)
         g_left, g_right = st.columns([1, 1])
@@ -736,6 +738,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
