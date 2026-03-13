@@ -315,18 +315,20 @@ with tabs[0]:
     m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
-    # --- [신규 배당 요약 Row 2: v40.71 캐시플로우 HUD] ---
+    # [Tab 0] 총괄 현황 배당 섹션 수정
+with tabs[0]:
+
+    # 배당 요약 연산
     total_div = full_df['예상배당금'].sum()
-    # 세후 월 평균 수령액 계산 (배당소득세 15.4% 차감)
     monthly_after_tax = (total_div * (1 - 0.154)) / 12
-    # 현재가 대비 배당 수익률
     div_yield = (total_div / t_eval * 100) if t_eval != 0 else 0
     
     d1, d2, d3, d4 = st.columns(4)
-    d1.metric("연간 예상 총 배당금", f"₩{total_div:,.0f}", help="포트폴리오 내 모든 종목의 연간 배당금 합계")
-    d2.metric("세후 월 평균 수령액", f"₩{monthly_after_tax:,.0f}", help="배당소득세(15.4%) 차감 후 매달 들어오는 현금흐름")
-    d3.metric("포트 배당수익률", f"{div_yield:.2f}%", help="현재 평가액 대비 연간 배당수익률")
-    d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard", help="월 평균 수령액 기준 등급")
+    # 🎯 ₩ 기호를 제거하고 뒤에 '원'을 붙였습니다.
+    d1.metric("연간 예상 총 배당금", f"{total_div:,.0f}원")
+    d2.metric("세후 월 평균 수령액", f"{monthly_after_tax:,.0f}원")
+    d3.metric("포트 배당수익률", f"{div_yield:.2f}%")
+    d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard")
 
     st.divider()
     # (이하 테이블 출력 로직 유지...)
@@ -350,15 +352,12 @@ with tabs[0]:
         fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
-# --- [v40.18 패치: 마크다운 간섭 차단 및 차트 레이아웃 완전 복구] ---
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
-        if sub_df.empty:
-            st.warning(f"{acc_name} 데이터가 발견되지 않았습니다.")
-            return
-        
-        # 1. 상단 계좌 요약 (Metric)
+        if sub_df.empty: return
+
+        # --- [기존 계좌 요약 Metric Row 1] ---
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_diff = sub_df['전일대비손익'].sum()
         a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
@@ -367,7 +366,20 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         c1.metric("평가액", f"{a_eval:,.0f}원", delta=f"{a_diff:+,.0f}원 ({a_pct:+.2f}%)")
         c2.metric("매입액", f"{a_buy:,.0f}원")
         c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
-        c4.metric("누적수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
+        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:+.2f}%")
+
+        # --- [신규 계좌별 배당 Metric Row 2: v40.72] ---
+        a_total_div = sub_df['예상배당금'].sum()
+        a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
+        a_div_yield = (a_total_div / a_eval * 100) if a_eval != 0 else 0
+        
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric(f"계좌 연간 배당금", f"{a_total_div:,.0f}원")
+        d2.metric(f"계좌 세후 월수령액", f"{a_monthly_tax:,.0f}원")
+        d3.metric(f"계좌 배당수익률", f"{a_div_yield:.2f}%")
+        d4.metric(f"배당 기여도", f"{(a_total_div/total_div*100):.1f}%" if total_div > 0 else "0%")
+        
+        st.write("") # 가독성을 위한 간격
         
         # 2. 보유 종목 수익률 테이블 (10개 컬럼)
         display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']
@@ -650,6 +662,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
