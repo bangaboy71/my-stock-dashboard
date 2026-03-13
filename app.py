@@ -352,16 +352,39 @@ with tabs[0]:
     
     st.divider()
 
-    # 2. 계좌별 요약 테이블 (sum_acc)
+    # 2. 계좌별 요약 테이블 (음양 색채 및 정수 처리 적용)
     sum_acc = full_df.groupby('계좌명').agg({
-        '매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'
+        '매입금액':'sum', 
+        '평가금액':'sum', 
+        '손익':'sum', 
+        '전일대비손익':'sum'
     }).reset_index()
-    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
     
+    # 지표 재연산
+    sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
+    sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
+    
+    # 표시용 이름 변경 및 컬럼 정의
+    sum_acc_plot = sum_acc.rename(columns=GLOBAL_RENAME_MAP)
+    sum_acc_cols = ['계좌명', '매입금액', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+    
+    # --- [v40.99 스타일링 적용] ---
     st.dataframe(
-        sum_acc.rename(columns=GLOBAL_RENAME_MAP).style.format({
-            '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적수익률': '{:+.2f}%'
-        }), hide_index=True, use_container_width=True
+        sum_acc_plot[sum_acc_cols].style.applymap(
+            lambda x: 'color: #FF4B4B' if (isinstance(x, (int, float)) and x > 0) 
+                      else 'color: #87CEEB' if (isinstance(x, (int, float)) and x < 0) 
+                      else '',
+            subset=['손익', '전일대비(원)', '전일대비(%)', '누적수익률'] # 🎯 색상 적용 대상
+        ).format({
+            '매입금액': '{:,.0f}원', 
+            '평가금액': '{:,.0f}원', 
+            '손익': '{:+,.0f}원', 
+            '전일대비(원)': '{:+,.0f}원', # 🎯 0f로 정수 처리 (요청사항)
+            '전일대비(%)': '{:+.2f}%', 
+            '누적수익률': '{:+.2f}%'
+        }), 
+        hide_index=True, use_container_width=True
     )
     
     # 🎯 [위치 조정] 테이블 바로 아래에 배당 HUD와 차트 배치 시작
@@ -762,6 +785,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
