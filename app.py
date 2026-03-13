@@ -470,7 +470,7 @@ with tabs[0]:
             )
             st.plotly_chart(fig_cal, use_container_width=True)
     
-def render_account_tab(acc_name, tab_obj, history_col_key):
+def render_account_tab(acc_name, tab_obj, yield_col_name):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
         if sub_df.empty:
@@ -618,7 +618,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         # 🎯 1. 테두리가 있는 은은한 카드 구역 생성
         with st.container(border=True):
             # [핵심] s_row를 여기서 먼저 정의해야 NameError가 나지 않습니다.
-            sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+            sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}_v4099")
             
             # 선택된 종목의 한 줄 데이터를 추출 (이게 바로 s_row 상자입니다!)
             s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
@@ -809,6 +809,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
