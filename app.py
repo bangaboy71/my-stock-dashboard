@@ -56,6 +56,17 @@ STOCK_CODES = {
     "SK스퀘어": "402340"
 }
 
+# --- [v40.80: 종목별 예상 배당월 설정] ---
+# 한국 상장사 특성상 결산 배당은 4월에 집중되며, 분기 배당주를 별도 반영함
+DIVIDEND_SCHEDULE = {
+    "삼성전자": [5, 8, 11, 4],     # 분기 배당 (1,2,3분기는 익월말, 결산은 4월)
+    "KT&G": [5, 8, 11, 4],        # 분기 배당
+    "현대차2우B": [5, 8, 11, 4],   # 분기 배당
+    "현대글로비스": [4, 8],        # 반기 배달 (중간, 결산)
+    "테스": [4], "에스티팜": [4], "일진전기": [4], # 결산 배당 (4월)
+    "KODEX200타겟위클리커버드콜": list(range(1, 13)) # 월배당 (매달)
+}
+
 # --- [v40.21 시장 지수 엔진: 거래량 독립 및 텍스트 클리닝] ---
 def get_market_status():
     data = {
@@ -331,6 +342,54 @@ with tabs[0]:
     d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard")
 
     st.divider()
+    
+    st.write("")
+    # --- [v40.80 월별 배당 예측 연산 로직] ---
+    monthly_data = {m: 0 for m in range(1, 13)}
+    
+    for _, row in full_df.iterrows():
+        name = row['종목명']
+        total_div = row['예상배당금']
+        months = DIVIDEND_SCHEDULE.get(name, [4]) # 기본값은 4월(결산)
+        
+        if total_div > 0:
+            div_per_month = total_div / len(months)
+            for m in months:
+                monthly_data[m] += div_per_month
+
+    # 차트 데이터 구성
+    months_name = [f"{m}월" for m in range(1, 13)]
+    amounts = [monthly_data[m] for m in range(1, 13)]
+    
+    # 황금 배당달(최대값) 찾기
+    max_val = max(amounts) if amounts else 0
+    colors = ['#FFD700' if v == max_val and v > 0 else 'rgba(135,206,235,0.3)' for v in amounts]
+
+    # Plotly 차트 생성
+    fig_cal = go.Figure(go.Bar(
+        x=months_name,
+        y=amounts,
+        marker_color=colors,
+        text=[f"{v/10000:.1f}만" if v > 0 else "" for v in amounts],
+        textposition='outside',
+        hovertemplate='%{x} 예상: %{y:,.0f}원<extra></extra>'
+    ))
+
+    golden_month = months_name[amounts.index(max_val)] if max_val > 0 else "미정"
+
+    fig_cal.update_layout(
+        title=f"📅 월별 예상 배당 흐름 (황금 배당달: <b style='color:#FFD700;'>{golden_month}</b>)",
+        height=350,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font_color="white",
+        margin=dict(l=10, r=10, t=50, b=10),
+        xaxis=dict(showgrid=False),
+        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)', showticklabels=False)
+    )
+
+    st.plotly_chart(fig_cal, use_container_width=True, config={'displayModeBar': False})
+    
     # (이하 테이블 출력 로직 유지...)
     sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
     sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
@@ -662,6 +721,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
