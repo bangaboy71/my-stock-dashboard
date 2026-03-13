@@ -477,7 +477,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
             st.warning(f"{acc_name} 데이터가 발견되지 않았습니다.")
             return
         
-        # --- [1. 상단 계좌 요약 (Metric)] ---
+        # --- [1. 상단 계좌 요약 Metric] ---
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_diff = sub_df['전일대비손익'].sum()
         a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
@@ -488,7 +488,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
         c3.metric("계좌 손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
 
-        # --- [2. 보유 종목 테이블] ---
+        # --- [2. 보유 종목 테이블] --- (음양 색채 유지)
         plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
         st.dataframe(
             plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
@@ -504,68 +504,44 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
 
         st.divider()
 
+        # --- [3. 현금흐름 등급 섹션] ---
         a_total_div = sub_df['예상배당금'].sum()
         a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
-        
-        # 🎯 이 줄로 교체하세요!
         a_grade = get_cashflow_grade(a_monthly_tax)
         
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("연간 예상 배당금", f"{a_total_div:,.0f}원")
         d2.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원")
         d3.metric("계좌 배당수익률", f"{(a_total_div/a_eval*100):.2f}%")
-        d4.metric("계좌 현금흐름 등급", a_grade) # 4단계 등급 출력 
+        d4.metric("계좌 현금흐름 등급", a_grade)
 
         st.divider()
-        # 🎯 [v40.99 UI 강화] 계좌별 병렬 차트 구역
+
+        # --- [4. 계좌별 병렬 차트 구역 (배당/비중)] ---
         g_left, g_right = st.columns(2)
-        
         with g_left:
-            with st.container(border=True): # 👈 테두리 카드 적용
+            with st.container(border=True):
                 a_monthly_data = {m: 0 for m in range(1, 13)}
                 for _, row in sub_df.iterrows():
                     sched = DIVIDEND_SCHEDULE.get(row['종목명'], [4])
                     for m in sched: a_monthly_data[m] += (row['예상배당금']/len(sched))
-                
-                fig_a_cal = go.Figure(go.Bar(
-                    x=[f"{m}월" for m in range(1, 13)], y=list(a_monthly_data.values()),
-                    marker_color='rgba(255, 215, 0, 0.6)',
-                    text=[f"{v/10000:.1f}만" if v > 0 else "" for v in a_monthly_data.values()],
-                    textposition='outside'
-                ))
-                fig_a_cal.update_layout(
-                    title=dict(text="📅 월별 배당 예측", x=0.02, y=0.9),
-                    height=300, 
-                    paper_bgcolor='rgba(0,0,0,0)', 
-                    plot_bgcolor='rgba(255,255,255,0.02)', # 👈 은은한 배경색
-                    font_color="white", margin=dict(t=80, b=20, l=10, r=10)
-                )
+                fig_a_cal = go.Figure(go.Bar(x=[f"{m}월" for m in range(1, 13)], y=list(a_monthly_data.values()), marker_color='rgba(255, 215, 0, 0.6)', text=[f"{v/10000:.1f}만" if v > 0 else "" for v in a_monthly_data.values()], textposition='outside'))
+                fig_a_cal.update_layout(title=dict(text="📅 월별 배당 예측", x=0.02), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(255,255,255,0.02)', font_color="white", margin=dict(t=80, b=20))
                 st.plotly_chart(fig_a_cal, use_container_width=True)
 
         with g_right:
-            with st.container(border=True): # 👈 테두리 카드 적용
+            with st.container(border=True):
                 chart_df = sub_df[['종목명', '평가금액', '누적수익률']].copy()
                 chart_df['Display_Name'] = chart_df['종목명'].apply(lambda x: x[:9] + ".." if len(x) > 9 else x)
-                
-                fig_bar = go.Figure(go.Bar(
-                    y=chart_df['Display_Name'], x=chart_df['평가금액'], 
-                    orientation='h', 
-                    marker_color=['#FF4B4B' if r > 0 else '#87CEEB' for r in chart_df['누적수익률']],
-                    text=[f" {int(v/a_eval*100)}%" if a_eval != 0 else "" for v in chart_df['평가금액']],
-                    textposition='outside'
-                ))
-                fig_bar.update_layout(
-                    title=dict(text="📊 자산 비중", x=0.02, y=0.9),
-                    height=300, 
-                    paper_bgcolor='rgba(0,0,0,0)', 
-                    plot_bgcolor='rgba(255,255,255,0.02)', # 👈 은은한 배경색
-                    font_color="white", margin=dict(t=80, b=20, l=10, r=50)
-                )
+                fig_bar = go.Figure(go.Bar(y=chart_df['Display_Name'], x=chart_df['평가금액'], orientation='h', marker_color=['#FF4B4B' if r > 0 else '#87CEEB' for r in chart_df['누적수익률']], text=[f" {int(v/a_eval*100)}%" if a_eval != 0 else "" for v in chart_df['평가금액']], textposition='outside'))
+                fig_bar.update_layout(title=dict(text="📊 자산 비중", x=0.02), height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(255,255,255,0.02)', font_color="white", margin=dict(t=80, b=20))
                 st.plotly_chart(fig_bar, use_container_width=True)
                 
         st.divider()
-        # --- [5. 투자종목 분석 (하위 배치는 기존과 동일)] ---
-        sel = st.selectbox(f"📍 {acc_name} 종목 정밀 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+
+        # --- [5. 통합 투자종목 정밀 분석 (버튼 하나로 일괄 통제)] ---
+        # 🎯 통합 버튼: 이 버튼 하나가 아래의 모든(지표, 전략, 가이드, 차트, 뉴스) 데이터를 결정합니다.
+        sel = st.selectbox(f"🔍 {acc_name} 종목 정밀 분석 (전략/성과/뉴스 통합)", sub_df['종목명'].unique(), key=f"sel_{acc_name}_unified")
         s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
         
         curr_p, buy_p = float(s_row.get('현재가', 0)), float(s_row.get('매입단가', 0))
@@ -576,7 +552,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
         ann_ret = ((1 + total_ret/100)**(365/days) - 1) * 100
         sl_price, tp_price = buy_p * 0.85, post_high * 0.80
 
-        # 4. [중앙] 지표 및 전략 모니터
+        # (A) 재무지표 및 전략 모니터 (사용자님 스타일 유지)
         col_res, col_strat = st.columns([1, 1])
         with col_res:
             res = RESEARCH_DATA.get(sel.replace(" ", ""))
@@ -598,7 +574,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                 </div>
             """)
 
-        # 5. [하단] 리스크 경보 시스템
+        # (B) 리스크 경보 시스템
         st.html(f"""
             <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"}; margin-top: 15px;'>
                 <div style='display: flex; justify-content: space-between; font-size: 0.95rem;'>
@@ -612,113 +588,52 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
             </div>
         """)
 
-      # --- [v40.99 개별 계좌 탭: 분석 섹션] ---
-        st.divider()
-        
-        # 🎯 1. 테두리가 있는 은은한 카드 구역 생성
+        # (C) 성과 추이 차트 (별도의 버튼 없이 위에서 선택한 'sel' 사용)
         with st.container(border=True):
-            # [핵심] s_row를 여기서 먼저 정의해야 NameError가 나지 않습니다.
-            sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}_v4099")
-            
-            # 선택된 종목의 한 줄 데이터를 추출 (이게 바로 s_row 상자입니다!)
-            s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
-
-            # --- [사용자님 v40.94 성과 추이 로직 시작] ---
             if not history_df.empty:
                 fig_acc = go.Figure()
-                
-                # 데이터 파싱
                 history_df['Date'] = pd.to_datetime(history_df['Date'])
                 h_dt = history_df['Date'].dt.date.astype(str)
                 
-                # 🎯 목표 수익률 연산 (사용자님 v40.94 로직 100% 유지)
                 goal_val = s_row.get('목표수익률', 10.0)
-                if goal_val == 0 or pd.isna(goal_val):
-                    goal_val = 10.0
-                
-                # 소수점 3자리 이하 버림 처리
+                if goal_val == 0 or pd.isna(goal_val): goal_val = 10.0
                 indiv_target_yield = int(float(goal_val) * 1000) / 1000 
                 static_target_line = [indiv_target_yield] * len(h_dt)
 
-                # 1. KOSPI 라인
-                fig_acc.add_trace(go.Scatter(
-                    x=h_dt, y=history_df['KOSPI_Relative'], 
-                    name='KOSPI', 
-                    line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)
-                ))
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)))
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=static_target_line, name='목표 수익률', line=dict(color='#FFD700', width=2, dash='dot')))
                 
-                # 2. 목표 수익률 라인
-                fig_acc.add_trace(go.Scatter(
-                    x=h_dt, y=static_target_line, 
-                    name='목표 수익률', 
-                    line=dict(color='#FFD700', width=2, dash='dot')
-                ))
-                
-                # 3. 계좌 수익률 라인 (조건부 색상 로직 유지)
                 acc_col = find_matching_col(history_df, acc_name)
                 if acc_col:
                     current_y = history_df[acc_col].iloc[-1]
                     line_color = '#00FF00' if current_y >= indiv_target_yield else '#FF4B4B'
-                    fig_acc.add_trace(go.Scatter(
-                        x=h_dt, y=history_df[acc_col], 
-                        mode='lines+markers', name='계좌 수익률', 
-                        line=dict(width=4, color=line_color)
-                    ))
+                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name='계좌 수익률', line=dict(width=4, color=line_color)))
                 
-                # 4. 종목 수익률 라인 (9자리 제한 유지)
                 s_col = find_matching_col(history_df, acc_name, sel)
                 if s_col:
-                    fig_acc.add_trace(go.Scatter(
-                        x=h_dt, y=history_df[s_col], 
-                        mode='lines', name=sel[:9], 
-                        line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')
-                    ))
+                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', name=sel[:9], line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')))
 
-                # 5. 레이아웃 (사용자님 스타일 + 은은한 배경색 추가)
-                fig_acc.update_layout(
-                    title=dict(text=f"📈 {sel} 분석 및 {acc_name} 성과 추이", x=0.02, xanchor='left'),
-                    height=450, 
-                    paper_bgcolor='rgba(0,0,0,0)', 
-                    plot_bgcolor='rgba(255,255,255,0.02)', # 👈 은은한 배경색
-                    font_color="white", 
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-                    margin=dict(l=15, r=15, t=80, b=80),
-                    xaxis=dict(type='category', tickangle=-45),
-                    yaxis=dict(title="수익률 (%)")
-                )
+                fig_acc.update_layout(title=dict(text=f"📈 {sel} 성과 분석 추이", x=0.02), height=400, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(255,255,255,0.02)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5), margin=dict(t=80, b=80), xaxis=dict(type='category', tickangle=-45))
                 st.plotly_chart(fig_acc, use_container_width=True)
                 
-        # 7. [최종] 실시간 뉴스 섹션 (st.html 사용으로 마크다운 간섭 완전 차단)
+        # (D) 실시간 뉴스 섹션
         st.divider()
-        
-        st.html(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>")
-        
+        st.html(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스</div>")
         news_items = get_stock_news(sel)
         if news_items:
             n_col1, n_col2 = st.columns([1, 1])
-            for idx, item in enumerate(news_items):
+            for idx, item in enumerate(news_items[:6]): # 상위 6개만 표시
                 target_col = n_col1 if idx % 2 == 0 else n_col2
                 with target_col:
                     is_hot = item.get('is_recent', False)
-                    b_color = "#FFD700" if is_hot else "rgba(135,206,235,0.3)"
-                    bg_color = "rgba(255, 215, 0, 0.04)" if is_hot else "rgba(135,206,235,0.02)"
-                    badge = "<span style='color:#FFD700; font-weight:bold; font-size:0.85rem; margin-right:5px;'>[NEW]</span>" if is_hot else ""
-                    
-                    # 🎯 핵심: st.html()은 f-string 내부의 들여쓰기를 코드로 오해하지 않습니다.
                     st.html(f"""
-                        <div style="margin-bottom: 12px; padding: 12px; border-radius: 8px; border-left: 4px solid {b_color}; background: {bg_color};">
-                            {badge}
-                            <a href="{item['link']}" target="_blank" style="text-decoration: none; color: #87CEEB; font-weight: 500; font-size: 1.0rem; line-height: 1.4;">
-                                {item['title']}
-                            </a><br>
-                            <div style="margin-top: 8px; font-size: 0.8rem; color: #888; display: flex; justify-content: space-between; opacity: 0.8;">
-                                <span>🏢 {item['info']}</span>
-                                <span>📅 {item['date']}</span>
-                            </div>
+                        <div style="margin-bottom: 10px; padding: 10px; border-radius: 8px; border-left: 4px solid {"#FFD700" if is_hot else "#87CEEB"}; background: rgba(255,255,255,0.02);">
+                            <a href="{item['link']}" target="_blank" style="text-decoration: none; color: #87CEEB; font-size: 0.95rem;">
+                                {"<span style='color:#FFD700;'>[NEW]</span> " if is_hot else ""}{item['title']}
+                            </a>
                         </div>
                     """)
-        else:
-            st.caption("새로운 뉴스 데이터가 없습니다.")
+        else: st.caption("새로운 뉴스가 없습니다.")
                 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
@@ -809,6 +724,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
