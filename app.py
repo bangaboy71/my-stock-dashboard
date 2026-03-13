@@ -327,9 +327,9 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 (v40.82 레이아웃 & 에러 해결 버전)
+# [Tab 0] 총괄 현황 (v40.83 계좌요약 테이블 복구 버전)
 with tabs[0]:
-    # 1. 상단 요약 Metric
+    # 1. 최상단 요약 Metric (가족 전체 합계)
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
@@ -343,16 +343,33 @@ with tabs[0]:
     
     st.divider()
 
-    # 2. 전체 종목 데이터 테이블 (우측 정렬 유지)
-    total_plot_df = full_df.rename(columns=GLOBAL_RENAME_MAP)
+    # 2. [복구] 계좌별 요약 테이블 (sum_acc)
+    # 각 계좌별로 그룹화하여 합계를 산출합니다.
+    sum_acc = full_df.groupby('계좌명').agg({
+        '매입금액':'sum', 
+        '평가금액':'sum', 
+        '손익':'sum', 
+        '전일대비손익':'sum'
+    }).reset_index()
+    
+    # 전일평가액 기준 변동율 계산
+    sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
+    sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
+    
+    # 전역 맵(GLOBAL_RENAME_MAP)을 적용하여 헤더 명칭 변경
+    sum_acc_plot = sum_acc.rename(columns=GLOBAL_RENAME_MAP)
+    
+    # 표시할 컬럼 설정 (계좌별 테이블 전용)
+    sum_acc_cols = ['계좌명', '매입금액', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+    
     st.dataframe(
-        total_plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
-            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+        sum_acc_plot[sum_acc_cols].style.apply(lambda x: [
+            'color: #FF4B4B' if (i >= 3 and val > 0) else 'color: #87CEEB' if (i >= 3 and val < 0) else '' 
             for i, val in enumerate(x)
         ], axis=1).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
-            '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(원)': '{:+,.0f}원', 
-            '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+            '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
+            '전일대비(원)': '{:+,.0f}원', '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
         }), 
         hide_index=True, use_container_width=True
     )
@@ -382,7 +399,7 @@ with tabs[0]:
     d3.metric("포트 배당수익률", f"{div_yield:.2f}%")
     d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard")
 
-    # 5. 월별 배당 흐름 차트
+    # 5. 월별 배당 흐름 차트 (DIVIDEND_SCHEDULE 기반)
     monthly_data = {m: 0 for m in range(1, 13)}
     for _, row in full_df.iterrows():
         name, t_div = row['종목명'], row['예상배당금']
@@ -709,6 +726,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
