@@ -378,55 +378,70 @@ with tabs[0]:
     d3.metric("포트 배당수익률", f"{(total_div / t_eval * 100):.2f}%" if t_eval != 0 else "0.00%")
     d4.metric("통합 현금흐름 등급", t_grade)
 
-    st.write("") # 미세 간격 조절
+    # (앞선 메트릭, 테이블, 배당 HUD 코드는 그대로 유지)
+    st.divider()
 
-    # 4. [복구] 포트폴리오 성과 추이 그래프
-    if not history_df.empty:
-        fig_total = go.Figure()
-        h_dt = history_df['Date'].dt.date.astype(str)
-        
-        # KOSPI 상대 수익률 (점선)
-        fig_total.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', line=dict(dash='dash', color='rgba(255,255,255,0.3)')))
-        
-        # 계좌별 수익률 추이 (실선)
-        for acc in sum_acc['계좌명'].unique():
-            acc_col = find_matching_col(history_df, acc)
-            if acc_col:
-                fig_total.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], name=acc))
-        
-        fig_total.update_layout(
-            title=dict(text="📈 전체 포트폴리오 성과 추이 (KOSPI 대비)", x=0, xanchor='left'),
-            height=380, paper_bgcolor='rgba(0,0,0,0)', font_color="white",
-            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-            margin=dict(t=80, b=80)
+    # 🎯 [와이드 레이아웃] 성과 추이와 배당 시뮬레이션을 한 줄에 배치
+    chart_col1, chart_col2 = st.columns(2)
+
+    # --- 좌측: 포트폴리오 성과 추이 ---
+    with chart_col1:
+        if not history_df.empty:
+            fig_total = go.Figure()
+            h_dt = history_df['Date'].dt.date.astype(str)
+            
+            # KOSPI 상대 수익률 (점선)
+            fig_total.add_trace(go.Scatter(
+                x=h_dt, y=history_df['KOSPI_Relative'], 
+                name='KOSPI', 
+                line=dict(dash='dash', color='rgba(255,255,255,0.3)')
+            ))
+            
+            # 계좌별 수익률 추이 (실선)
+            for acc in sum_acc['계좌명'].unique():
+                acc_col = find_matching_col(history_df, acc)
+                if acc_col:
+                    fig_total.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], name=acc))
+            
+            fig_total.update_layout(
+                title=dict(text="📈 자산 성장 추이", x=0, xanchor='left'),
+                height=400, # 좌우 배치 시 높이를 조금 키우면 시원해 보입니다.
+                paper_bgcolor='rgba(0,0,0,0)', 
+                font_color="white",
+                legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5),
+                margin=dict(t=60, b=100, l=10, r=10)
+            )
+            st.plotly_chart(fig_total, use_container_width=True)
+        else:
+            st.info("추이 데이터를 불러오는 중입니다...")
+
+    # --- 우측: 월별 예상 배당 시뮬레이션 ---
+    with chart_col2:
+        monthly_data = {m: 0 for m in range(1, 13)}
+        for _, row in full_df.iterrows():
+            name, t_div_row = row['종목명'], row['예상배당금']
+            months = DIVIDEND_SCHEDULE.get(name, [4])
+            if t_div_row > 0:
+                for m in months: monthly_data[m] += (t_div_row / len(months))
+
+        m_names = [f"{m}월" for m in range(1, 13)]
+        m_vals = [monthly_data[m] for m in range(1, 13)]
+        m_colors = ['#FFD700' if v == max(m_vals) and v > 0 else 'rgba(135,206,235,0.3)' for v in m_vals]
+
+        fig_cal = go.Figure(go.Bar(
+            x=m_names, y=m_vals, 
+            marker_color=m_colors, 
+            text=[f"{v/10000:.0f}만" if v > 0 else "" for v in m_vals], 
+            textposition='outside'
+        ))
+        fig_cal.update_layout(
+            title=dict(text="📅 월별 배당 흐름", x=0, xanchor='left'),
+            height=400, 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            font_color="white",
+            margin=dict(t=60, b=40, l=10, r=10)
         )
-        st.plotly_chart(fig_total, use_container_width=True)
-
-    st.write("") # 미세 간격 조절
-
-    # 5. [복구] 월별 예상 배당 입금 시뮬레이션
-    monthly_data = {m: 0 for m in range(1, 13)}
-    for _, row in full_df.iterrows():
-        name, t_div_row = row['종목명'], row['예상배당금']
-        months = DIVIDEND_SCHEDULE.get(name, [4])
-        if t_div_row > 0:
-            for m in months: monthly_data[m] += (t_div_row / len(months))
-
-    m_names = [f"{m}월" for m in range(1, 13)]
-    m_vals = [monthly_data[m] for m in range(1, 13)]
-    # 황금 배당달(최대 수령월) 하이라이트
-    m_colors = ['#FFD700' if v == max(m_vals) and v > 0 else 'rgba(135,206,235,0.3)' for v in m_vals]
-
-    fig_cal = go.Figure(go.Bar(
-        x=m_names, y=m_vals, marker_color=m_colors, 
-        text=[f"{v/10000:.0f}만" if v > 0 else "" for v in m_vals], textposition='outside'
-    ))
-    fig_cal.update_layout(
-        title=dict(text="📅 월별 예상 배당 입금 시뮬레이션", x=0, xanchor='left'),
-        height=320, paper_bgcolor='rgba(0,0,0,0)', font_color="white",
-        margin=dict(t=60, b=20)
-    )
-    st.plotly_chart(fig_cal, use_container_width=True)
+        st.plotly_chart(fig_cal, use_container_width=True)
     
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
@@ -743,6 +758,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
