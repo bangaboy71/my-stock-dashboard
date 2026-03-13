@@ -184,26 +184,29 @@ with tabs[0]:
     d3.metric("포트 배당수익률", f"{(t_div/t_eval*100):.2f}%" if t_eval!=0 else "0%")
     d4.metric("통합 현금흐름 등급", t_grade)
 
-# [계좌별 탭 렌더링 함수]
 def render_account_tab(acc_name, tab_obj):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
+        if sub_df.empty:
+            st.warning(f"{acc_name} 데이터가 없습니다.")
+            return
+
         a_eval, a_buy = sub_df['평가금액'].sum(), sub_df['매입금액'].sum()
         a_div = sub_df['예상배당금'].sum()
         m_tax = (a_div * (1 - 0.154)) / 12
-        a_grade = get_cashflow_grade(m_tax) # 🎯 4단계 적용
+        a_grade = get_cashflow_grade(m_tax)
 
-        # 계좌 메트릭
+        # 1. 상단 계좌 메트릭
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("계좌 평가액", f"{a_eval:,.0f}원")
         c2.metric("세후 월 수령액", f"{m_tax:,.0f}원")
         c3.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%" if a_buy!=0 else "0%")
         c4.metric("계좌 등급", a_grade)
 
-        # (203행 근처의 st.dataframe 줄을 아래로 교체)
-        
-        # 🎯 안전한 컬럼 선택 로직 적용
+        # 🎯 2. [NameError 해결 핵심] plot_df 정의 및 데이터 출력
+        plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
         available_cols = [c for c in GLOBAL_DISPLAY_COLS if c in plot_df.columns]
+        
         st.dataframe(plot_df[available_cols].style.format({
             '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
             '현재가': '{:,.0f}원', '매입단가': '{:,.0f}원',
@@ -275,4 +278,5 @@ with st.sidebar:
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
     st.divider()
     st.caption(f"최종 갱신: {datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S')}")
+
 
