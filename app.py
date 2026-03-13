@@ -337,7 +337,6 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 (v40.83 계좌요약 테이블 복구 버전)
 with tabs[0]:
     # 1. 최상단 요약 Metric (가족 전체 합계)
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
@@ -353,67 +352,80 @@ with tabs[0]:
     
     st.divider()
 
-    # 2. [복구] 계좌별 요약 테이블 (sum_acc)
-    # 각 계좌별로 그룹화하여 합계를 산출합니다.
+    # 2. 계좌별 요약 테이블 (sum_acc)
     sum_acc = full_df.groupby('계좌명').agg({
-        '매입금액':'sum', 
-        '평가금액':'sum', 
-        '손익':'sum', 
-        '전일대비손익':'sum'
+        '매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'
     }).reset_index()
-    
-    # 전일평가액 기준 변동율 계산
-    sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
-    sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
-    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    
-    # 전역 맵(GLOBAL_RENAME_MAP)을 적용하여 헤더 명칭 변경
-    sum_acc_plot = sum_acc.rename(columns=GLOBAL_RENAME_MAP)
-    
-    # 표시할 컬럼 설정 (계좌별 테이블 전용)
-    sum_acc_cols = ['계좌명', '매입금액', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'] * 100).fillna(0)
     
     st.dataframe(
-        sum_acc_plot[sum_acc_cols].style.apply(lambda x: [
-            'color: #FF4B4B' if (i >= 3 and val > 0) else 'color: #87CEEB' if (i >= 3 and val < 0) else '' 
-            for i, val in enumerate(x)
-        ], axis=1).format({
-            '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
-            '전일대비(원)': '{:+,.0f}원', '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-        }), 
-        hide_index=True, use_container_width=True
+        sum_acc.rename(columns=GLOBAL_RENAME_MAP).style.format({
+            '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '누적수익률': '{:+.2f}%'
+        }), hide_index=True, use_container_width=True
     )
-   
+    
+    # 🎯 [위치 조정] 테이블 바로 아래에 배당 HUD와 차트 배치 시작
     st.divider()
 
-    # 배당 연산 바로 아래에 추가
+    # 3. 배당 HUD (4단계 등급 적용)
     total_div = full_df['예상배당금'].sum()
     monthly_after_tax = (total_div * (1 - 0.154)) / 12
-    
-    # 🎯 이 줄로 교체하세요!
-    t_grade = get_cashflow_grade(monthly_after_tax)
+    t_grade = get_cashflow_grade(monthly_after_tax) # 4단계 등급 판정
     
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("연간 예상 총 배당금", f"{total_div:,.0f}원")
     d2.metric("세후 월 평균 수령액", f"{monthly_after_tax:,.0f}원")
-    d3.metric("포트 배당수익률", f"{(total_div/t_eval*100):.2f}%")
-    d4.metric("통합 현금흐름 등급", t_grade) # 4단계 등급 출력
-    
-    # 5. 월별 배당 흐름 차트 (DIVIDEND_SCHEDULE 기반)
+    d3.metric("포트 배당수익률", f"{(total_div / t_eval * 100):.2f}%" if t_eval != 0 else "0.00%")
+    d4.metric("통합 현금흐름 등급", t_grade)
+
+    st.write("") # 미세 간격 조절
+
+    # 4. [복구] 포트폴리오 성과 추이 그래프
+    if not history_df.empty:
+        fig_total = go.Figure()
+        h_dt = history_df['Date'].dt.date.astype(str)
+        
+        # KOSPI 상대 수익률 (점선)
+        fig_total.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', line=dict(dash='dash', color='rgba(255,255,255,0.3)')))
+        
+        # 계좌별 수익률 추이 (실선)
+        for acc in sum_acc['계좌명'].unique():
+            acc_col = find_matching_col(history_df, acc)
+            if acc_col:
+                fig_total.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], name=acc))
+        
+        fig_total.update_layout(
+            title=dict(text="📈 전체 포트폴리오 성과 추이 (KOSPI 대비)", x=0, xanchor='left'),
+            height=380, paper_bgcolor='rgba(0,0,0,0)', font_color="white",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+            margin=dict(t=80, b=80)
+        )
+        st.plotly_chart(fig_total, use_container_width=True)
+
+    st.write("") # 미세 간격 조절
+
+    # 5. [복구] 월별 예상 배당 입금 시뮬레이션
     monthly_data = {m: 0 for m in range(1, 13)}
     for _, row in full_df.iterrows():
-        name, t_div = row['종목명'], row['예상배당금']
+        name, t_div_row = row['종목명'], row['예상배당금']
         months = DIVIDEND_SCHEDULE.get(name, [4])
-        if t_div > 0:
-            for m in months: monthly_data[m] += (t_div / len(months))
+        if t_div_row > 0:
+            for m in months: monthly_data[m] += (t_div_row / len(months))
 
     m_names = [f"{m}월" for m in range(1, 13)]
     m_vals = [monthly_data[m] for m in range(1, 13)]
-    m_max = max(m_vals) if m_vals else 0
-    m_colors = ['#FFD700' if v == m_max and v > 0 else 'rgba(135,206,235,0.3)' for v in m_vals]
+    # 황금 배당달(최대 수령월) 하이라이트
+    m_colors = ['#FFD700' if v == max(m_vals) and v > 0 else 'rgba(135,206,235,0.3)' for v in m_vals]
 
-    fig_cal = go.Figure(go.Bar(x=m_names, y=m_vals, marker_color=m_colors, text=[f"{v/10000:.0f}만" if v > 0 else "" for v in m_vals], textposition='outside'))
-    fig_cal.update_layout(title="📅 월별 예상 배당 입금 시뮬레이션", height=300, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+    fig_cal = go.Figure(go.Bar(
+        x=m_names, y=m_vals, marker_color=m_colors, 
+        text=[f"{v/10000:.0f}만" if v > 0 else "" for v in m_vals], textposition='outside'
+    ))
+    fig_cal.update_layout(
+        title=dict(text="📅 월별 예상 배당 입금 시뮬레이션", x=0, xanchor='left'),
+        height=320, paper_bgcolor='rgba(0,0,0,0)', font_color="white",
+        margin=dict(t=60, b=20)
+    )
     st.plotly_chart(fig_cal, use_container_width=True)
     
 def render_account_tab(acc_name, tab_obj, history_col_key):
@@ -731,5 +743,6 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
