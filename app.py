@@ -545,24 +545,59 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             </div>
         """)
 
+        # --- [5. 성과 추이 그래프 (Target Line 추가 버전)] ---
         if not history_df.empty:
             fig_acc = go.Figure()
-            h_dt = pd.to_datetime(history_df['Date']).dt.date.astype(str)
-            fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', line=dict(dash='dash', color='gray')))
             
+            # 1. 날짜 데이터 정제
+            history_df['Date'] = pd.to_datetime(history_df['Date'])
+            h_dt = history_df['Date'].dt.date.astype(str)
+            base_date = history_df['Date'].min() # 추적 시작일
+            
+            # 2. 🎯 [신규] 목표 수익률 선 연산 (연 10% 목표 가정)
+            # 사용자님의 취향에 따라 연 10%(0.1) 수치를 변경할 수 있습니다.
+            target_annual_yield = 10.0 
+            days_elapsed = (history_df['Date'] - base_date).dt.days
+            target_line = (days_elapsed / 365) * target_annual_yield
+
+            # 3. KOSPI 비교군 (회색 점선)
+            fig_acc.add_trace(go.Scatter(
+                x=h_dt, y=history_df['KOSPI_Relative'], 
+                name='KOSPI (지수)', line=dict(dash='dash', color='gray', width=1)
+            ))
+            
+            # 4. 🎯 [신규] 목표 수익률 선 (황금색 실선/점선)
+            fig_acc.add_trace(go.Scatter(
+                x=h_dt, y=target_line, 
+                name=f'목표 수익률 (연 {target_annual_yield}%)', 
+                line=dict(color='#FFD700', width=2, dash='dot')
+            ))
+            
+            # 5. 계좌 실제 수익률 (두꺼운 실선)
             acc_col = find_matching_col(history_df, acc_name)
             if acc_col:
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 누적수익률', line=dict(width=4)))
+                fig_acc.add_trace(go.Scatter(
+                    x=h_dt, y=history_df[acc_col], 
+                    mode='lines+markers', name=f'{acc_name} 실제수익률', 
+                    line=dict(width=4, color='#00FF00' if history_df[acc_col].iloc[-1] > target_line.iloc[-1] else '#FF4B4B')
+                ))
             
+            # 6. 선택 종목 수익률 (얇은 점선)
             s_col = find_matching_col(history_df, acc_name, sel)
             if s_col:
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', name=f'{sel} 개별수익률', line=dict(width=2, dash='dot')))
+                fig_acc.add_trace(go.Scatter(
+                    x=h_dt, y=history_df[s_col], 
+                    mode='lines', name=f'{sel} 수익률', 
+                    line=dict(width=2, dash='dashdot', color='rgba(255,255,255,0.5)')
+                ))
 
             fig_acc.update_layout(
-                title=f"📈 {sel} 포함 {acc_name} 성과 추이 (와이드)", 
-                height=400, # 가로로 넓고 시원하게 보이도록 설정
-                paper_bgcolor='rgba(0,0,0,0)', font_color="white", margin=dict(l=10, r=10, t=50, b=10),
-                xaxis=dict(type='category', tickangle=-45) # 데이터 축적 대비 날짜 기울임
+                title=f"📈 {sel} 분석 및 {acc_name} 성과 추이 (목표 대비)", 
+                height=400, 
+                paper_bgcolor='rgba(0,0,0,0)', font_color="white", 
+                margin=dict(l=10, r=10, t=50, b=10),
+                xaxis=dict(type='category', tickangle=-45),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig_acc, use_container_width=True)
                 
@@ -686,4 +721,5 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.87 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
