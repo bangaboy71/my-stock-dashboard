@@ -374,8 +374,7 @@ with tabs[0]:
         hide_index=True, use_container_width=True
     )
 
-    # --- [5. 성과 추이 그래프 (좌측 정렬 및 범례 최적화)] ---
-        if not history_df.empty:
+    if not history_df.empty:
             fig_acc = go.Figure()
             
             # 1. 데이터 파싱
@@ -446,7 +445,7 @@ with tabs[0]:
                 yaxis=dict(title="수익률 (%)")
             )
             st.plotly_chart(fig_acc, use_container_width=True)
-
+        
     st.divider()
 
     # 4. 배당 요약 HUD
@@ -799,6 +798,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.91 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
