@@ -9,7 +9,7 @@ import time
 import yfinance as yf # 코드 최상단 import문에 추가해주세요
 
 # 1. 설정 및 UI 스타일
-st.set_page_config(page_title="가족 자산 성장 관제탑 v40.94", layout="wide")
+st.set_page_config(page_title="4단계 등급 적용 완료 v40.99", layout="wide")
 
 def get_cashflow_grade(amount):
     if amount >= 1000000: return "💎 Diamond"
@@ -727,6 +727,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
