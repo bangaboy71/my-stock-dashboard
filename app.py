@@ -9,7 +9,7 @@ import time
 import yfinance as yf # 코드 최상단 import문에 추가해주세요
 
 # 1. 설정 및 UI 스타일
-st.set_page_config(page_title="가족 자산 성장 관제탑 v40.91", layout="wide")
+st.set_page_config(page_title="가족 자산 성장 관제탑 v40.94", layout="wide")
 
 # --- [v40.82 전역 설정: 이름표 및 배당 일정 통합] ---
 GLOBAL_RENAME_MAP = {
@@ -299,7 +299,7 @@ if not history_df.empty:
 st.markdown(
     f"""
     <h2 style='text-align: center; color: #87CEEB; font-size: 1.8rem; font-weight: 600; margin-bottom: 25px; letter-spacing: -0.5px;'>
-        🌐 AI 금융 통합 관제탑 <span style='font-size: 1.2rem; font-weight: 300; opacity: 0.7;'>v40.91</span>
+        🌐 AI 금융 통합 관제탑 <span style='font-size: 1.2rem; font-weight: 300; opacity: 0.7;'>v40.94</span>
     </h2>
     """, 
     unsafe_allow_html=True
@@ -721,7 +721,8 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"❌ 오류: {e}")
                     
-st.caption(f"v40.91 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
