@@ -11,6 +11,12 @@ import yfinance as yf # 코드 최상단 import문에 추가해주세요
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v40.94", layout="wide")
 
+# --- [신규 등급 시스템 함수] ---
+def get_cashflow_grade(amount):
+    if amount >= 1000000: return "💎 Diamond"
+    elif amount >= 300000: return "🥇 Gold"
+    elif amount >= 100000: return "🥈 Silver"
+    else: return "🥉 Bronze"
 # --- [v40.82 전역 설정: 이름표 및 배당 일정 통합] ---
 GLOBAL_RENAME_MAP = {
     '전일대비손익': '전일대비(원)', 
@@ -380,17 +386,19 @@ with tabs[0]:
    
     st.divider()
 
-    # 4. 배당 요약 HUD
+    # 배당 연산 바로 아래에 추가
     total_div = full_df['예상배당금'].sum()
     monthly_after_tax = (total_div * (1 - 0.154)) / 12
-    div_yield = (total_div / t_eval * 100) if t_eval != 0 else 0
+    
+    # 🎯 이 줄로 교체하세요!
+    t_grade = get_cashflow_grade(monthly_after_tax)
     
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("연간 예상 총 배당금", f"{total_div:,.0f}원")
     d2.metric("세후 월 평균 수령액", f"{monthly_after_tax:,.0f}원")
-    d3.metric("포트 배당수익률", f"{div_yield:.2f}%")
-    d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard")
-
+    d3.metric("포트 배당수익률", f"{(total_div/t_eval*100):.2f}%")
+    d4.metric("통합 현금흐름 등급", t_grade) # 4단계 등급 출력
+    
     # 5. 월별 배당 흐름 차트 (DIVIDEND_SCHEDULE 기반)
     monthly_data = {m: 0 for m in range(1, 13)}
     for _, row in full_df.iterrows():
@@ -442,16 +450,17 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
 
         st.divider()
 
-        # --- [3. 배당금 요약 및 현금흐름/자산비중 듀얼 배치] ---
         a_total_div = sub_df['예상배당금'].sum()
         a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
-        a_div_yield = (a_total_div / a_eval * 100) if a_eval != 0 else 0
+        
+        # 🎯 이 줄로 교체하세요!
+        a_grade = get_cashflow_grade(a_monthly_tax)
         
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("연간 예상 배당금", f"{a_total_div:,.0f}원")
         d2.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원")
-        d3.metric("계좌 배당수익률", f"{a_div_yield:.2f}%")
-        d4.metric("현금흐름 등급", "Premium" if a_monthly_tax > 200000 else "Standard")
+        d3.metric("계좌 배당수익률", f"{(a_total_div/a_eval*100):.2f}%")
+        d4.metric("계좌 현금흐름 등급", a_grade) # 4단계 등급 출력 
 
         # 🎯 [복구 및 배치] 현금흐름 차트(좌) + 자산 비중 차트(우)
         g_left, g_right = st.columns([1, 1])
@@ -722,4 +731,5 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
