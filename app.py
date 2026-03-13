@@ -612,53 +612,81 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             </div>
         """)
 
-       # --- [v40.99 UI 강화 적용: 사용자님 v40.94 코드 기반] ---
-if not history_df.empty:
-    # 🎯 1. 테두리가 있는 은은한 카드 구역 생성
-    with st.container(border=True): 
-        fig_acc = go.Figure()
+      # --- [v40.99 개별 계좌 탭: 분석 섹션] ---
+        st.divider()
         
-        # [데이터 파싱 및 목표 수익률 연산 로직 - 사용자님 코드 100% 유지]
-        history_df['Date'] = pd.to_datetime(history_df['Date'])
-        h_dt = history_df['Date'].dt.date.astype(str)
-        
-        goal_val = s_row.get('목표수익률', 10.0)
-        if goal_val == 0 or pd.isna(goal_val): goal_val = 10.0
-        indiv_target_yield = int(float(goal_val) * 1000) / 1000 
-        static_target_line = [indiv_target_yield] * len(h_dt)
+        # 🎯 1. 테두리가 있는 은은한 카드 구역 생성
+        with st.container(border=True):
+            # [핵심] s_row를 여기서 먼저 정의해야 NameError가 나지 않습니다.
+            sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+            
+            # 선택된 종목의 한 줄 데이터를 추출 (이게 바로 s_row 상자입니다!)
+            s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
 
-        # [라인 추가 로직 - 사용자님 코드 스타일 유지]
-        fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', 
-                                     line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)))
-        
-        fig_acc.add_trace(go.Scatter(x=h_dt, y=static_target_line, name='목표 수익률', 
-                                     line=dict(color='#FFD700', width=2, dash='dot')))
-        
-        acc_col = find_matching_col(history_df, acc_name)
-        if acc_col:
-            current_y = history_df[acc_col].iloc[-1]
-            line_color = '#00FF00' if current_y >= indiv_target_yield else '#FF4B4B'
-            fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', 
-                                         name='계좌 수익률', line=dict(width=4, color=line_color)))
-        
-        s_col = find_matching_col(history_df, acc_name, sel)
-        if s_col:
-            fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', 
-                                         name=sel[:9], line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')))
+            # --- [사용자님 v40.94 성과 추이 로직 시작] ---
+            if not history_df.empty:
+                fig_acc = go.Figure()
+                
+                # 데이터 파싱
+                history_df['Date'] = pd.to_datetime(history_df['Date'])
+                h_dt = history_df['Date'].dt.date.astype(str)
+                
+                # 🎯 목표 수익률 연산 (사용자님 v40.94 로직 100% 유지)
+                goal_val = s_row.get('목표수익률', 10.0)
+                if goal_val == 0 or pd.isna(goal_val):
+                    goal_val = 10.0
+                
+                # 소수점 3자리 이하 버림 처리
+                indiv_target_yield = int(float(goal_val) * 1000) / 1000 
+                static_target_line = [indiv_target_yield] * len(h_dt)
 
-        # [레이아웃 보정 - 사용자님 설정에 '은은한 배경색'만 추가]
-        fig_acc.update_layout(
-            title=dict(text=f"📈 {sel} 분석 및 {acc_name} 성과 추이", x=0.02, xanchor='left'), # x 위치 미세조정
-            height=450, 
-            paper_bgcolor='rgba(0,0,0,0)', 
-            plot_bgcolor='rgba(255,255,255,0.02)', # 🎯 추가: 차트 내부 미세 배경색
-            font_color="white", 
-            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-            margin=dict(l=15, r=15, t=80, b=80), # 여백 미세조정
-            xaxis=dict(type='category', tickangle=-45),
-            yaxis=dict(title="수익률 (%)")
-        )
-        st.plotly_chart(fig_acc, use_container_width=True)
+                # 1. KOSPI 라인
+                fig_acc.add_trace(go.Scatter(
+                    x=h_dt, y=history_df['KOSPI_Relative'], 
+                    name='KOSPI', 
+                    line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)
+                ))
+                
+                # 2. 목표 수익률 라인
+                fig_acc.add_trace(go.Scatter(
+                    x=h_dt, y=static_target_line, 
+                    name='목표 수익률', 
+                    line=dict(color='#FFD700', width=2, dash='dot')
+                ))
+                
+                # 3. 계좌 수익률 라인 (조건부 색상 로직 유지)
+                acc_col = find_matching_col(history_df, acc_name)
+                if acc_col:
+                    current_y = history_df[acc_col].iloc[-1]
+                    line_color = '#00FF00' if current_y >= indiv_target_yield else '#FF4B4B'
+                    fig_acc.add_trace(go.Scatter(
+                        x=h_dt, y=history_df[acc_col], 
+                        mode='lines+markers', name='계좌 수익률', 
+                        line=dict(width=4, color=line_color)
+                    ))
+                
+                # 4. 종목 수익률 라인 (9자리 제한 유지)
+                s_col = find_matching_col(history_df, acc_name, sel)
+                if s_col:
+                    fig_acc.add_trace(go.Scatter(
+                        x=h_dt, y=history_df[s_col], 
+                        mode='lines', name=sel[:9], 
+                        line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')
+                    ))
+
+                # 5. 레이아웃 (사용자님 스타일 + 은은한 배경색 추가)
+                fig_acc.update_layout(
+                    title=dict(text=f"📈 {sel} 분석 및 {acc_name} 성과 추이", x=0.02, xanchor='left'),
+                    height=450, 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(255,255,255,0.02)', # 👈 은은한 배경색
+                    font_color="white", 
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+                    margin=dict(l=15, r=15, t=80, b=80),
+                    xaxis=dict(type='category', tickangle=-45),
+                    yaxis=dict(title="수익률 (%)")
+                )
+                st.plotly_chart(fig_acc, use_container_width=True)
                 
         # 7. [최종] 실시간 뉴스 섹션 (st.html 사용으로 마크다운 간섭 완전 차단)
         st.divider()
@@ -781,6 +809,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
