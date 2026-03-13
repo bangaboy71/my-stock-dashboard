@@ -235,16 +235,20 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
-# --- [v40.71: 데이터 정제 로직에 배당금 연산 추가] ---
+# --- [v40.94: 데이터 정제 구역 보강] ---
 if not full_df.empty:
     full_df.columns = [c.strip() for c in full_df.columns]
     
-    # 1. 숫자 변환 대상에 '주당 배당금' 추가
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금']
+    # 🎯 1. 숫자 변환 대상에 '목표수익률'을 추가합니다.
+    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금', '목표수익률']
+    
     for c in target_num_cols:
         if c in full_df.columns:
-            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        elif c == '주당 배당금': full_df['주당 배당금'] = 0 # 컬럼 없을 경우 대비
+            # 숫자가 아닌 문자(%, 쉼표 등)를 제거하고 숫자로 변환
+            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', '').str.replace('%', ''), errors='coerce').fillna(0)
+        elif c == '목표수익률':
+            # 시트에 컬럼이 아예 없을 경우를 대비해 기본값 10.0 할당
+            full_df['목표수익률'] = 10.0
 
     # 2. 실시간 가격 및 기초 수익 지표 연산
     prices = full_df['종목명'].apply(get_stock_data).tolist()
@@ -533,6 +537,7 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             </div>
         """)
 
+        # --- [5. 성과 추이 그래프 (v40.94 교체용 코드)] ---
         if not history_df.empty:
             fig_acc = go.Figure()
             
@@ -540,65 +545,56 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             history_df['Date'] = pd.to_datetime(history_df['Date'])
             h_dt = history_df['Date'].dt.date.astype(str)
             
-            # 2. 종목별 정적 목표 수익률 (v40.90 로직 유지)
-            indiv_target_yield = float(s_row.get('목표수익률', 10.0))
+            # 2. 종목별 정적 목표 수익률 (데이터 추출 및 버림 처리)
+            # 🎯 s_row에서 가져온 값이 0이면 다시 10%로 가지 않도록 방어 로직 추가
+            goal_val = s_row.get('목표수익률', 10.0)
+            if goal_val == 0 or pd.isna(goal_val):
+                goal_val = 10.0
+                
+            # 소수점 3자리 이하 버림(Truncate) 처리
+            indiv_target_yield = int(float(goal_val) * 1000) / 1000 
+            
             static_target_line = [indiv_target_yield] * len(h_dt)
 
-            # 3. KOSPI 비교군
+            # 3. KOSPI (범례 명칭: KOSPI)
             fig_acc.add_trace(go.Scatter(
                 x=h_dt, y=history_df['KOSPI_Relative'], 
-                name='KOSPI', # 🎯 명칭 조정
+                name='KOSPI', 
                 line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)
             ))
             
-            # 4. 목표 수익률 선
+            # 4. 목표 수익률 (범례 명칭: 목표 수익률)
             fig_acc.add_trace(go.Scatter(
                 x=h_dt, y=static_target_line, 
-                name='목표 수익률', # 🎯 명칭 조정
+                name='목표 수익률', 
                 line=dict(color='#FFD700', width=2, dash='dot')
             ))
             
-            # 5. 계좌 수익률
+            # 5. 계좌 수익률 (범례 명칭: 계좌 수익률)
             acc_col = find_matching_col(history_df, acc_name)
             if acc_col:
-                current_yield = history_df[acc_col].iloc[-1]
-                line_color = '#00FF00' if current_yield >= indiv_target_yield else '#FF4B4B'
-                
+                current_y = history_df[acc_col].iloc[-1]
+                line_color = '#00FF00' if current_y >= indiv_target_yield else '#FF4B4B'
                 fig_acc.add_trace(go.Scatter(
                     x=h_dt, y=history_df[acc_col], 
-                    mode='lines+markers', 
-                    name='계좌 수익률', # 🎯 명칭 조정
+                    mode='lines+markers', name='계좌 수익률', 
                     line=dict(width=4, color=line_color)
                 ))
             
-            # 6. 선택 종목 실제 수익률 (9자리 제한 적용)
+            # 6. 종목 수익률 (9자리 제한)
             s_col = find_matching_col(history_df, acc_name, sel)
             if s_col:
-                # 🎯 종목명이 9자리를 초과하면 9자리까지만 자릅니다.
-                display_name = sel[:9]
-                
                 fig_acc.add_trace(go.Scatter(
                     x=h_dt, y=history_df[s_col], 
-                    mode='lines', 
-                    name=display_name, # 🎯 명칭 및 길이 조정
+                    mode='lines', name=sel[:9], 
                     line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')
                 ))
 
-            # 7. 레이아웃 조정 (제목 좌측 정렬 및 범례 위치)
+            # 7. 레이아웃 (좌측 정렬 제목 및 하단 범례)
             fig_acc.update_layout(
-                title=dict(
-                    text=f"📈 {sel} 분석 및 {acc_name} 성과 추이",
-                    x=0.0, y=0.95, # 🎯 좌측 정렬 (x=0.0)
-                    xanchor='left', yanchor='top'
-                ),
-                height=450, 
-                paper_bgcolor='rgba(0,0,0,0)', 
-                font_color="white", 
-                legend=dict(
-                    orientation="h", 
-                    yanchor="bottom", y=-0.3, 
-                    xanchor="center", x=0.5
-                ),
+                title=dict(text=f"📈 {sel} 분석 및 {acc_name} 성과 추이", x=0.0, xanchor='left'),
+                height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white", 
+                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
                 margin=dict(l=10, r=10, t=80, b=80),
                 xaxis=dict(type='category', tickangle=-45),
                 yaxis=dict(title="수익률 (%)")
@@ -726,6 +722,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.91 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
