@@ -234,6 +234,7 @@ def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- [v40.98 데이터 로드 및 통합 정제] ---
 try:
     full_df = conn.read(worksheet="종목 현황", ttl="1m")
     history_df = conn.read(worksheet="trend", ttl=0)
@@ -241,40 +242,32 @@ except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.stop()
 
-# --- [v40.94: 데이터 정제 구역 보강] ---
 if not full_df.empty:
     full_df.columns = [c.strip() for c in full_df.columns]
     
-    # 🎯 1. 숫자 변환 대상에 '목표수익률'을 추가합니다.
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금', '목표수익률']
-    
-    for c in target_num_cols:
+    # 숫자 변환 통합
+    num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금', '목표수익률']
+    for c in num_cols:
         if c in full_df.columns:
-            # 숫자가 아닌 문자(%, 쉼표 등)를 제거하고 숫자로 변환
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', '').str.replace('%', ''), errors='coerce').fillna(0)
-        elif c == '목표수익률':
-            # 시트에 컬럼이 아예 없을 경우를 대비해 기본값 10.0 할당
-            full_df['목표수익률'] = 10.0
+        elif c == '목표수익률': full_df['목표수익률'] = 10.0
 
-    # 2. 실시간 가격 및 기초 수익 지표 연산
+    # 실시간 가격 및 핵심 지표 연산 (단 한 번만 수행)
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
+    
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
     full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
+    full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
     full_df['예상배당금'] = full_df['수량'] * full_df['주당 배당금']
     
-    # 3. 수익률 및 변동율 (v36.50 표 전용 지표)
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    full_df['전일대비변동율'] = (full_df['전일대비손익'] / (full_df['평가금액'] - full_df['전일대비손익']).replace(0, float('nan')) * 100).fillna(0)
+    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
     
-    # 4. 기대상승여력 (시트 목표가 기준)
-    full_df['목표대비상승여력'] = full_df.apply(
-        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, axis=1
-    )
-
-    # 5. 보유일수 계산
+    # 기대상승여력 및 보유일수
+    full_df['목표대비상승여력'] = full_df.apply(lambda x: ((x['목표가']/x['현재가']-1)*100) if x['현재가']>0 and x['목표가']>0 else 0, axis=1)
     if '최초매입일' in full_df.columns:
         full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
         full_df['보유일수'] = (datetime.now().replace(hour=0,minute=0,second=0,microsecond=0) - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int).clip(lower=1)
@@ -386,21 +379,19 @@ with tabs[0]:
    
     st.divider()
 
-    # --- [v40.97 핵심: 배당 연산 및 4단계 등급 강제 적용] ---
+    # --- [v40.98 총괄 배당 HUD] ---
     total_div = full_df['예상배당금'].sum()
     monthly_after_tax = (total_div * (1 - 0.154)) / 12
-    
-    # 🎯 중요: div_yield 변수를 여기서 명확히 계산해야 에러가 안 납니다.
     div_yield = (total_div / t_eval * 100) if t_eval != 0 else 0
     
-    # 🎯 4단계 등급 판정 함수 호출
-    current_grade = get_cashflow_grade(monthly_after_tax)
+    # 🎯 여기서 4단계 함수를 호출합니다.
+    current_grade_val = get_cashflow_grade(monthly_after_tax)
     
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("연간 예상 총 배당금", f"{total_div:,.0f}원")
     d2.metric("세후 월 평균 수령액", f"{monthly_after_tax:,.0f}원")
     d3.metric("포트 배당수익률", f"{div_yield:.2f}%")
-    d4.metric("통합 현금흐름 등급", current_grade)
+    d4.metric("통합 현금흐름 등급", current_grade_val)
     
     # 5. 월별 배당 흐름 차트 (DIVIDEND_SCHEDULE 기반)
     monthly_data = {m: 0 for m in range(1, 13)}
@@ -452,22 +443,20 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         )
 
         st.divider()
-
-        # --- [v40.97 핵심: 계좌별 배당 연산 및 4단계 등급 적용] ---
+ 
+        # --- [v40.98 계좌별 배당 HUD] ---
         a_total_div = sub_df['예상배당금'].sum()
         a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
+        a_div_yield_val = (a_total_div / a_eval * 100) if a_eval != 0 else 0
         
-        # 🎯 중요: a_div_yield 변수를 여기서 계산해야 에러가 안 납니다.
-        a_div_yield = (a_total_div / a_eval * 100) if a_eval != 0 else 0
-        
-        # 🎯 계좌별 4단계 등급 판정
-        acc_grade = get_cashflow_grade(a_monthly_tax)
+        # 🎯 4단계 함수 호출
+        account_grade_val = get_cashflow_grade(a_monthly_tax)
         
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("연간 예상 배당금", f"{a_total_div:,.0f}원")
         d2.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원")
-        d3.metric("계좌 배당수익률", f"{a_div_yield:.2f}%")
-        d4.metric("계좌 현금흐름 등급", acc_grade)
+        d3.metric("계좌 배당수익률", f"{a_div_yield_val:.2f}%")
+        d4.metric("계좌 현금흐름 등급", account_grade_val)
         
         # 🎯 [복구 및 배치] 현금흐름 차트(좌) + 자산 비중 차트(우)
         g_left, g_right = st.columns([1, 1])
@@ -738,6 +727,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
