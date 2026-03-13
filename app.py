@@ -516,41 +516,53 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
         d3.metric("계좌 배당수익률", f"{(a_total_div/a_eval*100):.2f}%")
         d4.metric("계좌 현금흐름 등급", a_grade) # 4단계 등급 출력 
 
-        # 🎯 [복구 및 배치] 현금흐름 차트(좌) + 자산 비중 차트(우)
-        g_left, g_right = st.columns([1, 1])
+        st.divider()
+        # 🎯 [v40.99 UI 강화] 계좌별 병렬 차트 구역
+        g_left, g_right = st.columns(2)
         
         with g_left:
-            a_monthly_data = {m: 0 for m in range(1, 13)}
-            for _, row in sub_df.iterrows():
-                name, t_div = row['종목명'], row['예상배당금']
-                months = DIVIDEND_SCHEDULE.get(name, [4])
-                if t_div > 0:
-                    for m in months: a_monthly_data[m] += (t_div / len(months))
-            
-            fig_a_cal = go.Figure(go.Bar(
-                x=[f"{m}월" for m in range(1, 13)], y=list(a_monthly_data.values()),
-                marker_color='rgba(255, 215, 0, 0.6)',
-                text=[f"{v/10000:.1f}만" if v > 0 else "" for v in a_monthly_data.values()],
-                textposition='outside'
-            ))
-            fig_a_cal.update_layout(title="📅 월별 배당 예측", height=280, paper_bgcolor='rgba(0,0,0,0)', font_color="white", margin=dict(t=50, b=10))
-            st.plotly_chart(fig_a_cal, use_container_width=True)
+            with st.container(border=True): # 👈 테두리 카드 적용
+                a_monthly_data = {m: 0 for m in range(1, 13)}
+                for _, row in sub_df.iterrows():
+                    sched = DIVIDEND_SCHEDULE.get(row['종목명'], [4])
+                    for m in sched: a_monthly_data[m] += (row['예상배당금']/len(sched))
+                
+                fig_a_cal = go.Figure(go.Bar(
+                    x=[f"{m}월" for m in range(1, 13)], y=list(a_monthly_data.values()),
+                    marker_color='rgba(255, 215, 0, 0.6)',
+                    text=[f"{v/10000:.1f}만" if v > 0 else "" for v in a_monthly_data.values()],
+                    textposition='outside'
+                ))
+                fig_a_cal.update_layout(
+                    title=dict(text="📅 월별 배당 예측", x=0.02, y=0.9),
+                    height=300, 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(255,255,255,0.02)', # 👈 은은한 배경색
+                    font_color="white", margin=dict(t=80, b=20, l=10, r=10)
+                )
+                st.plotly_chart(fig_a_cal, use_container_width=True)
 
         with g_right:
-            # 🎯 [삭제 방지] 자산 비중 및 성장 차트 유지
-            chart_df = sub_df[['종목명', '매입금액', '평가금액', '누적수익률']].copy()
-            chart_df['Display_Name'] = chart_df['종목명'].apply(lambda x: x[:9] + ".." if len(x) > 9 else x)
-            fig_bar = go.Figure()
-            fig_bar.add_trace(go.Bar(y=chart_df['Display_Name'], x=chart_df['매입금액'], orientation='h', marker_color='rgba(170,170,170,0.3)'))
-            fig_bar.add_trace(go.Bar(
-                y=chart_df['Display_Name'], x=chart_df['평가금액'], orientation='h', 
-                marker_color=['#FF4B4B' if r > 0 else '#87CEEB' for r in chart_df['누적수익률']],
-                text=[f" {int(v/a_eval*100)}% ({r:+.1f}%)" for v, r in zip(chart_df['평가금액'], chart_df['누적수익률'])],
-                textposition='outside'
-            ))
-            fig_bar.update_layout(title="📊 자산 성장 및 비중", height=280, showlegend=False, margin=dict(t=50, b=10, r=100), xaxis=dict(range=[0, chart_df['평가금액'].max() * 1.3]))
-            st.plotly_chart(fig_bar, use_container_width=True)
-
+            with st.container(border=True): # 👈 테두리 카드 적용
+                chart_df = sub_df[['종목명', '평가금액', '누적수익률']].copy()
+                chart_df['Display_Name'] = chart_df['종목명'].apply(lambda x: x[:9] + ".." if len(x) > 9 else x)
+                
+                fig_bar = go.Figure(go.Bar(
+                    y=chart_df['Display_Name'], x=chart_df['평가금액'], 
+                    orientation='h', 
+                    marker_color=['#FF4B4B' if r > 0 else '#87CEEB' for r in chart_df['누적수익률']],
+                    text=[f" {int(v/a_eval*100)}%" if a_eval != 0 else "" for v in chart_df['평가금액']],
+                    textposition='outside'
+                ))
+                fig_bar.update_layout(
+                    title=dict(text="📊 자산 비중", x=0.02, y=0.9),
+                    height=300, 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(255,255,255,0.02)', # 👈 은은한 배경색
+                    font_color="white", margin=dict(t=80, b=20, l=10, r=50)
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+                
         st.divider()
         # --- [5. 투자종목 분석 (하위 배치는 기존과 동일)] ---
         sel = st.selectbox(f"📍 {acc_name} 종목 정밀 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
@@ -600,69 +612,53 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             </div>
         """)
 
-        # --- [5. 성과 추이 그래프 (v40.94 교체용 코드)] ---
-        if not history_df.empty:
-            fig_acc = go.Figure()
-            
-            # 1. 데이터 파싱
-            history_df['Date'] = pd.to_datetime(history_df['Date'])
-            h_dt = history_df['Date'].dt.date.astype(str)
-            
-            # 2. 종목별 정적 목표 수익률 (데이터 추출 및 버림 처리)
-            # 🎯 s_row에서 가져온 값이 0이면 다시 10%로 가지 않도록 방어 로직 추가
-            goal_val = s_row.get('목표수익률', 10.0)
-            if goal_val == 0 or pd.isna(goal_val):
-                goal_val = 10.0
-                
-            # 소수점 3자리 이하 버림(Truncate) 처리
-            indiv_target_yield = int(float(goal_val) * 1000) / 1000 
-            
-            static_target_line = [indiv_target_yield] * len(h_dt)
+       # --- [v40.99 UI 강화 적용: 사용자님 v40.94 코드 기반] ---
+if not history_df.empty:
+    # 🎯 1. 테두리가 있는 은은한 카드 구역 생성
+    with st.container(border=True): 
+        fig_acc = go.Figure()
+        
+        # [데이터 파싱 및 목표 수익률 연산 로직 - 사용자님 코드 100% 유지]
+        history_df['Date'] = pd.to_datetime(history_df['Date'])
+        h_dt = history_df['Date'].dt.date.astype(str)
+        
+        goal_val = s_row.get('목표수익률', 10.0)
+        if goal_val == 0 or pd.isna(goal_val): goal_val = 10.0
+        indiv_target_yield = int(float(goal_val) * 1000) / 1000 
+        static_target_line = [indiv_target_yield] * len(h_dt)
 
-            # 3. KOSPI (범례 명칭: KOSPI)
-            fig_acc.add_trace(go.Scatter(
-                x=h_dt, y=history_df['KOSPI_Relative'], 
-                name='KOSPI', 
-                line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)
-            ))
-            
-            # 4. 목표 수익률 (범례 명칭: 목표 수익률)
-            fig_acc.add_trace(go.Scatter(
-                x=h_dt, y=static_target_line, 
-                name='목표 수익률', 
-                line=dict(color='#FFD700', width=2, dash='dot')
-            ))
-            
-            # 5. 계좌 수익률 (범례 명칭: 계좌 수익률)
-            acc_col = find_matching_col(history_df, acc_name)
-            if acc_col:
-                current_y = history_df[acc_col].iloc[-1]
-                line_color = '#00FF00' if current_y >= indiv_target_yield else '#FF4B4B'
-                fig_acc.add_trace(go.Scatter(
-                    x=h_dt, y=history_df[acc_col], 
-                    mode='lines+markers', name='계좌 수익률', 
-                    line=dict(width=4, color=line_color)
-                ))
-            
-            # 6. 종목 수익률 (9자리 제한)
-            s_col = find_matching_col(history_df, acc_name, sel)
-            if s_col:
-                fig_acc.add_trace(go.Scatter(
-                    x=h_dt, y=history_df[s_col], 
-                    mode='lines', name=sel[:9], 
-                    line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')
-                ))
+        # [라인 추가 로직 - 사용자님 코드 스타일 유지]
+        fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', 
+                                     line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)))
+        
+        fig_acc.add_trace(go.Scatter(x=h_dt, y=static_target_line, name='목표 수익률', 
+                                     line=dict(color='#FFD700', width=2, dash='dot')))
+        
+        acc_col = find_matching_col(history_df, acc_name)
+        if acc_col:
+            current_y = history_df[acc_col].iloc[-1]
+            line_color = '#00FF00' if current_y >= indiv_target_yield else '#FF4B4B'
+            fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', 
+                                         name='계좌 수익률', line=dict(width=4, color=line_color)))
+        
+        s_col = find_matching_col(history_df, acc_name, sel)
+        if s_col:
+            fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', 
+                                         name=sel[:9], line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')))
 
-            # 7. 레이아웃 (좌측 정렬 제목 및 하단 범례)
-            fig_acc.update_layout(
-                title=dict(text=f"📈 {sel} 분석 및 {acc_name} 성과 추이", x=0.0, xanchor='left'),
-                height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white", 
-                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-                margin=dict(l=10, r=10, t=80, b=80),
-                xaxis=dict(type='category', tickangle=-45),
-                yaxis=dict(title="수익률 (%)")
-            )
-            st.plotly_chart(fig_acc, use_container_width=True)
+        # [레이아웃 보정 - 사용자님 설정에 '은은한 배경색'만 추가]
+        fig_acc.update_layout(
+            title=dict(text=f"📈 {sel} 분석 및 {acc_name} 성과 추이", x=0.02, xanchor='left'), # x 위치 미세조정
+            height=450, 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            plot_bgcolor='rgba(255,255,255,0.02)', # 🎯 추가: 차트 내부 미세 배경색
+            font_color="white", 
+            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+            margin=dict(l=15, r=15, t=80, b=80), # 여백 미세조정
+            xaxis=dict(type='category', tickangle=-45),
+            yaxis=dict(title="수익률 (%)")
+        )
+        st.plotly_chart(fig_acc, use_container_width=True)
                 
         # 7. [최종] 실시간 뉴스 섹션 (st.html 사용으로 마크다운 간섭 완전 차단)
         st.divider()
@@ -785,6 +781,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
