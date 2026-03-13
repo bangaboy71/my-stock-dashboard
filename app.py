@@ -133,6 +133,7 @@ if not full_df.empty:
     full_df['손익'], full_df['전일대비손익'] = full_df['평가금액']-full_df['매입금액'], full_df['평가금액']-(full_df['수량']*full_df['전일종가'])
     full_df['예상배당금'] = full_df['수량'] * full_df['주당 배당금']
     full_df['누적수익률'] = (full_df['손익']/full_df['매입금액'].replace(0, float('nan'))*100).fillna(0)
+    full_df['전일대비변동율'] = (full_df['전일대비손익'] / (full_df['평가금액'] - full_df['전일대비손익']).replace(0, float('nan')) * 100).fillna(0)
     full_df['목표대비상승여력'] = full_df.apply(lambda x: ((x['목표가']/x['현재가']-1)*100) if x['현재가']>0 and x['목표가']>0 else 0, axis=1)
     if '최초매입일' in full_df.columns:
         full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
@@ -199,8 +200,15 @@ def render_account_tab(acc_name, tab_obj):
         c3.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%" if a_buy!=0 else "0%")
         c4.metric("계좌 등급", a_grade)
 
-        # 종목 테이블
-        st.dataframe(sub_df.rename(columns=GLOBAL_RENAME_MAP)[GLOBAL_DISPLAY_COLS], hide_index=True, use_container_width=True)
+        # (203행 근처의 st.dataframe 줄을 아래로 교체)
+        
+        # 🎯 안전한 컬럼 선택 로직 적용
+        available_cols = [c for c in GLOBAL_DISPLAY_COLS if c in plot_df.columns]
+        st.dataframe(plot_df[available_cols].style.format({
+            '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
+            '현재가': '{:,.0f}원', '매입단가': '{:,.0f}원',
+            '전일대비(원)': '{:+,.0f}원', '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+        }), hide_index=True, use_container_width=True)
 
         st.divider()
         # 🎯 [Wide 배치] 현금흐름 차트 + 자산 비중 차트
@@ -267,3 +275,4 @@ with st.sidebar:
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
     st.divider()
     st.caption(f"최종 갱신: {datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S')}")
+
