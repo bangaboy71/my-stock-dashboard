@@ -312,9 +312,9 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 (v40.71 배당 HUD 통합 버전)
+# [Tab 0] 총괄 현황 (v40.81 레이아웃 최적화 버전)
 with tabs[0]:
-    # --- [기존 요약 지표 Row 1] ---
+    # --- [1. 최상단 요약 Metric] ---
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
@@ -326,91 +326,82 @@ with tabs[0]:
     m3.metric("총 누적 손익", f"{t_eval-t_buy:+,.0f}원")
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
-    # [Tab 0] 총괄 현황 배당 섹션 수정
-with tabs[0]:
+    st.divider()
 
-    # 배당 요약 연산
+    # --- [2. 전체 종목 데이터 테이블] ---
+    # 수치 우측 정렬 및 헤더 명칭(GLOBAL_RENAME_MAP) 적용
+    total_plot_df = full_df.rename(columns=GLOBAL_RENAME_MAP)
+    st.dataframe(
+        total_plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
+            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+            for i, val in enumerate(x)
+        ], axis=1).format({
+            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
+            '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(원)': '{:+,.0f}원', 
+            '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+        }), 
+        hide_index=True, use_container_width=True
+    )
+
+    # --- [3. 수익률 변동 차트] ---
+    if not history_df.empty:
+        fig = go.Figure()
+        # .dt.date 변환 에러 방지를 위해 에러 헨들링 포함 (v40.51 로직)
+        h_dates = pd.to_datetime(history_df['Date']).dt.date.astype(str)
+        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
+        for acc in ['서은투자', '서희투자', '큰스님투자']:
+            col = find_matching_col(history_df, acc)
+            if col: fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col))
+        
+        fig.update_layout(
+            title="📈 통합 수익률 히스토리", 
+            height=400, 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            font_color="white",
+            margin=dict(l=10, r=10, t=50, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # --- [4. 배당 요약 HUD] ---
     total_div = full_df['예상배당금'].sum()
     monthly_after_tax = (total_div * (1 - 0.154)) / 12
     div_yield = (total_div / t_eval * 100) if t_eval != 0 else 0
     
     d1, d2, d3, d4 = st.columns(4)
-    # 🎯 ₩ 기호를 제거하고 뒤에 '원'을 붙였습니다.
     d1.metric("연간 예상 총 배당금", f"{total_div:,.0f}원")
     d2.metric("세후 월 평균 수령액", f"{monthly_after_tax:,.0f}원")
     d3.metric("포트 배당수익률", f"{div_yield:.2f}%")
     d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard")
 
-    st.divider()
-    
-    st.write("")
-    # --- [v40.80 월별 배당 예측 연산 로직] ---
+    # --- [5. 월별 배당 흐름 차트] ---
     monthly_data = {m: 0 for m in range(1, 13)}
-    
     for _, row in full_df.iterrows():
-        name = row['종목명']
-        total_div = row['예상배당금']
-        months = DIVIDEND_SCHEDULE.get(name, [4]) # 기본값은 4월(결산)
-        
-        if total_div > 0:
-            div_per_month = total_div / len(months)
-            for m in months:
-                monthly_data[m] += div_per_month
+        name, t_div = row['종목명'], row['예상배당금']
+        months = DIVIDEND_SCHEDULE.get(name, [4])
+        if t_div > 0:
+            for m in months: monthly_data[m] += (t_div / len(months))
 
-    # 차트 데이터 구성
     months_name = [f"{m}월" for m in range(1, 13)]
     amounts = [monthly_data[m] for m in range(1, 13)]
-    
-    # 황금 배당달(최대값) 찾기
     max_val = max(amounts) if amounts else 0
     colors = ['#FFD700' if v == max_val and v > 0 else 'rgba(135,206,235,0.3)' for v in amounts]
 
-    # Plotly 차트 생성
     fig_cal = go.Figure(go.Bar(
-        x=months_name,
-        y=amounts,
-        marker_color=colors,
-        text=[f"{v/10000:.1f}만" if v > 0 else "" for v in amounts],
-        textposition='outside',
-        hovertemplate='%{x} 예상: %{y:,.0f}원<extra></extra>'
+        x=months_name, y=amounts, marker_color=colors,
+        text=[f"{v/10000:.0f}만" if v > 0 else "" for v in amounts], textposition='outside'
     ))
-
-    golden_month = months_name[amounts.index(max_val)] if max_val > 0 else "미정"
-
     fig_cal.update_layout(
-        title=f"📅 월별 예상 배당 흐름 (황금 배당달: <b style='color:#FFD700;'>{golden_month}</b>)",
-        height=350,
-        paper_bgcolor='rgba(0,0,0,0)',
+        title=f"📅 월별 예상 배당 입금 시뮬레이션", 
+        height=300, 
+        paper_bgcolor='rgba(0,0,0,0)', 
         plot_bgcolor='rgba(0,0,0,0)',
         font_color="white",
-        margin=dict(l=10, r=10, t=50, b=10),
-        xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)', showticklabels=False)
+        margin=dict(l=10, r=10, t=50, b=10)
     )
-
-    st.plotly_chart(fig_cal, use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(fig_cal, use_container_width=True)
     
-    # (이하 테이블 출력 로직 유지...)
-    sum_acc = full_df.groupby('계좌명').agg({'매입금액':'sum', '평가금액':'sum', '손익':'sum', '전일대비손익':'sum'}).reset_index()
-    sum_acc['전일평가액'] = sum_acc['평가금액'] - sum_acc['전일대비손익']
-    sum_acc['전일대비변동율'] = (sum_acc['전일대비손익'] / sum_acc['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
-    sum_acc['누적수익률'] = (sum_acc['손익'] / sum_acc['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    sum_acc = sum_acc[['계좌명', '매입금액', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']]
-    
-    st.dataframe(sum_acc.style.apply(lambda x: ['color: #FF4B4B' if (i >= 3 and val > 0) else 'color: #87CEEB' if (i >= 3 and val < 0) else '' for i, val in enumerate(x)], axis=1).format({
-        '매입금액': '{:,.0f}원', '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-    }), use_container_width=True, hide_index=True)
-
-    if not history_df.empty:
-        fig = go.Figure()
-        h_dates = history_df['Date'].dt.date.astype(str)
-        fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
-        for acc in ['서은투자', '서희투자', '큰스님투자']:
-            col = find_matching_col(history_df, acc)
-            if col: fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col))
-        fig.update_layout(title="📈 통합 실제 수익률 추이 (시트 기록 기준)", yaxis_title="누적수익률 (%)", xaxis=dict(type='category'), height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
-        st.plotly_chart(fig, use_container_width=True)
-
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
@@ -721,6 +712,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
