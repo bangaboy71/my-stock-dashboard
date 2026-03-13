@@ -11,6 +11,21 @@ import yfinance as yf # 코드 최상단 import문에 추가해주세요
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v36.50", layout="wide")
 
+# --- [v40.82 전역 설정: 이름표 및 배당 일정 통합] ---
+GLOBAL_RENAME_MAP = {
+    '전일대비손익': '전일대비(원)', 
+    '전일대비변동율': '전일대비(%)'
+}
+
+GLOBAL_DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+
+# 종목별 배당 주기 설정
+DIVIDEND_SCHEDULE = {
+    "삼성전자": [5, 8, 11, 4], "KT&G": [5, 8, 11, 4], "현대차2우B": [5, 8, 11, 4],
+    "현대글로비스": [4, 8], "테스": [4], "에스티팜": [4], "일진전기": [4],
+    "KODEX200타겟위클리커버드콜": list(range(1, 13))
+}
+
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: bold !important; }
@@ -312,9 +327,9 @@ st.write("") # 간격 조절
 
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
-# [Tab 0] 총괄 현황 (v40.81 레이아웃 최적화 버전)
+# [Tab 0] 총괄 현황 (v40.82 레이아웃 & 에러 해결 버전)
 with tabs[0]:
-    # --- [1. 최상단 요약 Metric] ---
+    # 1. 상단 요약 Metric
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
@@ -328,8 +343,7 @@ with tabs[0]:
     
     st.divider()
 
-    # --- [2. 전체 종목 데이터 테이블] ---
-    # 수치 우측 정렬 및 헤더 명칭(GLOBAL_RENAME_MAP) 적용
+    # 2. 전체 종목 데이터 테이블 (우측 정렬 유지)
     total_plot_df = full_df.rename(columns=GLOBAL_RENAME_MAP)
     st.dataframe(
         total_plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
@@ -343,28 +357,21 @@ with tabs[0]:
         hide_index=True, use_container_width=True
     )
 
-    # --- [3. 수익률 변동 차트] ---
+    # 3. 수익률 히스토리 차트
     if not history_df.empty:
         fig = go.Figure()
-        # .dt.date 변환 에러 방지를 위해 에러 헨들링 포함 (v40.51 로직)
         h_dates = pd.to_datetime(history_df['Date']).dt.date.astype(str)
         fig.add_trace(go.Scatter(x=h_dates, y=history_df['KOSPI_Relative'], name='KOSPI (3/3 기준)', line=dict(dash='dash', color='gray')))
         for acc in ['서은투자', '서희투자', '큰스님투자']:
             col = find_matching_col(history_df, acc)
             if col: fig.add_trace(go.Scatter(x=h_dates, y=history_df[col], mode='lines+markers', name=col))
         
-        fig.update_layout(
-            title="📈 통합 수익률 히스토리", 
-            height=400, 
-            paper_bgcolor='rgba(0,0,0,0)', 
-            font_color="white",
-            margin=dict(l=10, r=10, t=50, b=10)
-        )
+        fig.update_layout(title="📈 통합 수익률 히스토리", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 
-    # --- [4. 배당 요약 HUD] ---
+    # 4. 배당 요약 HUD
     total_div = full_df['예상배당금'].sum()
     monthly_after_tax = (total_div * (1 - 0.154)) / 12
     div_yield = (total_div / t_eval * 100) if t_eval != 0 else 0
@@ -375,7 +382,7 @@ with tabs[0]:
     d3.metric("포트 배당수익률", f"{div_yield:.2f}%")
     d4.metric("현금흐름 등급", "Premium" if monthly_after_tax > 500000 else "Standard")
 
-    # --- [5. 월별 배당 흐름 차트] ---
+    # 5. 월별 배당 흐름 차트
     monthly_data = {m: 0 for m in range(1, 13)}
     for _, row in full_df.iterrows():
         name, t_div = row['종목명'], row['예상배당금']
@@ -383,23 +390,13 @@ with tabs[0]:
         if t_div > 0:
             for m in months: monthly_data[m] += (t_div / len(months))
 
-    months_name = [f"{m}월" for m in range(1, 13)]
-    amounts = [monthly_data[m] for m in range(1, 13)]
-    max_val = max(amounts) if amounts else 0
-    colors = ['#FFD700' if v == max_val and v > 0 else 'rgba(135,206,235,0.3)' for v in amounts]
+    m_names = [f"{m}월" for m in range(1, 13)]
+    m_vals = [monthly_data[m] for m in range(1, 13)]
+    m_max = max(m_vals) if m_vals else 0
+    m_colors = ['#FFD700' if v == m_max and v > 0 else 'rgba(135,206,235,0.3)' for v in m_vals]
 
-    fig_cal = go.Figure(go.Bar(
-        x=months_name, y=amounts, marker_color=colors,
-        text=[f"{v/10000:.0f}만" if v > 0 else "" for v in amounts], textposition='outside'
-    ))
-    fig_cal.update_layout(
-        title=f"📅 월별 예상 배당 입금 시뮬레이션", 
-        height=300, 
-        paper_bgcolor='rgba(0,0,0,0)', 
-        plot_bgcolor='rgba(0,0,0,0)',
-        font_color="white",
-        margin=dict(l=10, r=10, t=50, b=10)
-    )
+    fig_cal = go.Figure(go.Bar(x=m_names, y=m_vals, marker_color=m_colors, text=[f"{v/10000:.0f}만" if v > 0 else "" for v in m_vals], textposition='outside'))
+    fig_cal.update_layout(title="📅 월별 예상 배당 입금 시뮬레이션", height=300, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
     st.plotly_chart(fig_cal, use_container_width=True)
     
 def render_account_tab(acc_name, tab_obj, history_col_key):
@@ -712,6 +709,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
