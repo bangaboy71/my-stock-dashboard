@@ -545,22 +545,20 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
             </div>
         """)
 
-        # --- [5. 성과 추이 그래프 (개별 목표 & 레이아웃 최적화)] ---
+        # --- [5. 성과 추이 그래프 (정적 목표선 보정 버전)] ---
         if not history_df.empty:
             fig_acc = go.Figure()
             
             # 1. 데이터 파싱
             history_df['Date'] = pd.to_datetime(history_df['Date'])
             h_dt = history_df['Date'].dt.date.astype(str)
-            base_date = history_df['Date'].min()
             
-            # 2. 🎯 [신규] 종목별 개별 목표 수익률 가져오기
-            # 시트에 '목표수익률' 컬럼이 있으면 그 값을, 없으면 기본값 10.0을 사용합니다.
+            # 2. 🎯 [로직 수정] 종목별 정적 목표 수익률
+            # 시트의 96.31%를 시간 흐름과 관계없이 고정된 수평선으로 만듭니다.
             indiv_target_yield = float(s_row.get('목표수익률', 10.0))
             
-            # 시간 경과에 따른 동적 목표선 계산
-            days_elapsed = (history_df['Date'] - base_date).dt.days
-            target_line = (days_elapsed / 365) * indiv_target_yield
+            # 모든 날짜 지점에 동일한 목표 수치를 할당하여 수평선을 생성합니다.
+            static_target_line = [indiv_target_yield] * len(h_dt)
 
             # 3. KOSPI 비교군 (회색 점선)
             fig_acc.add_trace(go.Scatter(
@@ -568,20 +566,24 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                 name='KOSPI 지수', line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)
             ))
             
-            # 4. 🎯 종목 맞춤형 목표 수익률 선 (황금색 점선)
+            # 4. 🎯 [보정] 종목 맞춤형 고정 목표 수익률 선 (황금색 수평 점선)
             fig_acc.add_trace(go.Scatter(
-                x=h_dt, y=target_line, 
-                name=f'[{sel}] 목표 ({indiv_target_yield}%)', 
+                x=h_dt, y=static_target_line, 
+                name=f'[{sel}] 최종목표 ({indiv_target_yield}%)', 
                 line=dict(color='#FFD700', width=2, dash='dot')
             ))
             
             # 5. 계좌 실제 수익률 (두꺼운 실선)
             acc_col = find_matching_col(history_df, acc_name)
             if acc_col:
+                # 마지막 수익률이 목표치(indiv_target_yield)를 넘었는지에 따라 색상 변경
+                current_yield = history_df[acc_col].iloc[-1]
+                line_color = '#00FF00' if current_yield >= indiv_target_yield else '#FF4B4B'
+                
                 fig_acc.add_trace(go.Scatter(
                     x=h_dt, y=history_df[acc_col], 
                     mode='lines+markers', name=f'{acc_name} 수익률', 
-                    line=dict(width=4, color='#00FF00' if history_df[acc_col].iloc[-1] > target_line.iloc[-1] else '#FF4B4B')
+                    line=dict(width=4, color=line_color)
                 ))
             
             # 6. 선택 종목 실제 수익률 (얇은 점선)
@@ -593,23 +595,14 @@ def render_account_tab(acc_name, tab_obj, history_col_key):
                     line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')
                 ))
 
-            # 7. 🎯 [가독성 개선] 레이아웃 조정 (제목과 범례 분리)
+            # 레이아웃 설정 (범례 하단 배치 유지)
             fig_acc.update_layout(
-                title=dict(
-                    text=f"📈 {sel} 분석 및 {acc_name} 성과 추이",
-                    x=0.5, y=0.95, xanchor='center', yanchor='top' # 제목을 정중앙 상단으로
-                ),
-                height=450, 
-                paper_bgcolor='rgba(0,0,0,0)', font_color="white", 
-                # 🎯 범례(Legend)를 차트 하단으로 이동시켜 겹침 방지
-                legend=dict(
-                    orientation="h",    # 가로 나열
-                    yanchor="bottom", y=-0.3, # 차트 아래쪽으로 충분히 내림
-                    xanchor="center", x=0.5   # 중앙 정렬
-                ),
-                margin=dict(l=10, r=10, t=80, b=80), # 상하 여백 확보
+                title=dict(text=f"📈 {sel} 분석 및 {acc_name} 성과 추이", x=0.5, y=0.95),
+                height=450, paper_bgcolor='rgba(0,0,0,0)', font_color="white", 
+                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+                margin=dict(l=10, r=10, t=80, b=80),
                 xaxis=dict(type='category', tickangle=-45),
-                yaxis=dict(title="수익률 (%)", zeroline=True, zerolinecolor='rgba(255,255,255,0.2)')
+                yaxis=dict(title="수익률 (%)")
             )
             st.plotly_chart(fig_acc, use_container_width=True)
                 
@@ -733,6 +726,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.87 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
