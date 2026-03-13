@@ -419,47 +419,91 @@ with tabs[0]:
 def render_account_tab(acc_name, tab_obj, history_col_key):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
-        if sub_df.empty: return
-
-        # --- [기존 계좌 요약 Metric Row 1] ---
+        if sub_df.empty:
+            st.warning(f"{acc_name} 데이터가 발견되지 않았습니다.")
+            return
+        
+        # --- [1. 평가액 요약 (Metric Row 1)] ---
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_diff = sub_df['전일대비손익'].sum()
         a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("평가액", f"{a_eval:,.0f}원", delta=f"{a_diff:+,.0f}원 ({a_pct:+.2f}%)")
-        c2.metric("매입액", f"{a_buy:,.0f}원")
-        c3.metric("손익", f"{a_eval-a_buy:+,.0f}원")
-        c4.metric("수익률", f"{(a_eval/a_buy-1)*100:+.2f}%")
+        c1.metric("계좌 평가액", f"{a_eval:,.0f}원", delta=f"{a_diff:+,.0f}원 ({a_pct:+.2f}%)")
+        c2.metric("계좌 매입액", f"{a_buy:,.0f}원")
+        c3.metric("계좌 손익", f"{a_eval-a_buy:+,.0f}원")
+        c4.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
 
-        # --- [신규 계좌별 배당 Metric Row 2: v40.72] ---
+        # --- [2. 보유종목 테이블] ---
+        # GLOBAL_RENAME_MAP 및 GLOBAL_DISPLAY_COLS를 사용하여 우측 정렬 유지
+        plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
+        st.dataframe(
+            plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
+                'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+                for i, val in enumerate(x)
+            ], axis=1).format({
+                '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
+                '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(원)': '{:+,.0f}원', 
+                '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+            }), 
+            hide_index=True, use_container_width=True
+        )
+
+        st.divider()
+
+        # --- [3. 배당금 요약 (Metric Row 2)] ---
         a_total_div = sub_df['예상배당금'].sum()
         a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
         a_div_yield = (a_total_div / a_eval * 100) if a_eval != 0 else 0
         
         d1, d2, d3, d4 = st.columns(4)
-        d1.metric(f"계좌 연간 배당금", f"{a_total_div:,.0f}원")
-        d2.metric(f"계좌 세후 월수령액", f"{a_monthly_tax:,.0f}원")
-        d3.metric(f"계좌 배당수익률", f"{a_div_yield:.2f}%")
-        d4.metric(f"배당 기여도", f"{(a_total_div/total_div*100):.1f}%" if total_div > 0 else "0%")
+        d1.metric("연간 예상 배당금", f"{a_total_div:,.0f}원")
+        d2.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원")
+        d3.metric("계좌 배당수익률", f"{a_div_yield:.2f}%")
+        # 현금흐름 등급: 계좌별 규모에 맞춰 20만원 기준 Premium 설정 (조절 가능)
+        d4.metric("현금흐름 등급", "Premium" if a_monthly_tax > 200000 else "Standard")
+
+        # --- [4. 현금흐름 및 자산 성장 차트] ---
+        g_left, g_right = st.columns([1, 1])
         
-        st.write("") # 가독성을 위한 간격
-        
-        # 2. 보유 종목 수익률 테이블 (10개 컬럼)
-        display_cols = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '전일대비변동율', '누적수익률']
-        st.dataframe(sub_df[display_cols].style.apply(lambda x: [
-            'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
-            for i, val in enumerate(x)
-        ], axis=1).format({
-            '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
-            '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비손익': '{:+,.0f}원', 
-            '전일대비변동율': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-        }), hide_index=True, use_container_width=True)
+        with g_left:
+            # 📅 계좌별 월별 배당 흐름 차트 (진정한 현금흐름 차트)
+            a_monthly_data = {m: 0 for m in range(1, 13)}
+            for _, row in sub_df.iterrows():
+                name, t_div = row['종목명'], row['예상배당금']
+                months = DIVIDEND_SCHEDULE.get(name, [4])
+                if t_div > 0:
+                    for m in months: a_monthly_data[m] += (t_div / len(months))
+            
+            fig_a_cal = go.Figure(go.Bar(
+                x=[f"{m}월" for m in range(1, 13)], 
+                y=[a_monthly_data[m] for m in range(1, 13)],
+                marker_color='rgba(255, 215, 0, 0.6)',
+                text=[f"{v/10000:.1f}만" if v > 0 else "" for v in a_monthly_data.values()],
+                textposition='outside'
+            ))
+            fig_a_cal.update_layout(title="📅 계좌별 월별 배당 예측", height=300, paper_bgcolor='rgba(0,0,0,0)', font_color="white", margin=dict(t=50, b=10))
+            st.plotly_chart(fig_a_cal, use_container_width=True)
+
+        with g_right:
+            # 💰 자산 성장 및 비중 막대 차트
+            chart_df = sub_df[['종목명', '매입금액', '평가금액', '누적수익률']].copy()
+            chart_df['Display_Name'] = chart_df['종목명'].apply(lambda x: x[:9] + ".." if len(x) > 9 else x)
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(y=chart_df['Display_Name'], x=chart_df['매입금액'], orientation='h', marker_color='rgba(170,170,170,0.3)'))
+            fig_bar.add_trace(go.Bar(
+                y=chart_df['Display_Name'], x=chart_df['평가금액'], orientation='h', 
+                marker_color=['#FF4B4B' if r > 0 else '#87CEEB' for r in chart_df['누적수익률']],
+                text=[f" {int(v/a_eval*100)}% ({r:+.1f}%)" for v, r in zip(chart_df['평가금액'], chart_df['누적수익률'])],
+                textposition='outside'
+            ))
+            fig_bar.update_layout(title="📊 자산 비중 및 성장", height=300, showlegend=False, margin=dict(t=50, b=10, r=100), xaxis=dict(range=[0, chart_df['평가금액'].max() * 1.3]))
+            st.plotly_chart(fig_bar, use_container_width=True)
 
         st.divider()
-        
-        # 3. 종목 분석 선택 및 수치 계산
-        sel = st.selectbox(f"📍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_v4018_{acc_name}")
+
+        # --- [5. 투자종목 분석 (하위 배치는 기존과 동일)] ---
+        sel = st.selectbox(f"📍 {acc_name} 종목 정밀 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
         s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
         
         curr_p, buy_p = float(s_row.get('현재가', 0)), float(s_row.get('매입단가', 0))
@@ -726,6 +770,7 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v36.50 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 
 
