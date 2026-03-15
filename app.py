@@ -7,10 +7,8 @@ from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
 import time
 import yfinance as yf # 코드 최상단 import문에 추가해주세요
-
 # 1. 설정 및 UI 스타일
 st.set_page_config(page_title="가족 자산 성장 관제탑 v40.94", layout="wide")
-
 # --- [신규 등급 시스템 함수] ---
 def get_cashflow_grade(amount):
     if amount >= 1000000: return "💎 Diamond"
@@ -24,7 +22,6 @@ GLOBAL_RENAME_MAP = {
 }
 
 GLOBAL_DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
-
 # 종목별 배당 주기 설정
 DIVIDEND_SCHEDULE = {
     "삼성전자": [5, 8, 11, 4], "KT&G": [5, 8, 11, 4], "현대차2우B": [5, 8, 11, 4],
@@ -60,9 +57,7 @@ RESEARCH_DATA = {
     "일진전기": {"metrics": [("초고압 변압기", "수주잔고↑", "북미 점유율↑"), ("영업이익률", "7%", "10%"), ("ROE", "14%", "18%")], "implications": ["미국 전력망 교체 사이클 수혜", "변압기 증설 라인 가동 개시"]},
     "SK스퀘어": {"metrics": [("NAV 할인율", "65%", "45%"), ("하이닉스 지분", "20.1%", "가치 재평가"), ("주주환원", "0.3조", "0.6조")], "implications": ["자사주 소각 등 적극적 가치 제고", "반도체 포트폴리오 중심 성장"]}
 }
-
 # --- [2. 엔진 및 헬퍼 함수: STOCK_CODES 정밀 보정] ---
-
 # 🎯 [핵심 수정] 테스와 에스티팜의 코드 혼선을 원천 차단하기 위해 명시적 딕셔너리로 재정의합니다.
 STOCK_CODES = {
     "삼성전자": "005930",
@@ -76,7 +71,6 @@ STOCK_CODES = {
     "일진전기": "103590",
     "SK스퀘어": "402340"
 }
-
 # --- [v40.80: 종목별 예상 배당월 설정] ---
 # 한국 상장사 특성상 결산 배당은 4월에 집중되며, 분기 배당주를 별도 반영함
 DIVIDEND_SCHEDULE = {
@@ -87,7 +81,6 @@ DIVIDEND_SCHEDULE = {
     "테스": [4], "에스티팜": [4], "일진전기": [4], # 결산 배당 (4월)
     "KODEX200타겟위클리커버드콜": list(range(1, 13)) # 월배당 (매달)
 }
-
 # --- [v40.21 시장 지수 엔진: 거래량 독립 및 텍스트 클리닝] ---
 def get_market_status():
     data = {
@@ -105,19 +98,16 @@ def get_market_status():
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
             res = requests.get(url, headers=header, timeout=5)
             res.encoding = 'euc-kr'
-            soup = BeautifulSoup(res.text, 'html.parser')
-            
+            soup = BeautifulSoup(res.text, 'html.parser')          
             # 현재 지수
             now_el = soup.select_one("#now_value")
-            if now_el: data[code]["val"] = now_el.get_text(strip=True)
-            
+            if now_el: data[code]["val"] = now_el.get_text(strip=True)    
             # 변동치 정제 (상승/하락 글자 제거 및 부호 유지)
             diff_el = soup.select_one("#change_value_and_rate")
             if diff_el:
                 raw_txt = diff_el.get_text(" ", strip=True) # 공백을 넣어 가독성 확보
                 # '상승', '하락', '보합' 글자 완전 제거
-                for word in ["상승", "하락", "보합"]: raw_txt = raw_txt.replace(word, "")
-                
+                for word in ["상승", "하락", "보합"]: raw_txt = raw_txt.replace(word, "")     
                 # 색상 결정 (부호 기준)
                 if "+" in raw_txt: data[code]["color"] = "#FF4B4B"
                 elif "-" in raw_txt: data[code]["color"] = "#87CEEB"
