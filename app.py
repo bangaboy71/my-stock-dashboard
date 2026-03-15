@@ -512,29 +512,6 @@ with tabs[0]:
                 }), hide_index=True, use_container_width=True
             )
 
-# --- [2. 계좌별 개별 탭 렌더링] ---
-render_account_tab("서은투자", tabs[1], "서은수익률")
-render_account_tab("서희투자", tabs[2], "서희수익률")
-render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
-
-# 3. [신규] 연금자산 전용 탭 구성
-with tabs[4]:
-    st.subheader("🏢 연금 및 절세 자산 통합 관리")
-    pension_list = ["IRP", "ISA", "연금저축", "회사DC"]
-    # actual_df에서 연금 관련 계좌만 필터링
-    p_df = actual_df[actual_df['계좌명'].isin(pension_list)]
-    
-    if not p_df.empty:
-        p_eval = p_df['평가금액'].sum()
-        safe_assets = p_df[p_df['자산구분'].str.contains('안전', na=False)]['평가금액'].sum()
-        safe_ratio = (safe_assets / p_eval * 100) if p_eval > 0 else 0
-        
-        pk1, pk2 = st.columns(2)
-        pk1.metric("연금 총 평가액", f"{p_eval:,.0f}원")
-        pk2.metric("안전자산 비중 (Target 30%)", f"{safe_ratio:.1f}%", delta=f"{safe_ratio-30:+.1f}%")
-        
-        st.dataframe(p_df[GLOBAL_DISPLAY_COLS], hide_index=True, use_container_width=True)
-    
 def render_account_tab(acc_name, tab_obj, yield_col_name):
     with tab_obj:
         sub_df = actual_df[actual_df['계좌명'] == acc_name].copy()
@@ -694,11 +671,30 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                     """)
         else:
             st.caption(f"{sel}와 관련된 최신 뉴스가 없습니다.")
-                
+
+# --- [2. 계좌별 개별 탭 렌더링] ---
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
+# 3. [신규] 연금자산 전용 탭 구성
+with tabs[4]:
+    st.subheader("🏢 연금 및 절세 자산 통합 관리")
+    pension_list = ["IRP", "ISA", "연금저축", "회사DC"]
+    # actual_df에서 연금 관련 계좌만 필터링
+    p_df = actual_df[actual_df['계좌명'].isin(pension_list)]
+    
+    if not p_df.empty:
+        p_eval = p_df['평가금액'].sum()
+        safe_assets = p_df[p_df['자산구분'].str.contains('안전', na=False)]['평가금액'].sum()
+        safe_ratio = (safe_assets / p_eval * 100) if p_eval > 0 else 0
+        
+        pk1, pk2 = st.columns(2)
+        pk1.metric("연금 총 평가액", f"{p_eval:,.0f}원")
+        pk2.metric("안전자산 비중 (Target 30%)", f"{safe_ratio:.1f}%", delta=f"{safe_ratio-30:+.1f}%")
+        
+        st.dataframe(p_df[GLOBAL_DISPLAY_COLS], hide_index=True, use_container_width=True)
+    
 with st.sidebar:
     st.header("⚙️ 관리 메뉴")
     if st.button("🔄 실시간 데이터 전체 갱신"): st.cache_data.clear(); st.rerun()
