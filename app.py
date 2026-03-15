@@ -233,6 +233,22 @@ except Exception as e:
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
+# --- [수정 위치 1: 데이터 로드 및 분리] ---
+df_stock = conn.read(worksheet="종목 현황", ttl="1m")
+df_pension = conn.read(worksheet="연금자산", ttl="1m")
+
+# 두 시트 통합
+raw_df = pd.concat([df_stock, df_pension], ignore_index=True)
+
+# 🎯 핵심: 상태에 따른 데이터 분리
+# actual_df: 현재 보유 중인 진짜 자산 (수익률 계산용)
+actual_df = raw_df[raw_df['상태'] == '보유'].copy()
+
+# watch_df: 매입 예정인 관심 종목 (레이더 노출용)
+watch_df = raw_df[raw_df['상태'] == '예정'].copy()
+
+# 기존 코드와의 호환성을 위해 full_df 변수명을 actual_df로 연결하거나 교체
+full_df = actual_df
 
 try:
     full_df = conn.read(worksheet="종목 현황", ttl="1m")
@@ -469,13 +485,42 @@ with tabs[0]:
                 margin=dict(t=80, b=40, l=20, r=20)
             )
             st.plotly_chart(fig_cal, use_container_width=True)
+            # --- [수정 위치 2: tabs[0] 맨 하단] ---
+if not watch_df.empty:
+    st.divider()
+    with st.container(border=True):
+        st.subheader("📡 매입 예정 종목 관심 레이더")
+        
+        # 관심 종목의 진입 매력도 계산
+        watch_plot = watch_df.copy()
+        watch_plot['진입매력도'] = ((watch_plot['목표가'] / watch_plot['현재가'] - 1) * 100)
+        
+        # 출력할 컬럼 선택
+        w_cols = ['계좌명', '종목명', '현재가', '목표가', '진입매력도', '목표수익률']
+        
+        st.dataframe(
+            watch_plot[w_cols].style.format({
+                '현재가': '{:,.0f}원', '목표가': '{:,.0f}원', 
+                '진입매력도': '{:+.2f}%', '목표수익률': '{:.1f}%'
+            }).applymap(lambda x: 'color: #00FF00' if x > 0 else '', subset=['진입매력도']),
+            hide_index=True, use_container_width=True
+        )
+        st.caption("💡 진입매력도가 높을수록(현재가가 목표가보다 낮을수록) 매수 적기에 가깝습니다.")
     
+# --- [수정 위치 3: render_account_tab 함수 시작 부분] ---
 def render_account_tab(acc_name, tab_obj, yield_col_name):
     with tab_obj:
-        sub_df = full_df[full_df['계좌명'] == acc_name].copy()
-        if sub_df.empty:
-            st.warning(f"{acc_name} 데이터가 발견되지 않았습니다.")
+        # 🎯 [수정] actual_df에서 해당 계좌의 '보유' 종목만 추출
+        sub_df = actual_df[actual_df['계좌명'] == acc_name].copy()
+        
+        # 🎯 [추가] 해당 계좌의 '예정' 종목도 따로 추출 (나중에 활용 가능)
+        acc_watch = watch_df[watch_df['계좌명'] == acc_name].copy()
+
+        if sub_df.empty and acc_watch.empty:
+            st.warning(f"{acc_name} 데이터가 없습니다.")
             return
+
+        # (이후 기존의 메트릭 계산 및 테이블 출력 로직은 그대로 유지됩니다.)
         
         # --- [1. 상단 계좌 요약 Metric] ---
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
