@@ -240,24 +240,48 @@ def get_current_prices(df):
     df['현재가'] = df['종목코드'].map(price_map)
     df['현재가'] = pd.to_numeric(df['현재가'], errors='coerce').fillna(0)
     return df
-# 🎯 캐싱 처리: 10분(600초) 동안은 구글 시트에 다시 접근하지 않고 저장된 데이터를 사용합니다.
-@st.cache_data(ttl=600) 
+# --- [5. 데이터 로드 엔진: 429 에러 방지 및 NameError 해결] ---
+
+@st.cache_data(ttl=600) # 10분간 캐싱
 def load_all_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        # 시트를 한 번에 읽어옵니다.
         df_stock = conn.read(worksheet="종목 현황")
         df_pension = conn.read(worksheet="연금자산")
         history_df = conn.read(worksheet="trend")
         return df_stock, df_pension, history_df
     except Exception as e:
-        # 할당량 초과 시 사용자에게 친절하게 안내
-        if "429" in str(e):
-            st.error("⚠️ 구글 API 호출 한도를 초과했습니다. 약 1분 후 다시 시도해 주세요.")
-            st.info("💡 팁: 너무 자주 새로고침(F5)을 하면 구글에서 접속을 차단할 수 있습니다.")
-        else:
-            st.error(f"데이터 로드 오류: {e}")
-        st.stop()
+        st.error(f"데이터 로드 실패: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+# 🎯 실제 데이터 할당 및 처리 시작
+df_stock_raw, df_pension_raw, history_df = load_all_data()
+
+if not df_stock_raw.empty:
+    # 1. 데이터 통합
+    raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
+    
+    # 2. 실시간 가격 수집
+    full_df_with_price = get_current_prices(raw_df)
+    
+    # 3. 필수 연산 (매입금액, 평가금액 등)
+    full_df_with_price['매입금액'] = pd.to_numeric(full_df_with_price['수량'], errors='coerce') * pd.to_numeric(full_df_with_price['매입단가'], errors='coerce')
+    full_df_with_price['평가금액'] = pd.to_numeric(full_df_with_price['수량'], errors='coerce') * pd.to_numeric(full_df_with_price['현재가'], errors='coerce')
+    full_df_with_price['예상배당금'] = pd.to_numeric(full_df_with_price['수량'], errors='coerce') * pd.to_numeric(full_df_with_price['주당 배당금'], errors='coerce')
+    full_df_with_price['손익'] = full_df_with_price['평가금액'] - full_df_with_price['매입금액']
+    
+    # 4. 상태별 분리
+    actual_df = full_df_with_price[full_df_with_price['상태'] == '보유'].copy()
+    watch_df = full_df_with_price[full_df_with_price['상태'] == '예정'].copy()
+    
+    # 🌟 [중요] NameError 해결: 하위 코드에서 사용하는 full_df 변수를 여기서 정의합니다.
+    full_df = actual_df 
+    
+else:
+    st.error("데이터가 비어있습니다. 시트를 확인해주세요.")
+    st.stop()
+
+# --- 여기서부터 기존의 line 262 (if not full_df.empty:) 코드가 이어집니다 ---
 # --- [v40.94: 데이터 정제 구역 보강] ---
 if not full_df.empty:
     full_df.columns = [c.strip() for c in full_df.columns]
