@@ -251,9 +251,43 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 try:
     df_stock_raw, df_pension_raw, history_df = load_all_data()
     
-    # 두 시트 통합 (컬럼 표준화)
-    raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
-    raw_df.columns = [c.strip() for c in raw_df.columns]
+   # 1. 시트 데이터 로드 (기존 로직)
+df_stock_raw, df_pension_raw, history_df = load_data()
+raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
+
+# 2. ⚠️ KeyError 방지를 위한 필수 열 계산 및 생성
+def ensure_display_columns(df):
+    # 숫자형 변환 (에러 방지용)
+    for col in ['수량', '매입단가', '현재가', '주당 배당금']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    
+    # 필수 계산 열 생성
+    df['매입금액'] = df['수량'] * df['매입단가']
+    df['평가금액'] = df['수량'] * df['현재가']
+    df['손익'] = df['평가금액'] - df['매입금액']
+    
+    # '누적수익률'이 없는 경우 계산해서 생성
+    if '누적수익률' not in df.columns:
+        df['누적수익률'] = (df['손익'] / df['매입금액'] * 100).fillna(0)
+    
+    # '전일대비손익'이 없는 경우 0으로 초기화 (크롤링 데이터가 없을 때 대비)
+    if '전일대비손익' not in df.columns:
+        df['전일대비손익'] = 0
+    
+    # '전일대비변동율' 생성
+    if '전일대비변동율' not in df.columns:
+        # 전일 평가액 대비 변동률 계산
+        prev_eval = df['평가금액'] - df['전일대비손익']
+        df['전일대비변동율'] = (df['전일대비손익'] / prev_eval * 100).replace([float('inf'), -float('inf')], 0).fillna(0)
+    
+    return df
+
+# 전처리 적용
+full_df_processed = ensure_display_columns(raw_df)
+
+# 3. 매핑 적용 (기본 필터링)
+actual_df = full_df_processed[full_df_processed['상태'] == '보유'].copy()
     
     # 실시간 가격 및 기초 연산
     full_df = get_current_prices(raw_df)
@@ -350,16 +384,35 @@ st.markdown(
 )
 
 def render_investment_tab(acc_name, tab_obj):
-    """일반 투자 계좌용 탭 (v40.94 스타일)"""
     with tab_obj:
-        sub_df = invest_df[invest_df['계좌명'] == acc_name]
-        if sub_df.empty: st.info(f"{acc_name} 데이터가 없습니다."); return
-        
-        # 상단 메트릭 및 테이블 (기존 로직 동일)
-        a_eval, a_buy = sub_df['평가금액'].sum(), sub_df['매입금액'].sum()
-        st.columns(4)[0].metric("계좌 평가액", f"{a_eval:,.0f}원", delta=f"{a_eval-a_buy:+,.0f}원")
-        st.dataframe(sub_df.rename(columns=GLOBAL_RENAME_MAP)[GLOBAL_DISPLAY_COLS], hide_index=True, use_container_width=True)
+        sub_df = actual_df[actual_df['계좌명'] == acc_name].copy()
+        if sub_df.empty:
+            st.info(f"{acc_name} 데이터가 없습니다.")
+            return
 
+        # 1. 이름 변경 적용 (전일대비손익 -> 전일대비(원) 등)
+        plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
+
+        # 2. [체크] 만약 리스트의 열이 하나라도 없으면 에러가 나므로, 있는 것만 골라내거나 빈 열을 생성
+        existing_cols = [c for c in GLOBAL_DISPLAY_COLS if c in plot_df.columns]
+        missing_cols = [c for c in GLOBAL_DISPLAY_COLS if c not in plot_df.columns]
+        
+        if missing_cols:
+            for mc in missing_cols:
+                plot_df[mc] = 0 # 없는 열은 0으로 채움
+
+        # 3. 데이터프레임 출력
+        st.dataframe(
+            plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
+                'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+                for i, val in enumerate(x)
+            ], axis=1).format({
+                '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', 
+                '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
+                '전일대비(원)': '{:+,.0f}원', '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+            }), hide_index=True, use_container_width=True
+        )
+            
 def render_pension_control_room(tab_obj):
     """[신규] 연금 전용 독립 관제실 탭"""
     with tab_obj:
@@ -463,15 +516,6 @@ with tabs[0]:
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
     st.divider()
-
-# 일반 vs 연금 비중 차트
-    fig_ratio = go.Figure(go.Pie(labels=['일반투자', '연금자산'], values=[invest_df['평가금액'].sum(), pension_df['평가금액'].sum()], hole=.4))
-    fig_ratio.update_layout(title="가족 전체 자산 배분 비중", height=350)
-    st.plotly_chart(fig_ratio, use_container_width=True)
-    
-    if not watch_df.empty:
-        st.divider(); st.subheader("📡 매입 예정 종목 관심 레이더")
-        st.dataframe(watch_df[['계좌명', '종목명', '현재가', '목표가']], use_container_width=True)
     
     # 2. 계좌별 요약 테이블 (음양 색채 및 정수 처리 적용)
     sum_acc = full_df.groupby('계좌명').agg({
