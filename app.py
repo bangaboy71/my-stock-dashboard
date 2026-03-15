@@ -360,10 +360,11 @@ for i, col in enumerate(hud_cols):
         
 st.write("") # 간격 조절
 
-tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
+tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자", "🏢 연금자산"])
 
+# --- [1. 총괄 현황 탭] ---
 with tabs[0]:
-    # 1. 최상단 요약 Metric (가족 전체 합계)
+    # (기존 상단 메트릭 및 계좌 요약 테이블)
     t_eval, t_buy = full_df['평가금액'].sum(), full_df['매입금액'].sum()
     t_prev_eval = (full_df['수량'] * full_df['전일종가']).sum()
     t_change_amt = t_eval - t_prev_eval
@@ -495,49 +496,49 @@ with tabs[0]:
             )
             st.plotly_chart(fig_cal, use_container_width=True)
             # --- [수정 위치 2: tabs[0] 맨 하단] ---
-    # 🎯 [수정] "🏢 연금자산" 탭을 추가합니다.
-tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자", "🏢 연금자산"])
-
-    # ✅ [수정] 관심 레이더를 tabs[0] '안쪽'으로 이동하여 중복 노출 방지
+    # 🎯 [해결: 중복 노출 및 인덴트 에러] 
+    # 이 줄이 with tabs[0]: 블록과 줄이 딱 맞아야 합니다 (4칸 들여쓰기)
     if not watch_df.empty:
         st.divider()
         with st.container(border=True):
             st.subheader("📡 매입 예정 종목 관심 레이더")
-            w_plot = watch_df.copy()
-            w_plot['진입매력도'] = w_plot.apply(
-                lambda x: ((x['목표가']/x['현재가']-1)*100) if x['현재가']>0 else 0, axis=1
+            watch_plot = watch_df.copy()
+            watch_plot['진입매력도'] = watch_plot.apply(
+                lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 else 0, axis=1
             )
             st.dataframe(
-                w_plot[['계좌명', '종목명', '현재가', '목표가', '진입매력도']].style.format({
+                watch_plot[['계좌명', '종목명', '현재가', '목표가', '진입매력도']].style.format({
                     '현재가': '{:,.0f}원', '목표가': '{:,.0f}원', '진입매력도': '{:+.2f}%'
                 }), hide_index=True, use_container_width=True
             )
 
-# --- 계좌별 탭 렌더링 ---
+# --- [2. 계좌별 개별 탭 렌더링] ---
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-# 🎯 [신규] 5번째 탭에 연금자산(IRP/ISA) 전용 화면을 구성합니다.
+# 🎯 [수정 2] "🏢 연금자산" 전용 탭 구성
 with tabs[4]:
-    st.subheader("🏢 연금 및 절세 자산 관리")
-    # 연금 관련 계좌(IRP, ISA 등)만 필터링하여 출력
-    pension_accounts = ["IRP", "ISA", "연금저축", "회사DC"]
-    p_df = actual_df[actual_df['계좌명'].isin(pension_accounts)]
+    st.subheader("🏢 연금 및 절세 자산 통합 관리")
+    # actual_df(보유 자산)에서 IRP, ISA 등 연금 관련 계좌만 필터링
+    pension_list = ["IRP", "ISA", "연금저축", "회사DC"]
+    p_df = actual_df[actual_df['계좌명'].isin(pension_list)]
     
     if not p_df.empty:
-        # 연금자산 전용 메트릭
         p_eval = p_df['평가금액'].sum()
         p_buy = p_df['매입금액'].sum()
+        # 안전자산 비중 계산
+        safe_assets = p_df[p_df['자산구분'].str.contains('안전', na=False)]['평가금액'].sum()
+        safe_ratio = (safe_assets / p_eval * 100) if p_eval > 0 else 0
         
-        p1, p2, p3 = st.columns(3)
-        p1.metric("연금 총 평가액", f"{p_eval:,.0f}원")
-        p2.metric("안전자산 비중", f"{(p_df[p_df['자산구분'].str.contains('안전', na=False)]['평가금액'].sum()/p_eval*100):.1f}%" if p_eval>0 else "0%")
-        p3.metric("누적 수익률", f"{(p_eval/p_buy-1)*100:+.2f}%" if p_buy>0 else "0%")
+        pk1, pk2, pk3 = st.columns(3)
+        pk1.metric("연금 총 평가액", f"{p_eval:,.0f}원")
+        pk2.metric("안전자산 비중 (Target 30%)", f"{safe_ratio:.1f}%", delta=f"{safe_ratio-30:+.1f}%", delta_color="normal")
+        pk3.metric("연금 누적 수익률", f"{(p_eval/p_buy-1)*100:+.2f}%" if p_buy > 0 else "0%")
         
         st.dataframe(p_df[GLOBAL_DISPLAY_COLS].style.format({'현재가': '{:,.0f}원'}), hide_index=True, use_container_width=True)
     else:
-        st.info("현재 보유 중인 연금 자산이 없습니다. 시트의 '상태'를 확인해 주세요.")
+        st.info("연금 계좌로 등록된 보유 자산이 없습니다. 시트의 '계좌명'과 '상태'를 확인해 주세요.")
     
 # --- [수정 위치 3: render_account_tab 함수 시작 부분] ---
 def render_account_tab(acc_name, tab_obj, yield_col_name):
