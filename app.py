@@ -245,23 +245,31 @@ def find_matching_col(df, account, stock=None):
 
 # --- [데이터 로드 및 통합 엔진 구역] ---
 
-    try:
-        df_stock_raw, df_pension_raw, history_df = load_data()
-        raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
-        full_df = get_current_prices(raw_df) 
-        for col in ['수량', '매입단가', '현재가', '주당 배당금']:
-            if col in full_df.columns:
-                full_df[col] = pd.to_numeric(full_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-        full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-        full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
+try:
+    # 1. 시트 데이터 로드 (캐싱된 함수 호출)
+    df_stock_raw, df_pension_raw, history_df = load_data()
+
+    # 2. 데이터프레임 통합
+    raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
+    
+    # 🎯 Line 313 부근: 이 줄의 시작 위치를 위 줄(raw_df)과 수직으로 정확히 맞췄습니다.
+    full_df = get_current_prices(raw_df) 
+    
+    # 3. 필수 수치 연산 (숫자 데이터 변환 및 NameError 방지)
+    for col in ['수량', '매입단가', '현재가', '주당 배당금']:
+        if col in full_df.columns:
+            full_df[col] = pd.to_numeric(full_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
+    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
+    full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
     
     # 4. 상태별 데이터 분류
-        actual_df = full_df[full_df['상태'] == '보유'].copy()
-        watch_df = full_df[full_df['상태'] == '예정'].copy()
+    actual_df = full_df[full_df['상태'] == '보유'].copy()
+    watch_df = full_df[full_df['상태'] == '예정'].copy()
     
     # 🌟 메인 변수 정의 (이후 코드에서 full_df를 호출할 때 에러 방지)
-        full_df = actual_df 
+    full_df = actual_df 
 
 except Exception as e:
     st.error(f"⚠️ 데이터 처리 중 오류 발생 (Line 313 부근): {e}")
