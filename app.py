@@ -240,32 +240,24 @@ def get_current_prices(df):
     df['현재가'] = df['종목코드'].map(price_map)
     df['현재가'] = pd.to_numeric(df['현재가'], errors='coerce').fillna(0)
     return df
-# --- 실제 데이터 로드 시작 ---
-now_kst = get_now_kst()
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-try:
-    # 1. 시트 읽기
-    df_stock = conn.read(worksheet="종목 현황", ttl="1m")
-    df_pension = conn.read(worksheet="연금자산", ttl="1m")
-    history_df = conn.read(worksheet="trend", ttl=0)
-
-    # 2. 두 시트 통합
-    raw_df = pd.concat([df_stock, df_pension], ignore_index=True)
-    
-    # 🎯 [핵심] 여기서 위에서 정의한 함수를 호출하여 '현재가'를 만듭니다.
-    full_df_with_price = get_current_prices(raw_df) 
-
-    # 3. 상태('보유' vs '예정')에 따른 데이터 분리
-    actual_df = full_df_with_price[full_df_with_price['상태'] == '보유'].copy()
-    watch_df = full_df_with_price[full_df_with_price['상태'] == '예정'].copy()
-
-    # 기존 코드 호환성 유지 (보유 종목을 메인으로 사용)
-    full_df = actual_df
-
-except Exception as e:
-    st.error(f"⚠️ 데이터 로드 중 오류 발생: {e}")
-    st.stop()
+# 🎯 캐싱 처리: 10분(600초) 동안은 구글 시트에 다시 접근하지 않고 저장된 데이터를 사용합니다.
+@st.cache_data(ttl=600) 
+def load_all_data():
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    try:
+        # 시트를 한 번에 읽어옵니다.
+        df_stock = conn.read(worksheet="종목 현황")
+        df_pension = conn.read(worksheet="연금자산")
+        history_df = conn.read(worksheet="trend")
+        return df_stock, df_pension, history_df
+    except Exception as e:
+        # 할당량 초과 시 사용자에게 친절하게 안내
+        if "429" in str(e):
+            st.error("⚠️ 구글 API 호출 한도를 초과했습니다. 약 1분 후 다시 시도해 주세요.")
+            st.info("💡 팁: 너무 자주 새로고침(F5)을 하면 구글에서 접속을 차단할 수 있습니다.")
+        else:
+            st.error(f"데이터 로드 오류: {e}")
+        st.stop()
 # --- [v40.94: 데이터 정제 구역 보강] ---
 if not full_df.empty:
     full_df.columns = [c.strip() for c in full_df.columns]
