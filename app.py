@@ -248,37 +248,36 @@ def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- [데이터 로딩 및 전처리 섹션 시작] ---
+# --- [데이터 로드 및 통합 엔진 구역] ---
 
-# 253행: 'try'는 맨 왼쪽(공백 0개)에서 시작해야 합니다.
 try:
-    # 1. 데이터 로드 (캐싱된 함수 호출)
+    # 1. 시트 데이터 로드 (캐싱된 함수 호출)
     df_stock_raw, df_pension_raw, history_df = load_data()
 
-    # 2. 데이터 통합
+    # 2. 데이터프레임 통합
     raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
     
-    # 3. 실시간 가격 수집
-    full_df_with_price = get_current_prices(raw_df) 
+    # 🎯 Line 319: 이 줄의 맨 앞으로 가서 공백을 모두 지우고 위 줄과 수직을 맞추세요.
+    full_df = get_current_prices(raw_df) 
     
-    # 4. 필수 수치 연산 (숫자 변환 및 NameError 방지)
-    full_df_with_price['수량'] = pd.to_numeric(full_df_with_price['수량'], errors='coerce').fillna(0)
-    full_df_with_price['매입단가'] = pd.to_numeric(full_df_with_price['매입단가'], errors='coerce').fillna(0)
-    full_df_with_price['현재가'] = pd.to_numeric(full_df_with_price['현재가'], errors='coerce').fillna(0)
+    # 3. 필수 수치 연산 (KeyError/NameError 방지용)
+    for col in ['수량', '매입단가', '현재가', '주당 배당금']:
+        if col in full_df.columns:
+            full_df[col] = pd.to_numeric(full_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
+    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
+    full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
     
-    full_df_with_price['매입금액'] = full_df_with_price['수량'] * full_df_with_price['매입단가']
-    full_df_with_price['평가금액'] = full_df_with_price['수량'] * full_df_with_price['현재가']
-    full_df_with_price['손익'] = full_df_with_price['평가금액'] - full_df_with_price['매입금액']
+    # 4. 상태별 데이터 분류
+    actual_df = full_df[full_df['상태'] == '보유'].copy()
+    watch_df = full_df[full_df['상태'] == '예정'].copy()
     
-    # 5. 상태별 데이터 분류
-    actual_df = full_df_with_price[full_df_with_price['상태'] == '보유'].copy()
-    watch_df = full_df_with_price[full_df_with_price['상태'] == '예정'].copy()
-    
-    # 🌟 이후 코드에서 사용할 핵심 변수 정의
+    # 🌟 메인 변수 정의
     full_df = actual_df 
 
 except Exception as e:
-    st.error(f"⚠️ 253행 근처 데이터 처리 오류: {e}")
+    st.error(f"⚠️ 데이터 처리 중 오류 발생 (Line 319 부근): {e}")
     st.stop()
         
 # 2. ⚠️ KeyError 방지를 위한 필수 열 계산 및 생성
