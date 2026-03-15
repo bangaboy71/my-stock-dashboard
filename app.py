@@ -5,15 +5,33 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 import plotly.graph_objects as go
-import numpy as np
-import yfinance as yf
+import time
+import yfinance as yf # 코드 최상단 import문에 추가해주세요
 
-# --- [1. 기초 설정 및 시간 정의] ---
-def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
-now_kst = get_now_kst()
+# 1. 설정 및 UI 스타일
+st.set_page_config(page_title="가족 자산 성장 관제탑 v40.94", layout="wide")
 
-st.set_page_config(page_title="가족 자산 성장 관제탑 v41.00", layout="wide")
-        
+# --- [신규 등급 시스템 함수] ---
+def get_cashflow_grade(amount):
+    if amount >= 1000000: return "💎 Diamond"
+    elif amount >= 300000: return "🥇 Gold"
+    elif amount >= 100000: return "🥈 Silver"
+    else: return "🥉 Bronze"
+# --- [v40.82 전역 설정: 이름표 및 배당 일정 통합] ---
+GLOBAL_RENAME_MAP = {
+    '전일대비손익': '전일대비(원)', 
+    '전일대비변동율': '전일대비(%)'
+}
+
+GLOBAL_DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+
+# 종목별 배당 주기 설정
+DIVIDEND_SCHEDULE = {
+    "삼성전자": [5, 8, 11, 4], "KT&G": [5, 8, 11, 4], "현대차2우B": [5, 8, 11, 4],
+    "현대글로비스": [4, 8], "테스": [4], "에스티팜": [4], "일진전기": [4],
+    "KODEX200타겟위클리커버드콜": list(range(1, 13))
+}
+
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: bold !important; }
@@ -26,27 +44,6 @@ st.markdown("""
     .target-val { color: #FFD700; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
-
-GLOBAL_RENAME_MAP = {
-    '전일대비손익': '전일대비(원)', 
-    '전일대비변동율': '전일대비(%)'
-}
-
-GLOBAL_DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
-
-# 종목별 배당 주기 설정 (34행 지점)
-DIVIDEND_SCHEDULE = {
-    "삼성전자": [4, 5, 8, 11],
-    "KT&G": [4, 8, 11, 12],
-    "테스": [4],
-    "LG에너지솔루션": [],
-    "현대글로비스": [4],
-    "현대차2우B": [4, 5, 8, 11],
-    "KODEX200타겟위클리커버드콜": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-    "에스티팜": [],
-    "일진전기": [4],
-    "SK스퀘어": []
-}
 
 # --- [2. 엔진 및 헬퍼 함수: 데이터 및 크롤링 엔진 통합] ---
 
@@ -63,7 +60,9 @@ RESEARCH_DATA = {
     "일진전기": {"metrics": [("초고압 변압기", "수주잔고↑", "북미 점유율↑"), ("영업이익률", "7%", "10%"), ("ROE", "14%", "18%")], "implications": ["미국 전력망 교체 사이클 수혜", "변압기 증설 라인 가동 개시"]},
     "SK스퀘어": {"metrics": [("NAV 할인율", "65%", "45%"), ("하이닉스 지분", "20.1%", "가치 재평가"), ("주주환원", "0.3조", "0.6조")], "implications": ["자사주 소각 등 적극적 가치 제고", "반도체 포트폴리오 중심 성장"]}
 }
+
 # --- [2. 엔진 및 헬퍼 함수: STOCK_CODES 정밀 보정] ---
+
 # 🎯 [핵심 수정] 테스와 에스티팜의 코드 혼선을 원천 차단하기 위해 명시적 딕셔너리로 재정의합니다.
 STOCK_CODES = {
     "삼성전자": "005930",
@@ -77,6 +76,7 @@ STOCK_CODES = {
     "일진전기": "103590",
     "SK스퀘어": "402340"
 }
+
 # --- [v40.80: 종목별 예상 배당월 설정] ---
 # 한국 상장사 특성상 결산 배당은 4월에 집중되며, 분기 배당주를 별도 반영함
 DIVIDEND_SCHEDULE = {
@@ -87,7 +87,7 @@ DIVIDEND_SCHEDULE = {
     "테스": [4], "에스티팜": [4], "일진전기": [4], # 결산 배당 (4월)
     "KODEX200타겟위클리커버드콜": list(range(1, 13)) # 월배당 (매달)
 }
-        
+
 # --- [v40.21 시장 지수 엔진: 거래량 독립 및 텍스트 클리닝] ---
 def get_market_status():
     data = {
@@ -105,16 +105,19 @@ def get_market_status():
             url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
             res = requests.get(url, headers=header, timeout=5)
             res.encoding = 'euc-kr'
-            soup = BeautifulSoup(res.text, 'html.parser')          
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
             # 현재 지수
             now_el = soup.select_one("#now_value")
-            if now_el: data[code]["val"] = now_el.get_text(strip=True)    
+            if now_el: data[code]["val"] = now_el.get_text(strip=True)
+            
             # 변동치 정제 (상승/하락 글자 제거 및 부호 유지)
             diff_el = soup.select_one("#change_value_and_rate")
             if diff_el:
                 raw_txt = diff_el.get_text(" ", strip=True) # 공백을 넣어 가독성 확보
                 # '상승', '하락', '보합' 글자 완전 제거
-                for word in ["상승", "하락", "보합"]: raw_txt = raw_txt.replace(word, "")     
+                for word in ["상승", "하락", "보합"]: raw_txt = raw_txt.replace(word, "")
+                
                 # 색상 결정 (부호 기준)
                 if "+" in raw_txt: data[code]["color"] = "#FF4B4B"
                 elif "-" in raw_txt: data[code]["color"] = "#87CEEB"
@@ -147,37 +150,7 @@ def get_market_status():
             
     except: pass
     return data
-
-# --- [3. 코어 엔진 함수 (v40.94 기능 유지)] ---
-def get_cashflow_grade(amount):
-    if amount >= 1000000: return "💎 Diamond"
-    elif amount >= 300000: return "🥇 Gold"
-    elif amount >= 100000: return "🥈 Silver"
-    else: return "🥉 Bronze"
-
-@st.cache_data(ttl=600) # 429 에러 방지용 10분 캐싱
-def load_all_data():
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    d1 = conn.read(worksheet="종목 현황")
-    d2 = conn.read(worksheet="연금자산")
-    d3 = conn.read(worksheet="trend")
-    return d1, d2, d3
-
-def get_current_prices(df):
-    if df.empty: return df
-    tickers = df['종목코드'].unique()
-    price_map = {}
-    for t in tickers:
-        f_t = str(t).strip()
-        if f_t.isdigit(): f_t += ".KS"
-        try:
-            stock = yf.Ticker(f_t)
-            data = stock.history(period="1d")
-            price_map[t] = data['Close'].iloc[-1] if not data.empty else 0
-        except: price_map[t] = 0
-    df['현재가'] = df['종목코드'].map(price_map)
-    return df
-
+    
 def get_stock_data(name):
     code = STOCK_CODES.get(str(name).replace(" ", ""))
     if not code: return 0, 0
@@ -243,95 +216,30 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [데이터 로드 및 통합 엔진 구역] ---
+# --- [3. 데이터 로드 및 정제 (API 에러 핸들링 포함)] ---
+def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
+now_kst = get_now_kst()
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
-    # 1. 시트 데이터 로드 (캐싱된 함수 호출)
-    df_stock_raw, df_pension_raw, history_df = load_data()
-
-    # 2. 데이터프레임 통합
-    raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
-    
-    # 🎯 Line 313 부근: 이 줄의 시작 위치를 위 줄(raw_df)과 수직으로 정확히 맞췄습니다.
-    full_df = get_current_prices(raw_df) 
-    
-    # 3. 필수 수치 연산 (숫자 데이터 변환 및 NameError 방지)
-    for col in ['수량', '매입단가', '현재가', '주당 배당금']:
-        if col in full_df.columns:
-            full_df[col] = pd.to_numeric(full_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
-    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-    full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    
-    # 4. 상태별 데이터 분류
-    actual_df = full_df[full_df['상태'] == '보유'].copy()
-    watch_df = full_df[full_df['상태'] == '예정'].copy()
-    
-    # 🌟 메인 변수 정의 (이후 코드에서 full_df를 호출할 때 에러 방지)
-    full_df = actual_df 
-
+    full_df = conn.read(worksheet="종목 현황", ttl="1m")
+    history_df = conn.read(worksheet="trend", ttl=0)
 except Exception as e:
-    st.error(f"⚠️ 데이터 처리 중 오류 발생 (Line 313 부근): {e}")
+    st.error(f"⚠️ 구글 시트 연결 오류: {e}")
+    st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
     st.stop()
-        
-# 2. ⚠️ KeyError 방지를 위한 필수 열 계산 및 생성
-def ensure_display_columns(df):
-    # 숫자형 변환 (에러 방지용)
-    for col in ['수량', '매입단가', '현재가', '주당 배당금']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    
-    # 필수 계산 열 생성
-    df['매입금액'] = df['수량'] * df['매입단가']
-    df['평가금액'] = df['수량'] * df['현재가']
-    df['손익'] = df['평가금액'] - df['매입금액']
-    
-    # '누적수익률'이 없는 경우 계산해서 생성
-    if '누적수익률' not in df.columns:
-        df['누적수익률'] = (df['손익'] / df['매입금액'] * 100).fillna(0)
-    
-    # '전일대비손익'이 없는 경우 0으로 초기화 (크롤링 데이터가 없을 때 대비)
-    if '전일대비손익' not in df.columns:
-        df['전일대비손익'] = 0
-    
-    # '전일대비변동율' 생성
-    if '전일대비변동율' not in df.columns:
-        # 전일 평가액 대비 변동률 계산
-        prev_eval = df['평가금액'] - df['전일대비손익']
-        df['전일대비변동율'] = (df['전일대비손익'] / prev_eval * 100).replace([float('inf'), -float('inf')], 0).fillna(0)
-    
-    return df
 
-# 전처리 적용
-full_df_processed = ensure_display_columns(raw_df)
+# --- [3. 데이터 로드 및 표준 날짜 최적화 연산] ---
+def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
+now_kst = get_now_kst()
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 3. 매핑 적용 (기본 필터링)
-actual_df = full_df_processed[full_df_processed['상태'] == '보유'].copy()
-    
-    # 실시간 가격 및 기초 연산
-    full_df = get_current_prices(raw_df)
-    for c in ['수량', '매입단가', '주당 배당금', '목표가', '목표인출액']:
-        if c in full_df.columns:
-            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    
-    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-    full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    full_df['예상배당금'] = full_df['수량'] * full_df['주당 배당금']
-    full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).fillna(0)
-    full_df['전일대비손익'] = 0 # 간소화
-
-    # [핵심] 일반 자산과 연금 자산의 분리
-    pension_acc_names = ['ISA', 'IRP', '연금저축', '회사DC']
-    actual_df = full_df[full_df['상태'] == '보유'].copy()
-    
-    invest_df = actual_df[~actual_df['계좌명'].isin(pension_acc_names)].copy()
-    pension_df = actual_df[actual_df['계좌명'].isin(pension_acc_names)].copy()
-    watch_df = full_df[full_df['상태'] == '예정'].copy()
-
+try:
+    full_df = conn.read(worksheet="종목 현황", ttl="1m")
+    history_df = conn.read(worksheet="trend", ttl=0)
 except Exception as e:
-    st.error(f"데이터 엔진 오류: {e}"); st.stop()
+    st.error(f"⚠️ 구글 시트 연결 오류: {e}")
+    st.stop()
 
 # --- [v40.94: 데이터 정제 구역 보강] ---
 if not full_df.empty:
@@ -403,97 +311,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-def render_investment_tab(acc_name, tab_obj):
-    with tab_obj:
-        sub_df = actual_df[actual_df['계좌명'] == acc_name].copy()
-        if sub_df.empty:
-            st.info(f"{acc_name} 데이터가 없습니다.")
-            return
-
-        # 1. 이름 변경 적용 (전일대비손익 -> 전일대비(원) 등)
-        plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
-
-        # 2. [체크] 만약 리스트의 열이 하나라도 없으면 에러가 나므로, 있는 것만 골라내거나 빈 열을 생성
-        existing_cols = [c for c in GLOBAL_DISPLAY_COLS if c in plot_df.columns]
-        missing_cols = [c for c in GLOBAL_DISPLAY_COLS if c not in plot_df.columns]
-        
-        if missing_cols:
-            for mc in missing_cols:
-                plot_df[mc] = 0 # 없는 열은 0으로 채움
-
-        # 3. 데이터프레임 출력
-        st.dataframe(
-            plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
-                'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
-                for i, val in enumerate(x)
-            ], axis=1).format({
-                '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', 
-                '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', 
-                '전일대비(원)': '{:+,.0f}원', '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-            }), hide_index=True, use_container_width=True
-        )
-            
-def render_pension_control_room(tab_obj):
-    """[신규] 연금 전용 독립 관제실 탭"""
-    with tab_obj:
-        st.markdown("### 🏢 연금 및 절세 자산 통합 관제실")
-        
-        if pension_df.empty:
-            st.warning("연금자산 데이터가 없습니다."); return
-
-        # 1. 연금 통합 지표
-        p_eval, p_buy = pension_df['평가금액'].sum(), pension_df['매입금액'].sum()
-        safe_assets = pension_df[pension_df['자산구분'] == '안전']['평가금액'].sum()
-        safe_ratio = (safe_assets / p_eval * 100) if p_eval > 0 else 0
-        
-        pk1, pk2, pk3, pk4 = st.columns(4)
-        pk1.metric("연금 총 평가액", f"{p_eval:,.0f}원")
-        pk2.metric("안전자산 비중", f"{safe_ratio:.1f}%", delta=f"{safe_ratio-30:+.1f}% (Target 30%)")
-        pk3.metric("누적 절세 혜택(추정)", f"{(pension_df['예상배당금'].sum()*0.154):,.0f}원", help="배당소득세 절감분")
-        pk4.metric("연금 통합 등급", get_cashflow_grade((pension_df['예상배당금'].sum()*0.846)/12))
-
-        # 2. 인출 시나리오 시뮬레이션 (시트 기반)
-        st.divider()
-        st.subheader("🚀 시트 기반 인출 시나리오 시뮬레이션")
-        
-        # 시나리오 설정값 (시트에서 첫 번째 행의 값을 기준으로 대표값 설정)
-        mode = pension_df['시나리오모드'].iloc[0] if '시나리오모드' in pension_df.columns else "배당인출"
-        target_monthly = pension_df['목표인출액'].iloc[0] if '목표인출액' in pension_df.columns else 2000000
-        
-        s_col1, s_col2 = st.columns([1, 2])
-        with s_col1:
-            st.markdown(f"""
-            <div class='pension-card'>
-                <b>현재 설정된 시나리오:</b> {mode}<br>
-                <b>목표 월 인출액:</b> {target_monthly:,.0f}원<br><br>
-                <small>* 시트의 '시나리오모드'와 '목표인출액' 컬럼을 통해 변경 가능합니다.</small>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # 간단한 소진 시점 계산
-            annual_yield = 0.05 # 가정 수익률
-            years_to_depletion = "영구" if (p_eval * annual_yield / 12) > target_monthly else f"{int(p_eval/(target_monthly*12)):.1f}년"
-            st.metric("예상 자산 유지 기간", years_to_depletion)
-
-        with s_col2:
-            # 미래 자산 추이 차트 (간이)
-            years = np.arange(0, 31)
-            balance = p_eval
-            balances = []
-            for y in years:
-                balances.append(max(0, balance))
-                balance = balance * (1 + annual_yield) - (target_monthly * 12)
-            
-            fig_sim = go.Figure(go.Scatter(x=years, y=balances, fill='tozeroy', name='연금 잔고', line=dict(color='#87CEEB')))
-            fig_acc_line = go.Figure(go.Scatter(x=years, y=[p_eval]*31, name='현재 원금', line=dict(dash='dash', color='gray')))
-            fig_sim.add_trace(fig_acc_line.data[0])
-            fig_sim.update_layout(title="인출 시나리오별 미래 자산 추정 (연 5% 수익 가정)", height=300, margin=dict(t=30, b=20))
-            st.plotly_chart(fig_sim, use_container_width=True)
-
-        st.divider()
-        st.subheader("🏢 연금 자산 세부 현황")
-        st.dataframe(pension_df[GLOBAL_DISPLAY_COLS], use_container_width=True, hide_index=True)
-
 # --- [v40.21 HUD 렌더링: 거래량 레이아웃 최적화] ---
 m_status = get_market_status()
 hud_cols = st.columns(4)
@@ -518,9 +335,7 @@ for i, col in enumerate(hud_cols):
         
 st.write("") # 간격 조절
 
-st.title("🌐 AI 금융 통합 관제탑 v41.00")
-
-tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자", "🏢 연금 관제실"])
+tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자"])
 
 with tabs[0]:
     # 1. 최상단 요약 Metric (가족 전체 합계)
@@ -536,7 +351,7 @@ with tabs[0]:
     m4.metric("통합 누적 수익률", f"{(t_eval/t_buy-1)*100:+.2f}%", delta=f"{t_change_pct:+.2f}%p")
     
     st.divider()
-    
+
     # 2. 계좌별 요약 테이블 (음양 색채 및 정수 처리 적용)
     sum_acc = full_df.groupby('계좌명').agg({
         '매입금액':'sum', 
@@ -655,11 +470,12 @@ with tabs[0]:
             )
             st.plotly_chart(fig_cal, use_container_width=True)
     
-def render_investment_tab(acc_name, tab_obj):
-    """일반 투자 계좌용 탭 (v40.94 스타일)"""
+def render_account_tab(acc_name, tab_obj, yield_col_name):
     with tab_obj:
-        sub_df = invest_df[invest_df['계좌명'] == acc_name]
-        if sub_df.empty: st.info(f"{acc_name} 데이터가 없습니다."); return
+        sub_df = full_df[full_df['계좌명'] == acc_name].copy()
+        if sub_df.empty:
+            st.warning(f"{acc_name} 데이터가 발견되지 않았습니다.")
+            return
         
         # --- [1. 상단 계좌 요약 Metric] ---
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
@@ -818,13 +634,10 @@ def render_investment_tab(acc_name, tab_obj):
                         </div>
                     """)
         else: st.caption("새로운 뉴스가 없습니다.")
-        
                 
-# 탭별 함수 호출
-render_investment_tab("서은투자", tabs[1])
-render_investment_tab("서희투자", tabs[2])
-render_investment_tab("큰스님투자", tabs[3])
-render_pension_control_room(tabs[4]) # 독립된 연금 관제실 호출
+render_account_tab("서은투자", tabs[1], "서은수익률")
+render_account_tab("서희투자", tabs[2], "서희수익률")
+render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
 with st.sidebar:
     st.header("⚙️ 관리 메뉴")
