@@ -517,78 +517,57 @@ render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
 render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
 
-# 🎯 [수정 2] "🏢 연금자산" 전용 탭 구성
+# 3. [신규] 연금자산 전용 탭 구성
 with tabs[4]:
     st.subheader("🏢 연금 및 절세 자산 통합 관리")
-    # actual_df(보유 자산)에서 IRP, ISA 등 연금 관련 계좌만 필터링
     pension_list = ["IRP", "ISA", "연금저축", "회사DC"]
+    # actual_df에서 연금 관련 계좌만 필터링
     p_df = actual_df[actual_df['계좌명'].isin(pension_list)]
     
     if not p_df.empty:
         p_eval = p_df['평가금액'].sum()
-        p_buy = p_df['매입금액'].sum()
-        # 안전자산 비중 계산
         safe_assets = p_df[p_df['자산구분'].str.contains('안전', na=False)]['평가금액'].sum()
         safe_ratio = (safe_assets / p_eval * 100) if p_eval > 0 else 0
         
-        pk1, pk2, pk3 = st.columns(3)
+        pk1, pk2 = st.columns(2)
         pk1.metric("연금 총 평가액", f"{p_eval:,.0f}원")
-        pk2.metric("안전자산 비중 (Target 30%)", f"{safe_ratio:.1f}%", delta=f"{safe_ratio-30:+.1f}%", delta_color="normal")
-        pk3.metric("연금 누적 수익률", f"{(p_eval/p_buy-1)*100:+.2f}%" if p_buy > 0 else "0%")
+        pk2.metric("안전자산 비중 (Target 30%)", f"{safe_ratio:.1f}%", delta=f"{safe_ratio-30:+.1f}%")
         
-        st.dataframe(p_df[GLOBAL_DISPLAY_COLS].style.format({'현재가': '{:,.0f}원'}), hide_index=True, use_container_width=True)
-    else:
-        st.info("연금 계좌로 등록된 보유 자산이 없습니다. 시트의 '계좌명'과 '상태'를 확인해 주세요.")
+        st.dataframe(p_df[GLOBAL_DISPLAY_COLS], hide_index=True, use_container_width=True)
     
-# --- [수정 위치 3: render_account_tab 함수 시작 부분] ---
 def render_account_tab(acc_name, tab_obj, yield_col_name):
     with tab_obj:
-        # 🎯 1. 데이터 필터링 (보유 종목만)
         sub_df = actual_df[actual_df['계좌명'] == acc_name].copy()
-        
         if sub_df.empty:
-            st.warning(f"{acc_name}에 보유 중인 종목 데이터가 없습니다.")
+            st.warning(f"{acc_name} 데이터가 없습니다.")
             return
 
-        # --- [상단 계좌 요약 Metric] ---
+        # --- [데이터 연산] ---
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_diff = sub_df['전일대비손익'].sum()
         a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
         
+        a_total_div = sub_df['예상배당금'].sum()
+        a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
+        a_grade = get_cashflow_grade(a_monthly_tax) # 등급 계산
+
+        # --- [1단: 자산 성과 Metric] ---
+        st.markdown("##### 💰 자산 성과 요약")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("계좌 평가액", f"{a_eval:,.0f}원", delta=f"{a_diff:+,.0f}원 ({a_pct:+.2f}%)")
         c2.metric("계좌 매입액", f"{a_buy:,.0f}원")
         c3.metric("계좌 손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
 
-        # --- [보유 종목 테이블] ---
-        plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
-        st.dataframe(
-            plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
-                'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
-                for i, val in enumerate(x)
-            ], axis=1).format({
-                '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
-                '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(원)': '{:+,.0f}원', 
-                '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-            }), hide_index=True, use_container_width=True
-        )
-
-        st.divider()
-
-        # --- [3. 현금흐름 등급 섹션] ---
-        a_total_div = sub_df['예상배당금'].sum()
-        a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
-        a_grade = get_cashflow_grade(a_monthly_tax)
-        
+        # --- [2단: 현금흐름(배당) Metric] ---
+        st.markdown("##### 🌊 실시간 현금흐름 관제")
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("연간 예상 배당금", f"{a_total_div:,.0f}원")
-        d2.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원")
-        d3.metric("계좌 배당수익률", f"{(a_total_div/a_eval*100):.2f}%")
+        d2.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원", help="배당소득세 15.4% 제외 실수령액")
+        d3.metric("계좌 배당수익률", f"{(a_total_div/a_eval*100):.2f}%" if a_eval > 0 else "0%")
         d4.metric("계좌 현금흐름 등급", a_grade)
 
         st.divider()
-
         # --- [4. 계좌별 병렬 차트 구역 (배당/비중)] ---
         g_left, g_right = st.columns(2)
         with g_left:
@@ -688,24 +667,33 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                 fig_acc.update_layout(title=f"📈 {sel} 및 {acc_name} 성과 추이", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", y=-0.2, x=0.5, xanchor="center"))
                 st.plotly_chart(fig_acc, use_container_width=True)
                 
-        # (D) 실시간 뉴스 섹션
+        # 🎯 [추가] 실시간 뉴스 및 공시 일괄 업데이트 섹션
         st.divider()
-        st.html(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스</div>")
+        st.html(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 15px;'>📰 {sel} 실시간 주요 뉴스 및 공시</div>")
+        
+        # 1. 뉴스 데이터 가져오기 (sel 변수에 따라 실시간 호출)
         news_items = get_stock_news(sel)
+        
         if news_items:
             n_col1, n_col2 = st.columns([1, 1])
             for idx, item in enumerate(news_items[:6]): # 상위 6개만 표시
                 target_col = n_col1 if idx % 2 == 0 else n_col2
                 with target_col:
                     is_hot = item.get('is_recent', False)
+                    # 2. 뉴스 레이아웃 렌더링
                     st.html(f"""
-                        <div style="margin-bottom: 10px; padding: 10px; border-radius: 8px; border-left: 4px solid {"#FFD700" if is_hot else "#87CEEB"}; background: rgba(255,255,255,0.02);">
-                            <a href="{item['link']}" target="_blank" style="text-decoration: none; color: #87CEEB; font-size: 0.95rem;">
-                                {"<span style='color:#FFD700;'>[NEW]</span> " if is_hot else ""}{item['title']}
+                        <div style="margin-bottom: 12px; padding: 12px; border-radius: 8px; border-left: 4px solid {"#FFD700" if is_hot else "#87CEEB"}; background: rgba(255, 215, 0, 0.04) if is_hot else "rgba(255,255,255,0.02)";">
+                            {"<span style='color:#FFD700; font-weight:bold;'>[NEW]</span> " if is_hot else ""}
+                            <a href="{item['link']}" target="_blank" style="text-decoration: none; color: #87CEEB; font-weight: 500; font-size: 0.95rem;">
+                                {item['title']}
                             </a>
+                            <div style="margin-top: 8px; font-size: 0.8rem; color: #888;">
+                                🏢 {item['info']} | 📅 {item['date']}
+                            </div>
                         </div>
                     """)
-        else: st.caption("새로운 뉴스가 없습니다.")
+        else:
+            st.caption(f"{sel}와 관련된 최신 뉴스가 없습니다.")
                 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
