@@ -543,19 +543,14 @@ with tabs[4]:
 # --- [수정 위치 3: render_account_tab 함수 시작 부분] ---
 def render_account_tab(acc_name, tab_obj, yield_col_name):
     with tab_obj:
-        # 🎯 [수정] actual_df에서 해당 계좌의 '보유' 종목만 추출
+        # 🎯 1. 데이터 필터링 (보유 종목만)
         sub_df = actual_df[actual_df['계좌명'] == acc_name].copy()
         
-        # 🎯 [추가] 해당 계좌의 '예정' 종목도 따로 추출 (나중에 활용 가능)
-        acc_watch = watch_df[watch_df['계좌명'] == acc_name].copy()
-
-        if sub_df.empty and acc_watch.empty:
-            st.warning(f"{acc_name} 데이터가 없습니다.")
+        if sub_df.empty:
+            st.warning(f"{acc_name}에 보유 중인 종목 데이터가 없습니다.")
             return
 
-        # (이후 기존의 메트릭 계산 및 테이블 출력 로직은 그대로 유지됩니다.)
-        
-        # --- [1. 상단 계좌 요약 Metric] ---
+        # --- [상단 계좌 요약 Metric] ---
         a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
         a_diff = sub_df['전일대비손익'].sum()
         a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
@@ -566,7 +561,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
         c3.metric("계좌 손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
 
-        # --- [2. 보유 종목 테이블] --- (음양 색채 유지)
+        # --- [보유 종목 테이블] ---
         plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
         st.dataframe(
             plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
@@ -576,8 +571,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                 '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '매입금액': '{:,.0f}원', '현재가': '{:,.0f}원', 
                 '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(원)': '{:+,.0f}원', 
                 '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
-            }), 
-            hide_index=True, use_container_width=True
+            }), hide_index=True, use_container_width=True
         )
 
         st.divider()
@@ -617,9 +611,8 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                 
         st.divider()
 
-        # --- [5. 통합 투자종목 정밀 분석 (버튼 하나로 일괄 통제)] ---
-        # 🎯 통합 버튼: 이 버튼 하나가 아래의 모든(지표, 전략, 가이드, 차트, 뉴스) 데이터를 결정합니다.
-        sel = st.selectbox(f"🔍 {acc_name} 종목 정밀 분석 (전략/성과/뉴스 통합)", sub_df['종목명'].unique(), key=f"sel_{acc_name}_unified")
+        # --- [🎯 계좌별 종목 정밀 분석 및 성과 추이 차트] ---
+        sel = st.selectbox(f"🔍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}_v42")
         s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
         
         curr_p, buy_p = float(s_row.get('현재가', 0)), float(s_row.get('매입단가', 0))
@@ -666,32 +659,33 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
             </div>
         """)
 
-        # (C) 성과 추이 차트 (별도의 버튼 없이 위에서 선택한 'sel' 사용)
+        # 성과 추이 차트 레이아웃
         with st.container(border=True):
             if not history_df.empty:
                 fig_acc = go.Figure()
-                history_df['Date'] = pd.to_datetime(history_df['Date'])
                 h_dt = history_df['Date'].dt.date.astype(str)
                 
-                goal_val = s_row.get('목표수익률', 10.0)
-                if goal_val == 0 or pd.isna(goal_val): goal_val = 10.0
-                indiv_target_yield = int(float(goal_val) * 1000) / 1000 
-                static_target_line = [indiv_target_yield] * len(h_dt)
-
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', line=dict(dash='dash', color='rgba(255,255,255,0.3)', width=1)))
-                fig_acc.add_trace(go.Scatter(x=h_dt, y=static_target_line, name='목표 수익률', line=dict(color='#FFD700', width=2, dash='dot')))
+                # 1. KOSPI (점선)
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', line=dict(dash='dash', color='rgba(255,255,255,0.3)')))
                 
+                # 2. 목표 수익률 라인
+                goal_val = s_row.get('목표수익률', 10.0)
+                indiv_target = int(float(goal_val) * 1000) / 1000 
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=[indiv_target]*len(h_dt), name='목표 수익률', line=dict(color='#FFD700', dash='dot')))
+                
+                # 3. 해당 계좌 수익률 (실선)
                 acc_col = find_matching_col(history_df, acc_name)
                 if acc_col:
                     current_y = history_df[acc_col].iloc[-1]
-                    line_color = '#00FF00' if current_y >= indiv_target_yield else '#FF4B4B'
-                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name='계좌 수익률', line=dict(width=4, color=line_color)))
+                    l_color = '#00FF00' if current_y >= indiv_target else '#FF4B4B'
+                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], mode='lines+markers', name=f'{acc_name} 수익률', line=dict(width=4, color=l_color)))
                 
+                # 4. 선택 종목 수익률 (대시도트)
                 s_col = find_matching_col(history_df, acc_name, sel)
                 if s_col:
-                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], mode='lines', name=sel[:9], line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')))
+                    fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], name=f'{sel[:9]} 수익률', line=dict(width=2, dash='dashdot', color='rgba(135,206,235,0.6)')))
 
-                fig_acc.update_layout(title=dict(text=f"📈 {sel} 성과 분석 추이", x=0.02), height=400, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(255,255,255,0.02)', font_color="white", legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5), margin=dict(t=80, b=80), xaxis=dict(type='category', tickangle=-45))
+                fig_acc.update_layout(title=f"📈 {sel} 및 {acc_name} 성과 추이", height=400, paper_bgcolor='rgba(0,0,0,0)', font_color="white", legend=dict(orientation="h", y=-0.2, x=0.5, xanchor="center"))
                 st.plotly_chart(fig_acc, use_container_width=True)
                 
         # (D) 실시간 뉴스 섹션
