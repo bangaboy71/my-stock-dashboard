@@ -216,40 +216,66 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [3. 데이터 로드 및 정제] ---
-def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
+# --- [3. 데이터 로드 및 실시간 가격 업데이트 엔진] ---
+
+def get_now_kst(): 
+    return datetime.now(timezone(timedelta(hours=9)))
+
+# 🎯 [추가] 실시간 가격을 가져오는 핵심 함수
+def get_current_prices(df):
+    """모든 종목의 실시간 현재가를 가져와 컬럼을 추가합니다."""
+    if df.empty:
+        return df
+    
+    # 1. 고유 종목 코드 리스트 추출
+    tickers = df['종목코드'].unique()
+    price_map = {}
+
+    # 2. yfinance로 가격 일괄 추출 (야후 파이낸스 엔진)
+    for ticker in tickers:
+        try:
+            # 종목코드가 '005930.KS'와 같은 형식이어야 합니다.
+            stock = yf.Ticker(ticker)
+            data = stock.history(period="1d")
+            if not data.empty:
+                # 가장 최근 종가를 가져옴
+                price_map[ticker] = data['Close'].iloc[-1]
+            else:
+                price_map[ticker] = 0
+        except:
+            price_map[ticker] = 0
+
+    # 3. 원본 데이터에 '현재가' 컬럼 생성 및 매핑
+    df['현재가'] = df['종목코드'].map(price_map)
+    df['현재가'] = pd.to_numeric(df['현재가'], errors='coerce').fillna(0)
+    return df
+
+# --- 실제 데이터 로드 시작 ---
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
-    # 1. 모든 관련 시트를 각각 읽어옵니다.
+    # 1. 시트 읽기
     df_stock = conn.read(worksheet="종목 현황", ttl="1m")
     df_pension = conn.read(worksheet="연금자산", ttl="1m")
     history_df = conn.read(worksheet="trend", ttl=0)
 
-    # 2. 종목 현황과 연금자산을 하나로 통합합니다.
+    # 2. 두 시트 통합
     raw_df = pd.concat([df_stock, df_pension], ignore_index=True)
-
-    # 🎯 [매우 중요] 데이터를 나누기 전에 실시간 가격을 먼저 입힙니다.
-    # 이렇게 해야 watch_df(예정 종목)에서도 '현재가'를 찾아 에러가 나지 않습니다.
-    # 사용자님의 코드 상단에 정의된 가격 업데이트 함수(예: get_current_prices)를 호출하세요.
+    
+    # 🎯 [핵심] 여기서 위에서 정의한 함수를 호출하여 '현재가'를 만듭니다.
     full_df_with_price = get_current_prices(raw_df) 
 
-    # 3. 상태('보유' vs '예정')에 따라 데이터를 분리합니다.
-    # actual_df: 현재 보유 중인 진짜 자산 (수익률 계산의 기준)
+    # 3. 상태('보유' vs '예정')에 따른 데이터 분리
     actual_df = full_df_with_price[full_df_with_price['상태'] == '보유'].copy()
-    
-    # watch_df: 매입 예정인 관심 종목 (레이더 노출용)
     watch_df = full_df_with_price[full_df_with_price['상태'] == '예정'].copy()
 
-    # 4. 기존 코드(메트릭, 테이블 등)와의 호환성을 위해 full_df를 보유 종목으로 지정합니다.
+    # 기존 코드 호환성 유지 (보유 종목을 메인으로 사용)
     full_df = actual_df
 
 except Exception as e:
     st.error(f"⚠️ 데이터 로드 중 오류 발생: {e}")
-    st.info("시트의 컬럼명(상태, 종목코드 등)이 정확한지 확인해 주세요.")
     st.stop()
-
 # --- [v40.94: 데이터 정제 구역 보강] ---
 if not full_df.empty:
     full_df.columns = [c.strip() for c in full_df.columns]
