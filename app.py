@@ -216,45 +216,38 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [3. 데이터 로드 및 정제 (API 에러 핸들링 포함)] ---
+# --- [3. 데이터 로드 및 정제] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 try:
-    full_df = conn.read(worksheet="종목 현황", ttl="1m")
+    # 1. 모든 관련 시트를 각각 읽어옵니다.
+    df_stock = conn.read(worksheet="종목 현황", ttl="1m")
+    df_pension = conn.read(worksheet="연금자산", ttl="1m")
     history_df = conn.read(worksheet="trend", ttl=0)
+
+    # 2. 종목 현황과 연금자산을 하나로 통합합니다.
+    raw_df = pd.concat([df_stock, df_pension], ignore_index=True)
+
+    # 🎯 [매우 중요] 데이터를 나누기 전에 실시간 가격을 먼저 입힙니다.
+    # 이렇게 해야 watch_df(예정 종목)에서도 '현재가'를 찾아 에러가 나지 않습니다.
+    # 사용자님의 코드 상단에 정의된 가격 업데이트 함수(예: get_current_prices)를 호출하세요.
+    full_df_with_price = get_current_prices(raw_df) 
+
+    # 3. 상태('보유' vs '예정')에 따라 데이터를 분리합니다.
+    # actual_df: 현재 보유 중인 진짜 자산 (수익률 계산의 기준)
+    actual_df = full_df_with_price[full_df_with_price['상태'] == '보유'].copy()
+    
+    # watch_df: 매입 예정인 관심 종목 (레이더 노출용)
+    watch_df = full_df_with_price[full_df_with_price['상태'] == '예정'].copy()
+
+    # 4. 기존 코드(메트릭, 테이블 등)와의 호환성을 위해 full_df를 보유 종목으로 지정합니다.
+    full_df = actual_df
+
 except Exception as e:
-    st.error(f"⚠️ 구글 시트 연결 오류: {e}")
-    st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
-    st.stop()
-
-# --- [3. 데이터 로드 및 표준 날짜 최적화 연산] ---
-def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
-now_kst = get_now_kst()
-conn = st.connection("gsheets", type=GSheetsConnection)
-# --- [수정 위치 1: 데이터 로드 및 분리] ---
-df_stock = conn.read(worksheet="종목 현황", ttl="1m")
-df_pension = conn.read(worksheet="연금자산", ttl="1m")
-
-# 두 시트 통합
-raw_df = pd.concat([df_stock, df_pension], ignore_index=True)
-
-# 🎯 핵심: 상태에 따른 데이터 분리
-# actual_df: 현재 보유 중인 진짜 자산 (수익률 계산용)
-actual_df = raw_df[raw_df['상태'] == '보유'].copy()
-
-# watch_df: 매입 예정인 관심 종목 (레이더 노출용)
-watch_df = raw_df[raw_df['상태'] == '예정'].copy()
-
-# 기존 코드와의 호환성을 위해 full_df 변수명을 actual_df로 연결하거나 교체
-full_df = actual_df
-
-try:
-    full_df = conn.read(worksheet="종목 현황", ttl="1m")
-    history_df = conn.read(worksheet="trend", ttl=0)
-except Exception as e:
-    st.error(f"⚠️ 구글 시트 연결 오류: {e}")
+    st.error(f"⚠️ 데이터 로드 중 오류 발생: {e}")
+    st.info("시트의 컬럼명(상태, 종목코드 등)이 정확한지 확인해 주세요.")
     st.stop()
 
 # --- [v40.94: 데이터 정제 구역 보강] ---
@@ -486,26 +479,37 @@ with tabs[0]:
             )
             st.plotly_chart(fig_cal, use_container_width=True)
             # --- [수정 위치 2: tabs[0] 맨 하단] ---
+# --- [496행 부근: 관심 레이더 연산 수정] ---
 if not watch_df.empty:
     st.divider()
     with st.container(border=True):
         st.subheader("📡 매입 예정 종목 관심 레이더")
         
-        # 관심 종목의 진입 매력도 계산
         watch_plot = watch_df.copy()
-        watch_plot['진입매력도'] = ((watch_plot['목표가'] / watch_plot['현재가'] - 1) * 100)
         
-        # 출력할 컬럼 선택
-        w_cols = ['계좌명', '종목명', '현재가', '목표가', '진입매력도', '목표수익률']
-        
-        st.dataframe(
-            watch_plot[w_cols].style.format({
-                '현재가': '{:,.0f}원', '목표가': '{:,.0f}원', 
-                '진입매력도': '{:+.2f}%', '목표수익률': '{:.1f}%'
-            }).applymap(lambda x: 'color: #00FF00' if x > 0 else '', subset=['진입매력도']),
-            hide_index=True, use_container_width=True
-        )
-        st.caption("💡 진입매력도가 높을수록(현재가가 목표가보다 낮을수록) 매수 적기에 가깝습니다.")
+        # 🎯 현재가 컬럼이 있는지 확인 후 계산 (KeyError 방지)
+        if '현재가' in watch_plot.columns:
+            # 숫자가 아닌 데이터나 0인 경우를 대비해 처리
+            watch_plot['현재가'] = pd.to_numeric(watch_plot['현재가'], errors='coerce')
+            watch_plot['목표가'] = pd.to_numeric(watch_plot['목표가'], errors='coerce')
+            
+            # 진입매력도 계산 (현재가가 0이 아닌 경우만)
+            watch_plot['진입매력도'] = watch_plot.apply(
+                lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 else 0, 
+                axis=1
+            )
+            
+            # (이후 출력 로직은 기존과 동일)
+            w_cols = ['계좌명', '종목명', '현재가', '목표가', '진입매력도', '목표수익률']
+            st.dataframe(
+                watch_plot[w_cols].style.format({
+                    '현재가': '{:,.0f}원', '목표가': '{:,.0f}원', 
+                    '진입매력도': '{:+.2f}%', '목표수익률': '{:.1f}%'
+                }).applymap(lambda x: 'color: #00FF00' if isinstance(x, (int, float)) and x > 0 else '', subset=['진입매력도']),
+                hide_index=True, use_container_width=True
+            )
+        else:
+            st.warning("예정 종목의 현재가 정보를 불러올 수 없습니다. 가격 크롤링 로직을 확인해 주세요.")
     
 # --- [수정 위치 3: render_account_tab 함수 시작 부분] ---
 def render_account_tab(acc_name, tab_obj, yield_col_name):
