@@ -505,37 +505,24 @@ with tabs[0]:
             )
             st.plotly_chart(fig_cal, use_container_width=True)
             # --- [수정 위치 2: tabs[0] 맨 하단] ---
-# --- [496행 부근: 관심 레이더 연산 수정] ---
-if not watch_df.empty:
-    st.divider()
-    with st.container(border=True):
-        st.subheader("📡 매입 예정 종목 관심 레이더")
-        
-        watch_plot = watch_df.copy()
-        
-        # 🎯 현재가 컬럼이 있는지 확인 후 계산 (KeyError 방지)
-        if '현재가' in watch_plot.columns:
-            # 숫자가 아닌 데이터나 0인 경우를 대비해 처리
-            watch_plot['현재가'] = pd.to_numeric(watch_plot['현재가'], errors='coerce')
-            watch_plot['목표가'] = pd.to_numeric(watch_plot['목표가'], errors='coerce')
+    # ✅ 반드시 tabs[0]의 '안쪽' 맨 아래에 배치하세요.
+    if not watch_df.empty:
+        st.divider()
+        with st.container(border=True):
+            st.subheader("📡 매입 예정 종목 관심 레이더")
             
-            # 진입매력도 계산 (현재가가 0이 아닌 경우만)
+            watch_plot = watch_df.copy()
+            # 진입매력도 계산
             watch_plot['진입매력도'] = watch_plot.apply(
-                lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 else 0, 
-                axis=1
+                lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 else 0, axis=1
             )
             
-            # (이후 출력 로직은 기존과 동일)
-            w_cols = ['계좌명', '종목명', '현재가', '목표가', '진입매력도', '목표수익률']
+            # 테이블 출력
             st.dataframe(
-                watch_plot[w_cols].style.format({
-                    '현재가': '{:,.0f}원', '목표가': '{:,.0f}원', 
-                    '진입매력도': '{:+.2f}%', '목표수익률': '{:.1f}%'
-                }).applymap(lambda x: 'color: #00FF00' if isinstance(x, (int, float)) and x > 0 else '', subset=['진입매력도']),
-                hide_index=True, use_container_width=True
+                watch_plot[['계좌명', '종목명', '현재가', '목표가', '진입매력도']].style.format({
+                    '현재가': '{:,.0f}원', '목표가': '{:,.0f}원', '진입매력도': '{:+.2f}%'
+                }), hide_index=True, use_container_width=True
             )
-        else:
-            st.warning("예정 종목의 현재가 정보를 불러올 수 없습니다. 가격 크롤링 로직을 확인해 주세요.")
     
 # --- [수정 위치 3: render_account_tab 함수 시작 부분] ---
 def render_account_tab(acc_name, tab_obj, yield_col_name):
