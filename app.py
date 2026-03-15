@@ -221,35 +221,25 @@ def find_matching_col(df, account, stock=None):
 def get_now_kst(): 
     return datetime.now(timezone(timedelta(hours=9)))
 
-# 🎯 [추가] 실시간 가격을 가져오는 핵심 함수
 def get_current_prices(df):
-    """모든 종목의 실시간 현재가를 가져와 컬럼을 추가합니다."""
-    if df.empty:
-        return df
-    
-    # 1. 고유 종목 코드 리스트 추출
+    if df.empty: return df
     tickers = df['종목코드'].unique()
     price_map = {}
-
-    # 2. yfinance로 가격 일괄 추출 (야후 파이낸스 엔진)
-    for ticker in tickers:
+    for t in tickers:
+        # 🎯 핵심: 숫자로 된 코드 뒤에 .KS를 자동으로 붙여 야후가 인식하게 함
+        f_t = str(t).strip()
+        if f_t.isdigit(): f_t += ".KS" 
+        elif not ("." in f_t): f_t += ".KS"
+        
         try:
-            # 종목코드가 '005930.KS'와 같은 형식이어야 합니다.
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(f_t)
             data = stock.history(period="1d")
-            if not data.empty:
-                # 가장 최근 종가를 가져옴
-                price_map[ticker] = data['Close'].iloc[-1]
-            else:
-                price_map[ticker] = 0
-        except:
-            price_map[ticker] = 0
-
-    # 3. 원본 데이터에 '현재가' 컬럼 생성 및 매핑
+            price_map[t] = data['Close'].iloc[-1] if not data.empty else 0
+        except: price_map[t] = 0
+    
     df['현재가'] = df['종목코드'].map(price_map)
     df['현재가'] = pd.to_numeric(df['현재가'], errors='coerce').fillna(0)
     return df
-
 # --- 실제 데이터 로드 시작 ---
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -505,24 +495,49 @@ with tabs[0]:
             )
             st.plotly_chart(fig_cal, use_container_width=True)
             # --- [수정 위치 2: tabs[0] 맨 하단] ---
-    # ✅ 반드시 tabs[0]의 '안쪽' 맨 아래에 배치하세요.
+    # 🎯 [수정] "🏢 연금자산" 탭을 추가합니다.
+tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자", "🏢 연금자산"])
+
+    # ✅ [수정] 관심 레이더를 tabs[0] '안쪽'으로 이동하여 중복 노출 방지
     if not watch_df.empty:
         st.divider()
         with st.container(border=True):
             st.subheader("📡 매입 예정 종목 관심 레이더")
-            
-            watch_plot = watch_df.copy()
-            # 진입매력도 계산
-            watch_plot['진입매력도'] = watch_plot.apply(
-                lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 else 0, axis=1
+            w_plot = watch_df.copy()
+            w_plot['진입매력도'] = w_plot.apply(
+                lambda x: ((x['목표가']/x['현재가']-1)*100) if x['현재가']>0 else 0, axis=1
             )
-            
-            # 테이블 출력
             st.dataframe(
-                watch_plot[['계좌명', '종목명', '현재가', '목표가', '진입매력도']].style.format({
+                w_plot[['계좌명', '종목명', '현재가', '목표가', '진입매력도']].style.format({
                     '현재가': '{:,.0f}원', '목표가': '{:,.0f}원', '진입매력도': '{:+.2f}%'
                 }), hide_index=True, use_container_width=True
             )
+
+# --- 계좌별 탭 렌더링 ---
+render_account_tab("서은투자", tabs[1], "서은수익률")
+render_account_tab("서희투자", tabs[2], "서희수익률")
+render_account_tab("큰스님투자", tabs[3], "큰스님수익률")
+
+# 🎯 [신규] 5번째 탭에 연금자산(IRP/ISA) 전용 화면을 구성합니다.
+with tabs[4]:
+    st.subheader("🏢 연금 및 절세 자산 관리")
+    # 연금 관련 계좌(IRP, ISA 등)만 필터링하여 출력
+    pension_accounts = ["IRP", "ISA", "연금저축", "회사DC"]
+    p_df = actual_df[actual_df['계좌명'].isin(pension_accounts)]
+    
+    if not p_df.empty:
+        # 연금자산 전용 메트릭
+        p_eval = p_df['평가금액'].sum()
+        p_buy = p_df['매입금액'].sum()
+        
+        p1, p2, p3 = st.columns(3)
+        p1.metric("연금 총 평가액", f"{p_eval:,.0f}원")
+        p2.metric("안전자산 비중", f"{(p_df[p_df['자산구분'].str.contains('안전', na=False)]['평가금액'].sum()/p_eval*100):.1f}%" if p_eval>0 else "0%")
+        p3.metric("누적 수익률", f"{(p_eval/p_buy-1)*100:+.2f}%" if p_buy>0 else "0%")
+        
+        st.dataframe(p_df[GLOBAL_DISPLAY_COLS].style.format({'현재가': '{:,.0f}원'}), hide_index=True, use_container_width=True)
+    else:
+        st.info("현재 보유 중인 연금 자산이 없습니다. 시트의 '상태'를 확인해 주세요.")
     
 # --- [수정 위치 3: render_account_tab 함수 시작 부분] ---
 def render_account_tab(acc_name, tab_obj, yield_col_name):
