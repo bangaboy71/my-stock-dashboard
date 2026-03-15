@@ -248,35 +248,35 @@ def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- [데이터 로드 엔진 구역] ---
+# --- [데이터 로드 및 통합 연산 구역] ---
 
-try:
-    # 1. 데이터 로드 (캐싱된 함수 호출)
-    # line 255: 여기서 에러가 났던 지점입니다.
-    df_stock_raw, df_pension_raw, history_df = load_data()
+    try:
+        # 1. 데이터 로드
+        df_stock_raw, df_pension_raw, history_df = load_data()
 
-    # 2. 데이터 통합 및 기본 전처리
-    raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
+        # 2. 시트 데이터 통합
+        raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
     
-    # 실시간 가격 수집 및 수치 변환
-    full_df_with_price = get_current_prices(raw_df) 
+        # 🎯 line 316: 이 줄의 왼쪽 공백이 바로 위 'raw_df' 줄과 수직으로 완벽히 일치해야 합니다.
+        full_df = get_current_prices(raw_df) 
     
-    # 필수 연산 (매입금액, 평가금액 등)
-    full_df_with_price['매입금액'] = pd.to_numeric(full_df_with_price['수량'], errors='coerce') * pd.to_numeric(full_df_with_price['매입단가'], errors='coerce')
-    full_df_with_price['평가금액'] = pd.to_numeric(full_df_with_price['수량'], errors='coerce') * pd.to_numeric(full_df_with_price['현재가'], errors='coerce')
-    full_df_with_price['손익'] = full_df_with_price['평가금액'] - full_df_with_price['매입금액']
+        # 3. 필수 수치 연산 (KeyError 및 NameError 방지용)
+        full_df['수량'] = pd.to_numeric(full_df['수량'], errors='coerce').fillna(0)
+        full_df['매입단가'] = pd.to_numeric(full_df['매입단가'], errors='coerce').fillna(0)
+        full_df['현재가'] = pd.to_numeric(full_df['현재가'], errors='coerce').fillna(0)
     
-    # 상태별 데이터 분리
-    actual_df = full_df_with_price[full_df_with_price['상태'] == '보유'].copy()
-    watch_df = full_df_with_price[full_df_with_price['상태'] == '예정'].copy()
-    
-    # 🌟 NameError 방지를 위한 메인 변수 정의
-    full_df = actual_df 
+        full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
+        full_df['평가금액'] = full_df['수량'] * full_df['현재가']
+        full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
+        full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'] * 100).fillna(0)
 
-# 🎯 여기서 'except' 블록을 닫아줘야 SyntaxError가 사라집니다!
-except Exception as e:
-    st.error(f"⚠️ 데이터 처리 중 오류 발생: {e}")
-    st.stop() # 에러 발생 시 이후 코드 실행 중단
+        # 상태별 데이터 분류
+        actual_df = full_df[full_df['상태'] == '보유'].copy()
+        watch_df = full_df[full_df['상태'] == '예정'].copy()
+
+    except Exception as e:
+        st.error(f"⚠️ 데이터 처리 중 오류 발생(Line 316 부근): {e}")
+        st.stop()
         
 # 2. ⚠️ KeyError 방지를 위한 필수 열 계산 및 생성
 def ensure_display_columns(df):
