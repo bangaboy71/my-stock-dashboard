@@ -360,6 +360,137 @@ for i, col in enumerate(hud_cols):
         
 st.write("") # 간격 조절
 
+def render_account_tab(acc_name, tab_obj, yield_col_name):
+    with tab_obj:
+        # 1. 데이터 필터링
+        sub_df = actual_df[actual_df['계좌명'] == acc_name].copy()
+        if sub_df.empty:
+            st.warning(f"{acc_name} 데이터가 없습니다.")
+            return
+
+        # --- [지표 연산] ---
+        a_buy, a_eval = sub_df['매입금액'].sum(), sub_df['평가금액'].sum()
+        a_diff = sub_df['전일대비손익'].sum()
+        a_pct = (a_diff / (a_eval - a_diff) * 100) if (a_eval - a_diff) != 0 else 0
+        a_total_div = sub_df['예상배당금'].sum()
+        a_monthly_tax = (a_total_div * (1 - 0.154)) / 12
+        a_grade = get_cashflow_grade(a_monthly_tax)
+
+        # --- [1단계: 상단 통합 Metric (자산 + 현금흐름)] ---
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("계좌 평가액", f"{a_eval:,.0f}원", delta=f"{a_diff:+,.0f}원")
+        m2.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
+        m3.metric("세후 월 수령액", f"{a_monthly_tax:,.0f}원", help="배당소득세 15.4% 제외")
+        m4.metric("현금흐름 등급", a_grade)
+
+        # --- [2단계: 보유 종목 실시간 테이블] ---
+        st.divider()
+        st.markdown("##### 📋 보유 종목 실시간 현황")
+        plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP)
+        st.dataframe(
+            plot_df[GLOBAL_DISPLAY_COLS].style.apply(lambda x: [
+                'color: #FF4B4B' if (i >= 6 and val > 0) else 'color: #87CEEB' if (i >= 6 and val < 0) else '' 
+                for i, val in enumerate(x)
+            ], axis=1).format({
+                '수량': '{:,.0f}', '매입단가': '{:,.0f}원', '현재가': '{:,.0f}원', 
+                '평가금액': '{:,.0f}원', '손익': '{:+,.0f}원', '전일대비(%)': '{:+.2f}%', '누적수익률': '{:+.2f}%'
+            }), hide_index=True, use_container_width=True
+        )
+
+        # --- [3단계: 계좌별 배당/비중 차트] ---
+        g_left, g_right = st.columns(2)
+        with g_left:
+            with st.container(border=True):
+                a_monthly_data = {m: 0 for m in range(1, 13)}
+                for _, row in sub_df.iterrows():
+                    sched = DIVIDEND_SCHEDULE.get(row['종목명'], [4])
+                    for m in sched: a_monthly_data[m] += (row['예상배당금']/len(sched))
+                fig_a_cal = go.Figure(go.Bar(x=[f"{m}월" for m in range(1, 13)], y=list(a_monthly_data.values()), marker_color='rgba(255, 215, 0, 0.6)'))
+                fig_a_cal.update_layout(title="📅 월별 배당 예측", height=280, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                st.plotly_chart(fig_a_cal, use_container_width=True)
+        with g_right:
+            with st.container(border=True):
+                fig_bar = go.Figure(go.Bar(y=sub_df['종목명'].apply(lambda x: x[:9]), x=sub_df['평가금액'], orientation='h', marker_color='#87CEEB'))
+                fig_bar.update_layout(title="📊 자산 비중", height=280, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.divider()
+
+        # --- [4단계: 종목 정밀 분석 (재무/전략/가이드/추이/뉴스)] ---
+        sel = st.selectbox(f"🔍 {acc_name} 종목 분석", sub_df['종목명'].unique(), key=f"sel_{acc_name}")
+        s_row = sub_df[sub_df['종목명'] == sel].iloc[0]
+        
+        # 데이터 연산
+        curr_p, buy_p = float(s_row.get('현재가', 0)), float(s_row.get('매입단가', 0))
+        target_p, high_52 = float(s_row.get('목표가', 0)), float(s_row.get('52주최고가', 0))
+        post_high = float(s_row.get('매입후최고가', curr_p))
+        total_ret, upside = float(s_row.get('누적수익률', 0)), float(s_row.get('목표대비상승여력', 0))
+        days = max(int(s_row.get('보유일수', 365)), 1)
+        ann_ret = ((1 + total_ret/100)**(365/days) - 1) * 100
+        sl_price, tp_price = buy_p * 0.85, post_high * 0.80
+
+        # (A) 재무지표 및 전략 모니터
+        col_res, col_strat = st.columns([1, 1])
+        with col_res:
+            res = RESEARCH_DATA.get(sel.replace(" ", ""))
+            if res:
+                m_html = "".join([f"<tr><td>{m[0]}</td><td style='text-align:right;'>{m[1]} → <span style='color:#FFD700;'>{m[2]}</span></td></tr>" for m in res['metrics']])
+                st.html(f"<div class='report-box' style='height:210px;'>📋 <b>핵심 재무 지표</b><table style='width:100%'>{m_html}</table><div style='margin-top:10px; font-size:0.85rem;'><span style='color:#FFD700;'>💡 인사이트:</span> {res['implications'][0]}</div></div>")
+            else: st.info("💡 종목 분석 데이터가 없습니다.")
+        with col_strat:
+            st.html(f"""
+                <div style='background: rgba(135,206,235,0.05); padding: 15px; border-radius: 8px; border: 1px solid rgba(135,206,235,0.1); height: 210px; text-align: center;'>
+                    <div style='color: #87CEEB; font-size: 0.85rem; font-weight: bold; margin-bottom: 15px;'>⚡ 실시간 전략 모니터</div>
+                    <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;'>
+                        <div><div style='font-size: 0.75rem; opacity: 0.6;'>연 수익률</div><div style='font-size: 1.2rem; font-weight: bold; color: #FF4B4B;'>{ann_ret:+.1f}%</div></div>
+                        <div style='border-left: 1px solid rgba(255,255,255,0.1); border-right: 1px solid rgba(255,255,255,0.1);'><div style='font-size: 0.75rem; color: #FFD700;'>🎯 목표가</div><div style='font-size: 1.2rem; font-weight: bold; color: #FFD700;'>{target_p:,.0f}</div></div>
+                        <div><div style='font-size: 0.75rem; opacity: 0.6;'>상승여력</div><div style='font-size: 1.2rem; font-weight: bold; color: #00FF00;'>{upside:+.1f}%</div></div>
+                    </div>
+                    <div style='margin-top: 15px; font-size: 0.9rem; color: #bbb;'>현재가: <b>{curr_p:,.0f}원</b> / 52주 최고: {high_52:,.0f}원</div>
+                </div>
+            """)
+
+        # (B) 리스크 가이드 및 성과 추이 차트
+        st.html(f"""
+            <div style='background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px; border: 1px solid {"#FF4B4B" if curr_p <= sl_price else "rgba(255,255,255,0.1)"}; margin-top: 15px;'>
+                <div style='display: flex; justify-content: space-between;'>
+                    <span>🛡️ <b>손절 가이드 (-15%):</b> {sl_price:,.0f}원 <small>(매입 {buy_p:,.0f} 대비)</small></span>
+                    <span style='color: {"#FF4B4B" if curr_p <= sl_price else "#00FF00"}; font-weight: bold;'>{"⚠️ 즉시 대응" if curr_p <= sl_price else "✅ 안전"}</span>
+                </div>
+            </div>
+        """)
+
+        with st.container(border=True):
+            if not history_df.empty:
+                fig_acc = go.Figure()
+                h_dt = history_df['Date'].dt.date.astype(str)
+                fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df['KOSPI_Relative'], name='KOSPI', line=dict(dash='dash', color='rgba(255,255,255,0.2)')))
+                acc_col = find_matching_col(history_df, acc_name)
+                if acc_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[acc_col], name='계좌 수익률', line=dict(width=4, color='#00FF00')))
+                s_col = find_matching_col(history_df, acc_name, sel)
+                if s_col: fig_acc.add_trace(go.Scatter(x=h_dt, y=history_df[s_col], name=f'{sel[:9]}', line=dict(width=2, dash='dashdot', color='#87CEEB')))
+                fig_acc.update_layout(title=f"📈 {sel} 성과 분석 추이", height=350, paper_bgcolor='rgba(0,0,0,0)', font_color="white")
+                st.plotly_chart(fig_acc, use_container_width=True)
+
+        # (C) 📰 [복원] 실시간 뉴스 (스타일 업그레이드)
+        st.markdown(f"##### 📰 {sel} 실시간 뉴스 및 공시")
+        news_items = get_stock_news(sel)
+        if news_items:
+            n_col1, n_col2 = st.columns(2)
+            for idx, item in enumerate(news_items[:6]):
+                target_col = n_col1 if idx % 2 == 0 else n_col2
+                with target_col:
+                    is_hot = item.get('is_recent', False)
+                    st.html(f"""
+                        <div style="margin-bottom: 10px; padding: 12px; border-radius: 8px; border-left: 4px solid {"#FFD700" if is_hot else "#87CEEB"}; background: rgba(255,255,255,0.02);">
+                            <a href="{item['link']}" target="_blank" style="text-decoration: none; color: #87CEEB; font-size: 0.95rem; font-weight: 500;">
+                                {"<span style='color:#FFD700;'>[NEW]</span> " if is_hot else ""}{item['title']}
+                            </a>
+                            <div style="font-size: 0.75rem; color: #888; margin-top: 5px;">{item['info']} | {item['date']}</div>
+                        </div>
+                    """)
+        else: st.caption("최신 뉴스가 없습니다.")
+
 tabs = st.tabs(["📊 총괄 현황", "💰 서은투자", "📈 서희투자", "🙏 큰스님투자", "🏢 연금자산"])
 
 # --- [1. 총괄 현황 탭] ---
