@@ -243,11 +243,6 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [3. 데이터 로드 및 정제 (API 에러 핸들링 포함)] ---
-def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
-now_kst = get_now_kst()
-conn = st.connection("gsheets", type=GSheetsConnection)
-
 # --- [데이터 로드 및 통합 엔진 구역] ---
 
 try:
@@ -257,7 +252,7 @@ try:
     # 2. 데이터프레임 통합
     raw_df = pd.concat([df_stock_raw, df_pension_raw], ignore_index=True)
     
-    # 🎯 Line 319: 이 줄의 맨 앞으로 가서 공백을 모두 지우고 위 줄과 수직을 맞추세요.
+    # 🎯 이 줄의 시작 위치를 위 줄(raw_df)과 수직으로 정확히 맞췄습니다.
     full_df = get_current_prices(raw_df) 
     
     # 3. 필수 수치 연산 (KeyError/NameError 방지용)
