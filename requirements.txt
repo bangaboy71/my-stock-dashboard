@@ -1,7 +1,8 @@
 streamlit
+streamlit-gsheets-connection
 pandas
 requests
 beautifulsoup4
 plotly
-st-gsheets-connection
 yfinance
+openpyxl
