@@ -25,12 +25,7 @@ GLOBAL_RENAME_MAP = {
 
 GLOBAL_DISPLAY_COLS = ['종목명', '수량', '매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
 
-# 종목별 배당 주기 설정
-DIVIDEND_SCHEDULE = {
-    "삼성전자": [5, 8, 11, 4], "KT&G": [5, 8, 11, 4], "현대차2우B": [5, 8, 11, 4],
-    "현대글로비스": [4, 8], "테스": [4], "에스티팜": [4], "일진전기": [4],
-    "KODEX200타겟위클리커버드콜": list(range(1, 13))
-}
+
 
 st.markdown("""
     <style>
@@ -216,7 +211,7 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
-# --- [3. 데이터 로드 및 정제 (API 에러 핸들링 포함)] ---
+# --- [3. 데이터 로드 및 정제] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -229,71 +224,45 @@ except Exception as e:
     st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
     st.stop()
 
-# --- [3. 데이터 로드 및 표준 날짜 최적화 연산] ---
-def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
-now_kst = get_now_kst()
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-try:
-    full_df = conn.read(worksheet="종목 현황", ttl="1m")
-    history_df = conn.read(worksheet="trend", ttl=0)
-except Exception as e:
-    st.error(f"⚠️ 구글 시트 연결 오류: {e}")
-    st.stop()
-
-# --- [v40.94: 데이터 정제 구역 보강] ---
+# --- [v40.94: 데이터 정제] ---
 if not full_df.empty:
     full_df.columns = [c.strip() for c in full_df.columns]
-    
-    # 🎯 1. 숫자 변환 대상에 '목표수익률'을 추가합니다.
+
+    # 1. 숫자 변환 (목표수익률 포함)
     target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금', '목표수익률']
-    
     for c in target_num_cols:
         if c in full_df.columns:
-            # 숫자가 아닌 문자(%, 쉼표 등)를 제거하고 숫자로 변환
             full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', '').str.replace('%', ''), errors='coerce').fillna(0)
         elif c == '목표수익률':
-            # 시트에 컬럼이 아예 없을 경우를 대비해 기본값 10.0 할당
             full_df['목표수익률'] = 10.0
 
-    # 2. 실시간 가격 및 기초 수익 지표 연산
+    # 2. 실시간 가격 수집
     prices = full_df['종목명'].apply(get_stock_data).tolist()
     full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
-    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-    full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
-    full_df['예상배당금'] = full_df['수량'] * full_df['주당 배당금']
-    
-    # 3. 수익률 및 변동율 (v36.50 표 전용 지표)
-    full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    full_df['전일대비변동율'] = (full_df['전일대비손익'] / (full_df['평가금액'] - full_df['전일대비손익']).replace(0, float('nan')) * 100).fillna(0)
-    
-    # 4. 기대상승여력 (시트 목표가 기준)
-    full_df['목표대비상승여력'] = full_df.apply(
-        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, axis=1
-    )
 
-    # 5. 보유일수 계산
-    if '최초매입일' in full_df.columns:
-        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
-        full_df['보유일수'] = (datetime.now().replace(hour=0,minute=0,second=0,microsecond=0) - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int).clip(lower=1)
-    else: full_df['보유일수'] = 365
-
-    # 3. 실시간 가격 수집 (v36.64 핵심 로직)
-    prices = full_df['종목명'].apply(get_stock_data).tolist()
-    full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
-    
-    # 4. 수익 지표 및 리스크 관제용 연산
+    # 3. 수익 지표 연산
     full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
     full_df['평가금액'] = full_df['수량'] * full_df['현재가']
     full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
     full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
     full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
-    
-    # 수익률 계산 (분모가 0인 경우를 대비한 replace 처리)
+    full_df['예상배당금'] = full_df['수량'] * full_df['주당 배당금']
+
+    # 4. 수익률 및 변동율
     full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
     full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+
+    # 5. 기대상승여력
+    full_df['목표대비상승여력'] = full_df.apply(
+        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, axis=1
+    )
+
+    # 6. 보유일수 계산
+    if '최초매입일' in full_df.columns:
+        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
+        full_df['보유일수'] = (datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int).clip(lower=1)
+    else:
+        full_df['보유일수'] = 365
 
 if not history_df.empty:
     history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
@@ -724,12 +693,3 @@ with st.sidebar:
                     st.error(f"❌ 오류: {e}")
                     
 st.caption(f"v40.94 가디언 레질리언스 | {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
-
-
-
-
-
-
-
-
-
