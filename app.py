@@ -289,7 +289,13 @@ def get_csv_bytes(df):
     return build_export_df(df).to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
 def get_excel_bytes(df, history_df):
-    import io
+    import io, subprocess, sys
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl", "-q"])
+        import openpyxl  # noqa: F401
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
         build_export_df(df).to_excel(writer, sheet_name='전체 종목 현황', index=False)
