@@ -269,6 +269,38 @@ def check_and_toast_targets(df):
 
     st.session_state['toasted_targets'] = alerted
 
+# --- [내보내기 엔진] ---
+def build_export_df(df):
+    """표시용 컬럼만 추려 포맷 정리한 내보내기용 DataFrame 반환"""
+    cols = ['계좌명', '종목명', '수량', '매입단가', '매입금액',
+            '현재가', '평가금액', '손익', '누적수익률',
+            '전일대비손익', '전일대비변동율', '예상배당금', '목표가', '목표대비상승여력']
+    export_cols = [c for c in cols if c in df.columns]
+    out = df[export_cols].copy()
+    for c in ['매입단가', '매입금액', '현재가', '평가금액', '손익', '전일대비손익', '예상배당금', '목표가']:
+        if c in out.columns:
+            out[c] = out[c].apply(lambda x: round(x, 0) if pd.notna(x) else 0)
+    for c in ['누적수익률', '전일대비변동율', '목표대비상승여력']:
+        if c in out.columns:
+            out[c] = out[c].apply(lambda x: round(x, 2) if pd.notna(x) else 0)
+    return out
+
+def get_csv_bytes(df):
+    return build_export_df(df).to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+
+def get_excel_bytes(df, history_df):
+    import io
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        build_export_df(df).to_excel(writer, sheet_name='전체 종목 현황', index=False)
+        for acc in df['계좌명'].unique():
+            acc_df = df[df['계좌명'] == acc]
+            sheet_name = acc.replace('투자', '')[:10]
+            build_export_df(acc_df).to_excel(writer, sheet_name=sheet_name, index=False)
+        if not history_df.empty:
+            history_df.copy().to_excel(writer, sheet_name='수익률 추이', index=False)
+    return buf.getvalue()
+
 # --- [3. 데이터 로드 및 정제] ---
 def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
@@ -677,8 +709,29 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
     st.divider()
+
+    # --- [내보내기 섹션] ---
+    st.subheader("📤 데이터 내보내기")
+    export_ts = now_kst.strftime('%Y%m%d_%H%M')
+    st.download_button(
+        label="📄 CSV 다운로드",
+        data=get_csv_bytes(full_df),
+        file_name=f"가족자산_{export_ts}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+    st.download_button(
+        label="📊 엑셀 다운로드 (전체 시트)",
+        data=get_excel_bytes(full_df, history_df),
+        file_name=f"가족자산_{export_ts}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+    st.caption("엑셀: 전체·계좌별·수익률 추이 시트 포함")
+    st.divider()
+
     sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
-   
+
 # --- [v38.9 패치: st.form 기반 버튼 고정 시스템] ---
     st.sidebar.header("⚙️ 기록 관리자 모드")
     sel_date = st.sidebar.date_input("📅 저장/복구 날짜 선택", value=datetime.now())
