@@ -504,24 +504,24 @@ with tabs[0]:
         column_config={
             "계좌명": st.column_config.TextColumn("계좌명", width="small"),
             "매입금액": st.column_config.NumberColumn(
-                "매입금액", format=",.0f", width="medium"
+                "매입금액", format="%,.0f", width="medium"
             ),
             "평가금액": st.column_config.NumberColumn(
-                "평가금액", format=",.0f", width="medium"
+                "평가금액", format="%,.0f", width="medium"
             ),
             "손익": st.column_config.NumberColumn(
-                "손익", format="+,.0f", width="medium"
+                "손익", format="%+,.0f", width="medium"
             ),
             "전일대비(원)": st.column_config.NumberColumn(
-                "전일대비(원)", format="+,.0f", width="medium"
+                "전일대비(원)", format="%+,.0f", width="medium"
             ),
             "전일대비(%)": st.column_config.NumberColumn(
-                "전일대비(%)", format="+.2f", width="small"
+                "전일대비(%)", format="%+.2f%%", width="small"
             ),
             "누적수익률": st.column_config.ProgressColumn(
                 "누적수익률",
                 help="매입 대비 누적 손익률",
-                format="+.2f",
+                format="%.2f%%",
                 min_value=-ret_abs,
                 max_value=ret_abs,
                 width="medium",
@@ -714,29 +714,29 @@ with tabs[0]:
             column_config={
                 "계좌명": st.column_config.TextColumn("계좌명", width="small"),
                 "누적수익률": st.column_config.NumberColumn(
-                    "누적수익률", format="+.2f", width="small"
+                    "누적수익률", format="%+.2f%%", width="small"
                 ),
                 "배당수익률": st.column_config.ProgressColumn(
                     "배당수익률",
                     help="연간 예상 배당 / 평가금액",
-                    format=".2f",
+                    format="%.2f%%",
                     min_value=0,
                     max_value=float(radar_df["배당수익률"].max()) * 1.2 or 10,
                     width="medium",
                 ),
                 "전일대비(%)": st.column_config.NumberColumn(
-                    "전일대비(%)", format="+.2f", width="small"
+                    "전일대비(%)", format="%+.2f%%", width="small"
                 ),
                 "목표달성률": st.column_config.ProgressColumn(
                     "목표달성률",
                     help="현재가 / 목표가 평균 (%)",
-                    format=".1f",
+                    format="%.1f%%",
                     min_value=0,
                     max_value=100,
                     width="medium",
                 ),
                 "자산집중도": st.column_config.NumberColumn(
-                    "분산도", format=".1f", width="small"
+                    "분산도", format="%.1f", width="small"
                 ),
             }
         )
@@ -779,33 +779,33 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
             column_config={
                 "종목명": st.column_config.TextColumn("종목명", width="medium"),
                 "수량": st.column_config.NumberColumn(
-                    "수량", format=",.0f", width="small"
+                    "수량", format="%,.0f", width="small"
                 ),
                 "매입단가": st.column_config.NumberColumn(
-                    "매입단가", format=",.0f", width="small"
+                    "매입단가", format="%,.0f", width="small"
                 ),
                 "매입금액": st.column_config.NumberColumn(
-                    "매입금액", format=",.0f", width="medium"
+                    "매입금액", format="%,.0f", width="medium"
                 ),
                 "현재가": st.column_config.NumberColumn(
-                    "현재가", format=",.0f", width="small"
+                    "현재가", format="%,.0f", width="small"
                 ),
                 "평가금액": st.column_config.NumberColumn(
-                    "평가금액", format=",.0f", width="medium"
+                    "평가금액", format="%,.0f", width="medium"
                 ),
                 "손익": st.column_config.NumberColumn(
-                    "손익", format="+,.0f", width="medium"
+                    "손익", format="%+,.0f", width="medium"
                 ),
                 "전일대비(원)": st.column_config.NumberColumn(
-                    "전일대비(원)", format="+,.0f", width="medium"
+                    "전일대비(원)", format="%+,.0f", width="medium"
                 ),
                 "전일대비(%)": st.column_config.NumberColumn(
-                    "전일대비(%)", format="+.2f", width="small"
+                    "전일대비(%)", format="%+.2f%%", width="small"
                 ),
                 "누적수익률": st.column_config.ProgressColumn(
                     "누적수익률",
                     help="매입가 대비 누적 손익률",
-                    format="+.2f",
+                    format="%.2f%%",
                     min_value=-s_ret_abs,
                     max_value=s_ret_abs,
                     width="medium",
@@ -813,7 +813,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                 "목표대비상승여력": st.column_config.ProgressColumn(
                     "목표여력",
                     help="현재가 대비 목표가까지 상승 여력",
-                    format="+.1f",
+                    format="%.1f%%",
                     min_value=0,
                     max_value=up_max,
                     width="medium",
