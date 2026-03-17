@@ -573,6 +573,13 @@ with tabs[0]:
             radar_norm[col] = (radar_df[col] - col_min) / (col_max - col_min) * 100 if col_max - col_min > 0 else 50
 
         ACCOUNT_COLORS = ["#87CEEB", "#FFD700", "#FF4B4B", "#7CFC00"]
+
+        def hex_to_rgba(hex_color, alpha=0.08):
+            """#RRGGBB → 'rgba(R,G,B,A)' 변환 — plotly fillcolor 전용"""
+            h = hex_color.lstrip('#')
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return f"rgba({r},{g},{b},{alpha})"
+
         fig_radar = go.Figure()
 
         for i, row in radar_norm.iterrows():
@@ -584,7 +591,7 @@ with tabs[0]:
 
             fig_radar.add_trace(go.Scatterpolar(
                 r=r_vals, theta=axes, fill="toself",
-                fillcolor=color + "14",
+                fillcolor=hex_to_rgba(color, alpha=0.08),
                 line=dict(color=color, width=2),
                 name=acc,
                 hovertemplate=(
