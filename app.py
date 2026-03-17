@@ -369,8 +369,7 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
 
     # ── STEP 3. 실시간 주가 수집 (진행률 실시간 업데이트) ────────
     n_stocks   = len(full_df['종목명'].unique()) if not full_df.empty else 0
-    prog_bar   = st.progress(0, text=f"📈 실시간 주가 수집 중... (0 / {n_stocks})")
-    prog_label = st.empty()
+    prog_bar = st.progress(0, text=f"📈 실시간 주가 수집 중... (0 / {n_stocks})")
 
     def on_progress(done, total, name):
         pct  = done / total
@@ -505,24 +504,24 @@ with tabs[0]:
         column_config={
             "계좌명": st.column_config.TextColumn("계좌명", width="small"),
             "매입금액": st.column_config.NumberColumn(
-                "매입금액", format="₩%,.0f", width="medium"
+                "매입금액", format=",.0f", width="medium"
             ),
             "평가금액": st.column_config.NumberColumn(
-                "평가금액", format="₩%,.0f", width="medium"
+                "평가금액", format=",.0f", width="medium"
             ),
             "손익": st.column_config.NumberColumn(
-                "손익", format="₩%+,.0f", width="medium"
+                "손익", format="+,.0f", width="medium"
             ),
             "전일대비(원)": st.column_config.NumberColumn(
-                "전일대비(원)", format="₩%+,.0f", width="medium"
+                "전일대비(원)", format="+,.0f", width="medium"
             ),
             "전일대비(%)": st.column_config.NumberColumn(
-                "전일대비(%)", format="%+.2f%%", width="small"
+                "전일대비(%)", format="+.2f", width="small"
             ),
             "누적수익률": st.column_config.ProgressColumn(
                 "누적수익률",
                 help="매입 대비 누적 손익률",
-                format="%+.2f%%",
+                format="+.2f",
                 min_value=-ret_abs,
                 max_value=ret_abs,
                 width="medium",
@@ -715,29 +714,29 @@ with tabs[0]:
             column_config={
                 "계좌명": st.column_config.TextColumn("계좌명", width="small"),
                 "누적수익률": st.column_config.NumberColumn(
-                    "누적수익률", format="%+.2f%%", width="small"
+                    "누적수익률", format="+.2f", width="small"
                 ),
                 "배당수익률": st.column_config.ProgressColumn(
                     "배당수익률",
                     help="연간 예상 배당 / 평가금액",
-                    format="%.2f%%",
+                    format=".2f",
                     min_value=0,
                     max_value=float(radar_df["배당수익률"].max()) * 1.2 or 10,
                     width="medium",
                 ),
                 "전일대비(%)": st.column_config.NumberColumn(
-                    "전일대비(%)", format="%+.2f%%", width="small"
+                    "전일대비(%)", format="+.2f", width="small"
                 ),
                 "목표달성률": st.column_config.ProgressColumn(
                     "목표달성률",
                     help="현재가 / 목표가 평균 (%)",
-                    format="%.1f%%",
+                    format=".1f",
                     min_value=0,
                     max_value=100,
                     width="medium",
                 ),
                 "자산집중도": st.column_config.NumberColumn(
-                    "분산도", format="%.1f", width="small"
+                    "분산도", format=".1f", width="small"
                 ),
             }
         )
@@ -780,33 +779,33 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
             column_config={
                 "종목명": st.column_config.TextColumn("종목명", width="medium"),
                 "수량": st.column_config.NumberColumn(
-                    "수량", format="%,.0f주", width="small"
+                    "수량", format=",.0f", width="small"
                 ),
                 "매입단가": st.column_config.NumberColumn(
-                    "매입단가", format="₩%,.0f", width="small"
+                    "매입단가", format=",.0f", width="small"
                 ),
                 "매입금액": st.column_config.NumberColumn(
-                    "매입금액", format="₩%,.0f", width="medium"
+                    "매입금액", format=",.0f", width="medium"
                 ),
                 "현재가": st.column_config.NumberColumn(
-                    "현재가", format="₩%,.0f", width="small"
+                    "현재가", format=",.0f", width="small"
                 ),
                 "평가금액": st.column_config.NumberColumn(
-                    "평가금액", format="₩%,.0f", width="medium"
+                    "평가금액", format=",.0f", width="medium"
                 ),
                 "손익": st.column_config.NumberColumn(
-                    "손익", format="₩%+,.0f", width="medium"
+                    "손익", format="+,.0f", width="medium"
                 ),
                 "전일대비(원)": st.column_config.NumberColumn(
-                    "전일대비(원)", format="₩%+,.0f", width="medium"
+                    "전일대비(원)", format="+,.0f", width="medium"
                 ),
                 "전일대비(%)": st.column_config.NumberColumn(
-                    "전일대비(%)", format="%+.2f%%", width="small"
+                    "전일대비(%)", format="+.2f", width="small"
                 ),
                 "누적수익률": st.column_config.ProgressColumn(
                     "누적수익률",
                     help="매입가 대비 누적 손익률",
-                    format="%+.2f%%",
+                    format="+.2f",
                     min_value=-s_ret_abs,
                     max_value=s_ret_abs,
                     width="medium",
@@ -814,7 +813,7 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                 "목표대비상승여력": st.column_config.ProgressColumn(
                     "목표여력",
                     help="현재가 대비 목표가까지 상승 여력",
-                    format="%+.1f%%",
+                    format="+.1f",
                     min_value=0,
                     max_value=up_max,
                     width="medium",
@@ -1036,14 +1035,12 @@ with st.sidebar:
     st.caption("엑셀: 전체·계좌별·수익률 추이 시트 포함")
     st.divider()
 
-    sel_date = st.date_input("결과 저장 날짜", value=datetime.now())
+    # --- [기록 관리자 모드] ---
+    st.subheader("⚙️ 기록 관리자 모드")
+    sel_date = st.date_input("📅 저장/복구 날짜 선택", value=datetime.now())
 
-# --- [v38.9 패치: st.form 기반 버튼 고정 시스템] ---
-    st.sidebar.header("⚙️ 기록 관리자 모드")
-    sel_date = st.sidebar.date_input("📅 저장/복구 날짜 선택", value=datetime.now())
-    
     # 1. 데이터 불러오기 버튼
-    if st.sidebar.button(f"🔍 {sel_date} 데이터 불러오기"):
+    if st.button(f"🔍 {sel_date} 데이터 불러오기"):
         save_date_str = sel_date.strftime('%Y-%m-%d')
         st.session_state['edit_kospi'] = 5251.87 if save_date_str == "2026-03-09" else float(m_status["KOSPI"]["val"].replace(",",""))
         
@@ -1060,7 +1057,7 @@ with st.sidebar:
         
         st.session_state['edit_prices'] = tmp_p
         st.session_state['editor_active'] = True
-        st.sidebar.success("✅ 데이터를 가져왔습니다. 아래 양식을 확인하세요.")
+        st.success("✅ 데이터를 가져왔습니다. 아래 양식을 확인하세요.")
 
     # 2. 고정형 입력 폼 (st.form 사용)
     if st.session_state.get('editor_active', False):
