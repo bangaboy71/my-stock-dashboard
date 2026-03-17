@@ -277,6 +277,46 @@ def save_memo(stock_name, acc_name, text):
         st.error(f"❌ 메모 저장 오류: {e}")
         return False
 
+# --- [배당 D-Day 엔진] ---
+def get_dividend_calendar(df):
+    """
+    보유 종목 기준으로 향후 배당 지급 예정일 목록 계산.
+    배당월 말일을 예상 지급일로 사용.
+    반환: [{'종목명','계좌명','배당월','지급예정일','D_DAY','예상배당금'}, ...]
+    """
+    import calendar
+    today = now_kst.date()
+    events = []
+
+    for _, row in df.iterrows():
+        name    = row.get('종목명', '')
+        acc     = row.get('계좌명', '')
+        div_amt = float(row.get('예상배당금', 0))
+        if div_amt <= 0:
+            continue
+        months = DIVIDEND_SCHEDULE.get(name, [])
+        for m in months:
+            year     = today.year
+            last_day = calendar.monthrange(year, m)[1]
+            pay_date = datetime(year, m, last_day).date()
+            # 이미 지났으면 내년
+            if pay_date < today:
+                last_day = calendar.monthrange(year + 1, m)[1]
+                pay_date = datetime(year + 1, m, last_day).date()
+            d_day = (pay_date - today).days
+            events.append({
+                '종목명':    name,
+                '계좌명':    acc,
+                '배당월':    m,
+                '지급예정일': pay_date,
+                'D_DAY':     d_day,
+                '예상배당금': div_amt / len(months),
+            })
+
+    events.sort(key=lambda x: (x['D_DAY'], -x['예상배당금']))
+    return events
+
+
 # --- [목표가 도달 토스트 알림] ---
 def check_and_toast_targets(df):
     """현재가가 목표가에 도달하거나 초과한 종목을 st.toast로 알림"""
@@ -1023,6 +1063,78 @@ with st.sidebar:
         st.session_state.pop('toasted_targets', None)
         st.cache_data.clear()
         st.rerun()
+    st.divider()
+
+    # --- [배당 D-Day 위젯] ---
+    st.subheader("💰 배당 수령 캘린더")
+
+    div_events = get_dividend_calendar(full_df)
+
+    if div_events:
+        # 오늘부터 90일 이내 이벤트만 표시 (최대 8개)
+        near = [e for e in div_events if e['D_DAY'] <= 90][:8]
+
+        # 가장 임박한 항목 — 강조 카드
+        first = div_events[0]
+        d     = first['D_DAY']
+        label = "🎉 오늘!" if d == 0 else (f"D-{d}" if d > 0 else f"D+{abs(d)}")
+        urgency_color = (
+            "#FF4B4B" if d <= 7
+            else "#FFD700" if d <= 30
+            else "#87CEEB"
+        )
+        after_tax = first['예상배당금'] * (1 - 0.154)
+        st.markdown(f"""
+            <div style='background:rgba(255,255,255,0.03); border:1px solid {urgency_color}55;
+                        border-left:4px solid {urgency_color}; border-radius:10px;
+                        padding:12px 14px; margin-bottom:10px;'>
+                <div style='display:flex; justify-content:space-between; align-items:center;'>
+                    <div style='font-size:0.8rem; color:rgba(255,255,255,0.5);'>다음 배당</div>
+                    <div style='font-size:1.1rem; font-weight:700; color:{urgency_color};'>{label}</div>
+                </div>
+                <div style='font-size:1.0rem; font-weight:600; margin-top:4px;'>{first['종목명']}</div>
+                <div style='font-size:0.8rem; color:rgba(255,255,255,0.5); margin-top:2px;'>
+                    {first['지급예정일'].strftime('%Y.%m.%d')} ({first['계좌명']})
+                </div>
+                <div style='font-size:0.9rem; color:#FFD700; margin-top:6px;'>
+                    세후 예상 ≈ {after_tax:,.0f}원
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # 이후 항목 리스트
+        if len(near) > 1:
+            for e in near[1:]:
+                d2 = e['D_DAY']
+                lbl2 = "오늘" if d2 == 0 else f"D-{d2}"
+                c2 = "#FF4B4B" if d2 <= 7 else "#FFD700" if d2 <= 30 else "#87CEEB"
+                at2 = e['예상배당금'] * (1 - 0.154)
+                st.markdown(f"""
+                    <div style='display:flex; justify-content:space-between; align-items:center;
+                                padding:7px 4px; border-bottom:1px solid rgba(255,255,255,0.05);
+                                font-size:0.82rem;'>
+                        <div>
+                            <span style='color:rgba(255,255,255,0.75);'>{e['종목명'][:9]}</span>
+                            <span style='color:rgba(255,255,255,0.35); margin-left:4px;'>{e['지급예정일'].strftime('%m.%d')}</span>
+                        </div>
+                        <div style='text-align:right;'>
+                            <span style='color:{c2}; font-weight:600;'>{lbl2}</span>
+                            <span style='color:#FFD700; margin-left:8px;'>{at2:,.0f}원</span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+        # 90일 총합
+        total_near = sum(e['예상배당금'] * (1 - 0.154) for e in near)
+        st.markdown(f"""
+            <div style='text-align:right; font-size:0.8rem; color:rgba(255,255,255,0.4);
+                        margin-top:8px;'>
+                90일 내 세후 합계 ≈ <b style='color:#FFD700;'>{total_near:,.0f}원</b>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.caption("배당 예정 종목이 없습니다.")
+
     st.divider()
 
     # --- [내보내기 섹션] ---
