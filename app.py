@@ -158,11 +158,15 @@ def get_stock_data(name):
     except:
         return 0, 0
 
-def get_stock_data_parallel(names):
-    """종목 리스트를 ThreadPoolExecutor로 병렬 수집 (순서 보장)"""
+def get_stock_data_parallel(names, on_progress=None):
+    """종목 리스트를 ThreadPoolExecutor로 병렬 수집 (순서 보장)
+    on_progress(done, total, name): 종목 1개 완료될 때마다 호출되는 콜백
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     results = {}
-    with ThreadPoolExecutor(max_workers=min(len(names), 10)) as executor:
+    total = len(names)
+    done  = 0
+    with ThreadPoolExecutor(max_workers=min(total, 10)) as executor:
         future_to_name = {executor.submit(get_stock_data, name): name for name in names}
         for future in as_completed(future_to_name):
             name = future_to_name[future]
@@ -170,7 +174,9 @@ def get_stock_data_parallel(names):
                 results[name] = future.result()
             except Exception:
                 results[name] = (0, 0)
-    # 원본 순서대로 반환
+            done += 1
+            if on_progress:
+                on_progress(done, total, name)
     return [results.get(name, (0, 0)) for name in names]
 
 # --- [v40.13 수집 엔진: 시간 파싱 로직 주입] ---
@@ -329,71 +335,95 @@ def get_now_kst(): return datetime.now(timezone(timedelta(hours=9)))
 now_kst = get_now_kst()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-try:
-    full_df = conn.read(worksheet="종목 현황", ttl="1m")
-    history_df = conn.read(worksheet="trend", ttl=0)
-    # 메모 시트 로드 (없으면 빈 DataFrame)
+with st.status("📡 데이터를 불러오는 중...", expanded=True) as status:
+
+    # ── STEP 1. 구글 시트 읽기 ──────────────────────────────────
+    st.write("📋 구글 시트 연결 중...")
     try:
-        memo_df = conn.read(worksheet="메모", ttl=0)
-        if memo_df.empty or '종목명' not in memo_df.columns:
+        full_df    = conn.read(worksheet="종목 현황", ttl="1m")
+        history_df = conn.read(worksheet="trend", ttl=0)
+        try:
+            memo_df = conn.read(worksheet="메모", ttl=0)
+            if memo_df.empty or '종목명' not in memo_df.columns:
+                memo_df = pd.DataFrame(columns=['종목명', '계좌명', '메모', '수정일시'])
+        except Exception:
             memo_df = pd.DataFrame(columns=['종목명', '계좌명', '메모', '수정일시'])
-    except Exception:
-        memo_df = pd.DataFrame(columns=['종목명', '계좌명', '메모', '수정일시'])
-except Exception as e:
-    st.error(f"⚠️ 구글 시트 연결 오류: {e}")
-    st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
-    st.stop()
+    except Exception as e:
+        st.error(f"⚠️ 구글 시트 연결 오류: {e}")
+        st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
+        st.stop()
 
-# --- [v40.94: 데이터 정제] ---
-if not full_df.empty:
-    full_df.columns = [c.strip() for c in full_df.columns]
+    # ── STEP 2. 숫자 변환 ──────────────────────────────────────
+    st.write("🔢 데이터 정제 중...")
+    if not full_df.empty:
+        full_df.columns = [c.strip() for c in full_df.columns]
+        target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금', '목표수익률']
+        for c in target_num_cols:
+            if c in full_df.columns:
+                full_df[c] = pd.to_numeric(
+                    full_df[c].astype(str).str.replace(',', '').str.replace('%', ''),
+                    errors='coerce'
+                ).fillna(0)
+            elif c == '목표수익률':
+                full_df['목표수익률'] = 10.0
 
-    # 1. 숫자 변환 (목표수익률 포함)
-    target_num_cols = ['수량', '매입단가', '52주최고가', '매입후최고가', '목표가', '주당 배당금', '목표수익률']
-    for c in target_num_cols:
-        if c in full_df.columns:
-            full_df[c] = pd.to_numeric(full_df[c].astype(str).str.replace(',', '').str.replace('%', ''), errors='coerce').fillna(0)
-        elif c == '목표수익률':
-            full_df['목표수익률'] = 10.0
+    # ── STEP 3. 실시간 주가 수집 (진행률 실시간 업데이트) ────────
+    n_stocks   = len(full_df['종목명'].unique()) if not full_df.empty else 0
+    prog_bar   = st.progress(0, text=f"📈 실시간 주가 수집 중... (0 / {n_stocks})")
+    prog_label = st.empty()
 
-    # 2. 실시간 가격 수집 (병렬)
-    with st.spinner(f"실시간 주가 수집 중... (총 {len(full_df['종목명'].unique())}종목)"):
-        prices = get_stock_data_parallel(full_df['종목명'].tolist())
-    full_df['현재가'], full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
+    def on_progress(done, total, name):
+        pct  = done / total
+        short = name[:10] + ".." if len(name) > 10 else name
+        prog_bar.progress(pct, text=f"📈 주가 수집 중... ({done} / {total})  ·  {short} ✓")
 
-    # 3. 수익 지표 연산
-    full_df['매입금액'] = full_df['수량'] * full_df['매입단가']
-    full_df['평가금액'] = full_df['수량'] * full_df['현재가']
-    full_df['손익'] = full_df['평가금액'] - full_df['매입금액']
-    full_df['전일대비손익'] = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
-    full_df['전일평가액'] = full_df['평가금액'] - full_df['전일대비손익']
-    full_df['예상배당금'] = full_df['수량'] * full_df['주당 배당금']
+    if not full_df.empty:
+        prices = get_stock_data_parallel(full_df['종목명'].tolist(), on_progress=on_progress)
+        full_df['현재가'],  full_df['전일종가'] = [p[0] for p in prices], [p[1] for p in prices]
+    prog_bar.progress(1.0, text=f"✅ 주가 수집 완료 ({n_stocks} / {n_stocks})")
 
-    # 4. 수익률 및 변동율
-    full_df['누적수익률'] = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
-    full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+    # ── STEP 4. 수익 지표 연산 ─────────────────────────────────
+    st.write("📊 수익 지표 계산 중...")
+    if not full_df.empty:
+        full_df['매입금액']      = full_df['수량'] * full_df['매입단가']
+        full_df['평가금액']      = full_df['수량'] * full_df['현재가']
+        full_df['손익']          = full_df['평가금액'] - full_df['매입금액']
+        full_df['전일대비손익']  = full_df['평가금액'] - (full_df['수량'] * full_df['전일종가'])
+        full_df['전일평가액']    = full_df['평가금액'] - full_df['전일대비손익']
+        full_df['예상배당금']    = full_df['수량'] * full_df['주당 배당금']
+        full_df['누적수익률']    = (full_df['손익'] / full_df['매입금액'].replace(0, float('nan')) * 100).fillna(0)
+        full_df['전일대비변동율'] = (full_df['전일대비손익'] / full_df['전일평가액'].replace(0, float('nan')) * 100).fillna(0)
+        full_df['목표대비상승여력'] = full_df.apply(
+            lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, axis=1
+        )
+        if '최초매입일' in full_df.columns:
+            full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
+            full_df['보유일수'] = (
+                datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                - full_df['최초매입일'].dt.tz_localize(None)
+            ).dt.days.fillna(365).astype(int).clip(lower=1)
+        else:
+            full_df['보유일수'] = 365
 
-    # 5. 기대상승여력
-    full_df['목표대비상승여력'] = full_df.apply(
-        lambda x: ((x['목표가'] / x['현재가'] - 1) * 100) if x['현재가'] > 0 and x['목표가'] > 0 else 0, axis=1
-    )
+    # ── STEP 5. 수익률 추이 정규화 ────────────────────────────
+    st.write("📉 수익률 추이 처리 중...")
+    if not history_df.empty:
+        history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
+        history_df = (history_df
+                      .dropna(subset=['Date'])
+                      .sort_values('Date')
+                      .drop_duplicates('Date', keep='last')
+                      .reset_index(drop=True))
+        base_date = pd.Timestamp("2026-03-03")
+        base_row  = history_df[history_df['Date'] == base_date]
+        base_kospi = base_row['KOSPI'].values[0] if not base_row.empty else history_df['KOSPI'].iloc[0]
+        history_df['KOSPI_Relative'] = (history_df['KOSPI'] / base_kospi - 1) * 100
 
-    # 6. 보유일수 계산
-    if '최초매입일' in full_df.columns:
-        full_df['최초매입일'] = pd.to_datetime(full_df['최초매입일'], errors='coerce')
-        full_df['보유일수'] = (datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - full_df['최초매입일'].dt.tz_localize(None)).dt.days.fillna(365).astype(int).clip(lower=1)
-    else:
-        full_df['보유일수'] = 365
-
-    # 7. 목표가 도달 알림 (데이터 정제 완료 후 즉시 실행)
+    # ── STEP 6. 목표가 알림 ───────────────────────────────────
+    st.write("🔔 목표가 도달 여부 확인 중...")
     check_and_toast_targets(full_df)
 
-if not history_df.empty:
-    history_df['Date'] = pd.to_datetime(history_df['Date'], errors='coerce')
-    history_df = history_df.dropna(subset=['Date']).sort_values('Date').drop_duplicates('Date', keep='last').reset_index(drop=True)
-    base_date = pd.Timestamp("2026-03-03")
-    base_row = history_df[history_df['Date'] == base_date]
-    history_df['KOSPI_Relative'] = (history_df['KOSPI'] / (base_row['KOSPI'].values[0] if not base_row.empty else history_df['KOSPI'].iloc[0]) - 1) * 100
+    status.update(label="✅ 데이터 로드 완료", state="complete", expanded=False)
 
 st.markdown(
     f"""
