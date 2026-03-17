@@ -16,8 +16,8 @@ from bs4 import BeautifulSoup
 
 from config import (
     STOCK_CODES, DIVIDEND_SCHEDULE, DIVIDEND_TAX_RATE,
-    KOSPI_BASE_DATE, STOP_LOSS_PCT, TRAILING_PCT, TARGET_ALERT_PCT,
-    WS_PORTFOLIO, WS_TREND, WS_MEMO,
+    KOSPI_BASE_DATE_DEFAULT, STOP_LOSS_PCT, TRAILING_PCT, TARGET_ALERT_PCT,
+    WS_PORTFOLIO, WS_TREND, WS_MEMO, WS_SNAPSHOT,
 )
 
 
@@ -216,6 +216,114 @@ def load_sheets(conn) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     return full_df, history_df, memo_df
 
 
+def load_snapshot(conn) -> dict:
+    """
+    구글 시트 'snapshot' 워크시트에서 날짜별 팩트 수치를 읽어 반환.
+
+    시트 구조 (헤더: 날짜 | 항목 | 값)
+    ─────────────────────────────────
+    2026-03-09 | KOSPI                        | 5251.87
+    2026-03-09 | 삼성전자                     | 111400
+    2026-03-09 | KODEX200타겟위클리커버드콜   | 16515
+
+    반환: {"2026-03-09": {"KOSPI": 5251.87, "삼성전자": 111400.0, ...}, ...}
+    시트 없음 / 오류 시 빈 dict 반환 (앱은 현재가로 폴백)
+    """
+    try:
+        df = conn.read(worksheet=WS_SNAPSHOT, ttl=0)
+        if df.empty or not {"날짜", "항목", "값"}.issubset(df.columns):
+            return {}
+        result: dict = {}
+        for _, row in df.iterrows():
+            date_str = str(row["날짜"]).strip()
+            item     = str(row["항목"]).strip()
+            try:
+                val = float(row["값"])
+            except (ValueError, TypeError):
+                continue
+            result.setdefault(date_str, {})[item] = val
+        return result
+    except Exception:
+        return {}
+
+
+def load_overrides(path: str = "overrides.toml") -> dict:
+    """
+    로컬 overrides.toml에서 설정을 읽어 반환 (오프라인 폴백).
+    파일 없으면 빈 dict 반환.
+
+    overrides.toml 예시
+    ───────────────────
+    [app]
+    kospi_base_date = "2026-03-03"
+
+    [snapshots."2026-03-09"]
+    KOSPI                        = 5251.87
+    삼성전자                     = 111400.0
+    KODEX200타겟위클리커버드콜   = 16515.0
+    """
+    try:
+        import sys
+        if sys.version_info >= (3, 11):
+            import tomllib
+            with open(path, "rb") as f:
+                return tomllib.load(f)
+        else:
+            import tomli  # pip install tomli
+            with open(path, "rb") as f:
+                return tomli.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def resolve_settings(conn) -> dict:
+    """
+    설정값을 우선순위에 따라 병합해 반환.
+    우선순위: secrets.toml  >  구글 시트 snapshot  >  overrides.toml  >  코드 기본값
+
+    반환 dict 키
+    ─────────────────────────────────────────────────────
+    kospi_base_date : str   — KOSPI 상대비교 기준일
+    snapshot        : dict  — { "날짜": {"항목": 값, ...} }
+    """
+    # 1. 코드 기본값
+    settings = {
+        "kospi_base_date": KOSPI_BASE_DATE_DEFAULT,
+        "snapshot":        {},
+    }
+
+    # 2. overrides.toml (로컬 폴백)
+    overrides = load_overrides()
+    if "app" in overrides:
+        if "kospi_base_date" in overrides["app"]:
+            settings["kospi_base_date"] = overrides["app"]["kospi_base_date"]
+    if "snapshots" in overrides:
+        for date_str, vals in overrides["snapshots"].items():
+            settings["snapshot"].setdefault(date_str, {}).update(vals)
+
+    # 3. 구글 시트 snapshot (overrides보다 우선)
+    sheet_snap = load_snapshot(conn)
+    for date_str, vals in sheet_snap.items():
+        settings["snapshot"].setdefault(date_str, {}).update(vals)
+
+    # 4. Streamlit secrets.toml (최우선)
+    try:
+        import streamlit as st
+        sec_app = st.secrets.get("app", {})
+        if "kospi_base_date" in sec_app:
+            settings["kospi_base_date"] = sec_app["kospi_base_date"]
+        # secrets의 스냅샷 (선택적)
+        sec_snap = st.secrets.get("snapshots", {})
+        for date_str, vals in sec_snap.items():
+            settings["snapshot"].setdefault(date_str, {}).update(dict(vals))
+    except Exception:
+        pass
+
+    return settings
+
+
 # ════════════════════════════════════════════════════════
 # 6. 데이터 정제 및 지표 계산
 # ════════════════════════════════════════════════════════
@@ -273,7 +381,10 @@ def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFram
     return df
 
 
-def process_history(history_df: pd.DataFrame) -> pd.DataFrame:
+def process_history(
+    history_df: pd.DataFrame,
+    kospi_base_date: str = KOSPI_BASE_DATE_DEFAULT,
+) -> pd.DataFrame:
     """수익률 추이 정규화 및 KOSPI 상대 수익률 계산"""
     df = (
         history_df.copy()
@@ -283,7 +394,7 @@ def process_history(history_df: pd.DataFrame) -> pd.DataFrame:
         .drop_duplicates("Date", keep="last")
         .reset_index(drop=True)
     )
-    base_date = pd.Timestamp(KOSPI_BASE_DATE)
+    base_date = pd.Timestamp(kospi_base_date)
     base_row  = df[df["Date"] == base_date]
     base_val  = base_row["KOSPI"].values[0] if not base_row.empty else df["KOSPI"].iloc[0]
     df["KOSPI_Relative"] = (df["KOSPI"] / base_val - 1) * 100

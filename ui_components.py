@@ -783,6 +783,7 @@ def render_account_tab(
 def render_sidebar(
     full_df: pd.DataFrame, history_df: pd.DataFrame,
     now_kst, m_status: dict, conn,
+    snapshot: dict = None,
 ):
     """사이드바 전체 렌더링"""
     with st.sidebar:
@@ -812,7 +813,8 @@ def render_sidebar(
         st.divider()
 
         # 기록 관리자
-        _render_record_manager(full_df, history_df, now_kst, m_status, conn)
+        _render_record_manager(full_df, history_df, now_kst, m_status, conn,
+                                snapshot=snapshot)
 
 
 def _render_dividend_dday(full_df: pd.DataFrame, now_kst):
@@ -880,27 +882,29 @@ def _render_dividend_dday(full_df: pd.DataFrame, now_kst):
 def _render_record_manager(
     full_df: pd.DataFrame, history_df: pd.DataFrame,
     now_kst, m_status: dict, conn,
+    snapshot: dict = None,   # { "2026-03-09": {"KOSPI": 5251.87, "삼성전자": 111400, ...} }
 ):
     st.subheader("⚙️ 기록 관리자 모드")
     sel_date = st.date_input("📅 저장/복구 날짜 선택", value=now_kst.date())
 
     if st.button(f"🔍 {sel_date} 데이터 불러오기"):
-        save_str = sel_date.strftime("%Y-%m-%d")
+        save_str  = sel_date.strftime("%Y-%m-%d")
+        day_snap  = (snapshot or {}).get(save_str, {})   # 해당 날짜 스냅샷
+
+        # KOSPI — 스냅샷 우선, 없으면 실시간 HUD 값
         try:
-            kospi_val = 5251.87 if save_str == "2026-03-09" \
-                else float(m_status["KOSPI"]["val"].replace(",", ""))
+            fallback_kospi = float(m_status["KOSPI"]["val"].replace(",", ""))
         except Exception:
-            kospi_val = 0.0
-        st.session_state["edit_kospi"]  = kospi_val
+            fallback_kospi = 0.0
+        kospi_val = day_snap.get("KOSPI", fallback_kospi)
+
+        # 종목별 가격 — 스냅샷 우선, 없으면 현재가
         tmp = {}
         for _, r in full_df.iterrows():
             nm = r["종목명"]
-            if save_str == "2026-03-09":
-                if "KODEX" in nm and "위클리" in nm: tmp[nm] = 16515.0
-                elif "삼성전자" in nm:               tmp[nm] = 111400.0
-                else:                                tmp[nm] = float(r["현재가"])
-            else:
-                tmp[nm] = float(r["현재가"])
+            tmp[nm] = day_snap.get(nm, float(r["현재가"]))
+
+        st.session_state["edit_kospi"]   = kospi_val
         st.session_state["edit_prices"]  = tmp
         st.session_state["editor_active"] = True
         st.success("✅ 데이터를 가져왔습니다. 아래 양식을 확인하세요.")

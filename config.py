@@ -154,13 +154,14 @@ TARGET_ALERT_PCT = 0.95  # 목표가 근접 경보: 목표가의 95%
 # ── 배당세율 ─────────────────────────────────────────────
 DIVIDEND_TAX_RATE = 0.154  # 배당소득세 15.4%
 
-# ── KOSPI 기준일 (수익률 상대비교 베이스) ───────────────
-KOSPI_BASE_DATE = "2026-03-03"
+# ── KOSPI 기준일 코드 기본값 (secrets.toml > overrides.toml > 이 값 순으로 덮어씀) ─
+KOSPI_BASE_DATE_DEFAULT = "2026-03-03"
 
 # ── 구글 시트 워크시트명 ─────────────────────────────────
 WS_PORTFOLIO = "종목 현황"
 WS_TREND     = "trend"
 WS_MEMO      = "메모"
+WS_SNAPSHOT  = "snapshot"   # 날짜별 팩트 수치 스냅샷 시트
 
 # ── CSS 스타일 ───────────────────────────────────────────
 APP_CSS = """

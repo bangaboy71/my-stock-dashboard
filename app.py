@@ -18,6 +18,7 @@ from data_engine import (
     process_portfolio,
     process_history,
     check_and_toast_targets,
+    resolve_settings,
 )
 from ui_components import (
     render_market_hud,
@@ -44,7 +45,7 @@ conn    = st.connection("gsheets", type=GSheetsConnection)
 # ════════════════════════════════════════════════════════
 with st.status("📡 데이터를 불러오는 중...", expanded=True) as status:
 
-    # STEP 1 — 구글 시트
+    # STEP 1 — 구글 시트 + 설정 로드
     st.write("📋 구글 시트 연결 중...")
     try:
         full_df, history_df, memo_df = load_sheets(conn)
@@ -52,6 +53,10 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
         st.error(f"⚠️ 구글 시트 연결 오류: {e}")
         st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
         st.stop()
+
+    # 설정값 병합 (secrets > 시트 snapshot > overrides.toml > 코드 기본값)
+    st.write("⚙️ 설정값 로드 중...")
+    settings = resolve_settings(conn)
 
     # STEP 2 — 주가 병렬 수집
     n_stocks = len(full_df["종목명"].unique()) if not full_df.empty else 0
@@ -76,7 +81,10 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
     # STEP 4 — 수익률 추이 정규화
     st.write("📉 수익률 추이 처리 중...")
     if not history_df.empty:
-        history_df = process_history(history_df)
+        history_df = process_history(
+            history_df,
+            kospi_base_date=settings["kospi_base_date"],
+        )
 
     # STEP 5 — 목표가 알림
     st.write("🔔 목표가 도달 여부 확인 중...")
@@ -129,7 +137,8 @@ for idx, acc in enumerate(config.ACCOUNTS):
 # ════════════════════════════════════════════════════════
 # 6. 사이드바
 # ════════════════════════════════════════════════════════
-render_sidebar(full_df, history_df, now_kst, m_status, conn)
+render_sidebar(full_df, history_df, now_kst, m_status, conn,
+               snapshot=settings["snapshot"])
 
 # ════════════════════════════════════════════════════════
 # 7. 푸터
