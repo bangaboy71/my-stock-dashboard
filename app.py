@@ -532,7 +532,110 @@ with tabs[0]:
                 margin=dict(t=80, b=40, l=20, r=20)
             )
             st.plotly_chart(fig_cal, use_container_width=True)
-    
+
+    # --- 계좌별 다차원 성과 비교 레이더 차트 ---
+    st.divider()
+    with st.container(border=True):
+        st.markdown("#### 🕸️ 계좌별 다차원 성과 비교")
+
+        RADAR_AXES = ["누적수익률", "배당수익률", "전일대비(%)", "목표달성률", "자산집중도"]
+
+        radar_rows = []
+        for _, row in sum_acc.iterrows():
+            acc    = row["계좌명"]
+            acc_df = full_df[full_df["계좌명"] == acc]
+            a_eval = row["평가금액"]
+
+            cum_ret   = row["누적수익률"]
+            div_yield = (acc_df["예상배당금"].sum() / a_eval * 100) if a_eval > 0 else 0
+            daily_pct = row["전일대비변동율"]
+
+            valid = acc_df[(acc_df["목표가"] > 0) & (acc_df["현재가"] > 0)]
+            target_ratio = (valid["현재가"] / valid["목표가"] * 100).mean() if not valid.empty else 0
+
+            weights   = (acc_df["평가금액"] / a_eval) if a_eval > 0 else pd.Series([1.0])
+            hhi       = (weights ** 2).sum()
+            diversify = (1 - hhi) * 100
+
+            radar_rows.append({
+                "계좌명":    acc,
+                "누적수익률": cum_ret,
+                "배당수익률": div_yield,
+                "전일대비(%)": daily_pct,
+                "목표달성률": target_ratio,
+                "자산집중도":  diversify,
+            })
+
+        radar_df   = pd.DataFrame(radar_rows)
+        radar_norm = radar_df.copy()
+        for col in RADAR_AXES:
+            col_min, col_max = radar_df[col].min(), radar_df[col].max()
+            radar_norm[col] = (radar_df[col] - col_min) / (col_max - col_min) * 100 if col_max - col_min > 0 else 50
+
+        ACCOUNT_COLORS = ["#87CEEB", "#FFD700", "#FF4B4B", "#7CFC00"]
+        fig_radar = go.Figure()
+
+        for i, row in radar_norm.iterrows():
+            acc    = row["계좌명"]
+            raw    = radar_df.loc[i]
+            color  = ACCOUNT_COLORS[i % len(ACCOUNT_COLORS)]
+            r_vals = [row[a] for a in RADAR_AXES] + [row[RADAR_AXES[0]]]
+            axes   = RADAR_AXES + [RADAR_AXES[0]]
+
+            fig_radar.add_trace(go.Scatterpolar(
+                r=r_vals, theta=axes, fill="toself",
+                fillcolor=color + "14",
+                line=dict(color=color, width=2),
+                name=acc,
+                hovertemplate=(
+                    f"<b>{acc}</b><br>"
+                    f"누적수익률: {raw['누적수익률']:+.2f}%<br>"
+                    f"배당수익률: {raw['배당수익률']:.2f}%<br>"
+                    f"전일대비: {raw['전일대비(%)']:+.2f}%<br>"
+                    f"목표달성률: {raw['목표달성률']:.1f}%<br>"
+                    f"분산도: {raw['자산집중도']:.1f}"
+                    "<extra></extra>"
+                ),
+            ))
+
+        fig_radar.update_layout(
+            polar=dict(
+                bgcolor="rgba(255,255,255,0.02)",
+                radialaxis=dict(
+                    visible=True, range=[0, 100],
+                    tickfont=dict(size=10, color="rgba(255,255,255,0.4)"),
+                    gridcolor="rgba(255,255,255,0.08)",
+                    linecolor="rgba(255,255,255,0.08)",
+                ),
+                angularaxis=dict(
+                    tickfont=dict(size=12, color="rgba(255,255,255,0.75)"),
+                    gridcolor="rgba(255,255,255,0.08)",
+                    linecolor="rgba(255,255,255,0.15)",
+                ),
+            ),
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            height=420,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+            margin=dict(t=40, b=60, l=60, r=60),
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+
+        st.dataframe(
+            radar_df.style.format({
+                "누적수익률":  "{:+.2f}%",
+                "배당수익률":  "{:.2f}%",
+                "전일대비(%)": "{:+.2f}%",
+                "목표달성률":  "{:.1f}%",
+                "자산집중도":  "{:.1f}",
+            }).applymap(
+                lambda x: "color: #FF4B4B" if isinstance(x, float) and x > 0
+                          else "color: #87CEEB" if isinstance(x, float) and x < 0 else "",
+                subset=["누적수익률", "전일대비(%)"]
+            ),
+            hide_index=True, use_container_width=True
+        )
+
 def render_account_tab(acc_name, tab_obj, yield_col_name):
     with tab_obj:
         sub_df = full_df[full_df['계좌명'] == acc_name].copy()
