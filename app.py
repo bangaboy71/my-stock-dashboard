@@ -226,6 +226,27 @@ def get_stock_news(name):
     except: pass
     return news_list
 
+
+# --- [테이블 렌더링 헬퍼] ---
+def col_width(series):
+    """값 최대 길이 기준으로 small/medium/large 반환"""
+    try:
+        max_len = series.astype(str).str.len().max()
+    except Exception:
+        max_len = 8
+    if max_len <= 7:  return "small"
+    if max_len <= 14: return "medium"
+    return "large"
+
+def style_pnl(df, cols):
+    """손익 컬럼 양수=빨강, 음수=파랑, 0=기본"""
+    def _color(val):
+        if isinstance(val, (int, float)):
+            if val > 0:  return "color: #FF4B4B; font-weight:600"
+            if val < 0:  return "color: #87CEEB; font-weight:600"
+        return ""
+    return df.style.applymap(_color, subset=[c for c in cols if c in df.columns])
+
 def find_matching_col(df, account, stock=None):
     prefix = account.replace("투자", "").replace(" ", "")
     target_clean = f"{prefix}{stock}수익률".replace(" ", "").replace("_", "") if stock else f"{prefix}수익률".replace(" ", "").replace("_", "")
@@ -491,40 +512,35 @@ with tabs[0]:
     sum_acc_plot = sum_acc.rename(columns=GLOBAL_RENAME_MAP)
     sum_acc_cols = ['계좌명', '매입금액', '평가금액', '손익', '전일대비(원)', '전일대비(%)', '누적수익률']
     
-    # --- [계좌 요약 테이블: column_config] ---
-    # 누적수익률 범위 계산 (프로그레스바 min/max)
-    ret_min = float(sum_acc['누적수익률'].min())
-    ret_max = float(sum_acc['누적수익률'].max())
-    ret_abs = max(abs(ret_min), abs(ret_max), 1.0)   # 0 방지, 대칭 범위
+    # --- [계좌 요약 테이블] ---
+    ret_abs = max(abs(float(sum_acc['누적수익률'].min())),
+                  abs(float(sum_acc['누적수익률'].max())), 1.0)
+
+    # 색상 styler (손익 계열)
+    pnl_cols_acc = ['손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+    tbl_acc = style_pnl(sum_acc_plot[sum_acc_cols], pnl_cols_acc).format({
+        '매입금액':    '{:,.0f}',
+        '평가금액':    '{:,.0f}',
+        '손익':        '{:+,.0f}',
+        '전일대비(원)': '{:+,.0f}',
+        '전일대비(%)': '{:+.2f}%',
+        '누적수익률':  '{:+.2f}%',
+    })
 
     st.dataframe(
-        sum_acc_plot[sum_acc_cols],
+        tbl_acc,
         hide_index=True,
         use_container_width=True,
         column_config={
-            "계좌명": st.column_config.TextColumn("계좌명", width="small"),
-            "매입금액": st.column_config.NumberColumn(
-                "매입금액", format="%,.0f", width="medium"
-            ),
-            "평가금액": st.column_config.NumberColumn(
-                "평가금액", format="%,.0f", width="medium"
-            ),
-            "손익": st.column_config.NumberColumn(
-                "손익", format="%+,.0f", width="medium"
-            ),
-            "전일대비(원)": st.column_config.NumberColumn(
-                "전일대비(원)", format="%+,.0f", width="medium"
-            ),
-            "전일대비(%)": st.column_config.NumberColumn(
-                "전일대비(%)", format="%+.2f%%", width="small"
-            ),
+            "계좌명":     st.column_config.TextColumn("계좌명",   width="small"),
+            "매입금액":   st.column_config.NumberColumn("매입금액",  width="medium"),
+            "평가금액":   st.column_config.NumberColumn("평가금액",  width="medium"),
+            "손익":       st.column_config.NumberColumn("손익",      width="medium"),
+            "전일대비(원)": st.column_config.NumberColumn("전일대비(원)", width="medium"),
+            "전일대비(%)": st.column_config.NumberColumn("전일대비(%)", width="small"),
             "누적수익률": st.column_config.ProgressColumn(
-                "누적수익률",
-                help="매입 대비 누적 손익률",
-                format="%.2f%%",
-                min_value=-ret_abs,
-                max_value=ret_abs,
-                width="medium",
+                "누적수익률", help="매입 대비 누적 손익률",
+                format="%.2f%%", min_value=-ret_abs, max_value=ret_abs, width="medium",
             ),
         }
     )
@@ -759,64 +775,58 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
         c3.metric("계좌 손익", f"{a_eval-a_buy:+,.0f}원")
         c4.metric("계좌 수익률", f"{(a_eval/a_buy-1)*100:+.2f}%", delta=f"{a_pct:+.2f}%p")
 
-        # --- [2. 보유 종목 테이블 — column_config] ---
+        # --- [2. 보유 종목 테이블] ---
         plot_df = sub_df.rename(columns=GLOBAL_RENAME_MAP).copy()
 
-        # 누적수익률 대칭 범위
         s_ret_abs = max(abs(float(plot_df['누적수익률'].min())),
                         abs(float(plot_df['누적수익률'].max())), 1.0)
-        # 목표대비상승여력 범위
-        up_max = max(float(plot_df['목표대비상승여력'].max()), 1.0) if '목표대비상승여력' in plot_df.columns else 30
+        up_max = max(float(plot_df['목표대비상승여력'].max()), 1.0)                  if '목표대비상승여력' in plot_df.columns else 30
 
-        display_cols = GLOBAL_DISPLAY_COLS.copy()
-        if '목표대비상승여력' in plot_df.columns:
-            display_cols = display_cols + ['목표대비상승여력']
+        display_cols = [c for c in (GLOBAL_DISPLAY_COLS +
+                        (['목표대비상승여력'] if '목표대비상승여력' in plot_df.columns else []))
+                        if c in plot_df.columns and c != '종목명']
+
+        # 종목명을 인덱스로 올려 자동 고정 (pinned 버그 우회)
+        tbl_df = plot_df[['종목명'] + display_cols].set_index('종목명')
+
+        # 색상 styler
+        pnl_cols_stk = ['손익', '전일대비(원)', '전일대비(%)', '누적수익률']
+        tbl_styled = style_pnl(tbl_df, pnl_cols_stk).format({
+            '수량':         '{:,.0f}',
+            '매입단가':     '{:,.0f}',
+            '매입금액':     '{:,.0f}',
+            '현재가':       '{:,.0f}',
+            '평가금액':     '{:,.0f}',
+            '손익':         '{:+,.0f}',
+            '전일대비(원)': '{:+,.0f}',
+            '전일대비(%)':  '{:+.2f}%',
+            '누적수익률':   '{:+.2f}%',
+            **({'목표대비상승여력': '{:+.1f}%'} if '목표대비상승여력' in tbl_df.columns else {}),
+        })
+
+        # 컬럼 폭 — 실제 데이터 최대 길이 기준 자동 선택
+        def _w(col): return col_width(tbl_df[col]) if col in tbl_df.columns else "small"
 
         st.dataframe(
-            plot_df[[c for c in display_cols if c in plot_df.columns]],
-            hide_index=True,
+            tbl_styled,
             use_container_width=True,
             column_config={
-                "종목명": st.column_config.TextColumn("종목명", width="medium"),
-                "수량": st.column_config.NumberColumn(
-                    "수량", format="%,.0f", width="small"
-                ),
-                "매입단가": st.column_config.NumberColumn(
-                    "매입단가", format="%,.0f", width="small"
-                ),
-                "매입금액": st.column_config.NumberColumn(
-                    "매입금액", format="%,.0f", width="medium"
-                ),
-                "현재가": st.column_config.NumberColumn(
-                    "현재가", format="%,.0f", width="small"
-                ),
-                "평가금액": st.column_config.NumberColumn(
-                    "평가금액", format="%,.0f", width="medium"
-                ),
-                "손익": st.column_config.NumberColumn(
-                    "손익", format="%+,.0f", width="medium"
-                ),
-                "전일대비(원)": st.column_config.NumberColumn(
-                    "전일대비(원)", format="%+,.0f", width="medium"
-                ),
-                "전일대비(%)": st.column_config.NumberColumn(
-                    "전일대비(%)", format="%+.2f%%", width="small"
-                ),
-                "누적수익률": st.column_config.ProgressColumn(
-                    "누적수익률",
-                    help="매입가 대비 누적 손익률",
-                    format="%.2f%%",
-                    min_value=-s_ret_abs,
-                    max_value=s_ret_abs,
-                    width="medium",
+                "종목명":       st.column_config.TextColumn("종목명",      width="medium"),
+                "수량":         st.column_config.NumberColumn("수량",       width=_w('수량')),
+                "매입단가":     st.column_config.NumberColumn("매입단가",   width=_w('매입단가')),
+                "매입금액":     st.column_config.NumberColumn("매입금액",   width=_w('매입금액')),
+                "현재가":       st.column_config.NumberColumn("현재가",     width=_w('현재가')),
+                "평가금액":     st.column_config.NumberColumn("평가금액",   width=_w('평가금액')),
+                "손익":         st.column_config.NumberColumn("손익",       width=_w('손익')),
+                "전일대비(원)": st.column_config.NumberColumn("전일대비(원)", width=_w('전일대비(원)')),
+                "전일대비(%)":  st.column_config.NumberColumn("전일대비(%)", width="small"),
+                "누적수익률":   st.column_config.ProgressColumn(
+                    "누적수익률", help="매입가 대비 누적 손익률",
+                    format="%.2f%%", min_value=-s_ret_abs, max_value=s_ret_abs, width="medium",
                 ),
                 "목표대비상승여력": st.column_config.ProgressColumn(
-                    "목표여력",
-                    help="현재가 대비 목표가까지 상승 여력",
-                    format="%.1f%%",
-                    min_value=0,
-                    max_value=up_max,
-                    width="medium",
+                    "목표여력", help="목표가까지 상승 여력",
+                    format="%.1f%%", min_value=0, max_value=up_max, width="medium",
                 ),
             }
         )
