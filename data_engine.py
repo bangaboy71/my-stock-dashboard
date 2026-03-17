@@ -4,6 +4,7 @@ data_engine.py — 가족 자산 관제탑 데이터 엔진
 Streamlit import 없이 순수 Python/Pandas 로직만 포함합니다.
   → 테스트·재사용 가능 / UI 레이어와 완전 분리
 """
+from __future__ import annotations
 
 import calendar
 import io

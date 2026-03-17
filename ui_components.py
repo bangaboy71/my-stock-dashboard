@@ -3,6 +3,7 @@ ui_components.py — 가족 자산 관제탑 UI 컴포넌트
 모든 st.xxx 렌더링 로직을 함수 단위로 캡슐화합니다.
 app.py는 이 모듈의 함수를 호출하기만 하면 됩니다.
 """
+from __future__ import annotations
 
 import streamlit as st
 import plotly.graph_objects as go
