@@ -227,6 +227,29 @@ def find_matching_col(df, account, stock=None):
         if target_clean == str(col).replace(" ", "").replace("_", "").replace("투자", ""): return col
     return None
 
+# --- [메모 헬퍼] ---
+def get_memo(stock_name, acc_name):
+    """메모 시트에서 특정 종목+계좌의 메모 텍스트 반환"""
+    if memo_df.empty: return ""
+    row = memo_df[(memo_df['종목명'] == stock_name) & (memo_df['계좌명'] == acc_name)]
+    return str(row['메모'].values[0]) if not row.empty else ""
+
+def save_memo(stock_name, acc_name, text):
+    """메모를 구글 시트 '메모' 워크시트에 upsert"""
+    global memo_df
+    now_str = now_kst.strftime('%Y-%m-%d %H:%M:%S')
+    new_row  = pd.DataFrame([{'종목명': stock_name, '계좌명': acc_name,
+                               '메모': text, '수정일시': now_str}])
+    # 기존 행 제거 후 추가 (upsert)
+    mask     = ~((memo_df['종목명'] == stock_name) & (memo_df['계좌명'] == acc_name))
+    memo_df  = pd.concat([memo_df[mask], new_row], ignore_index=True)
+    try:
+        conn.update(worksheet="메모", data=memo_df)
+        return True
+    except Exception as e:
+        st.error(f"❌ 메모 저장 오류: {e}")
+        return False
+
 # --- [목표가 도달 토스트 알림] ---
 def check_and_toast_targets(df):
     """현재가가 목표가에 도달하거나 초과한 종목을 st.toast로 알림"""
@@ -309,6 +332,13 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 try:
     full_df = conn.read(worksheet="종목 현황", ttl="1m")
     history_df = conn.read(worksheet="trend", ttl=0)
+    # 메모 시트 로드 (없으면 빈 DataFrame)
+    try:
+        memo_df = conn.read(worksheet="메모", ttl=0)
+        if memo_df.empty or '종목명' not in memo_df.columns:
+            memo_df = pd.DataFrame(columns=['종목명', '계좌명', '메모', '수정일시'])
+    except Exception:
+        memo_df = pd.DataFrame(columns=['종목명', '계좌명', '메모', '수정일시'])
 except Exception as e:
     st.error(f"⚠️ 구글 시트 연결 오류: {e}")
     st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
@@ -807,6 +837,55 @@ def render_account_tab(acc_name, tab_obj, yield_col_name):
                         </div>
                     """)
         else: st.caption("새로운 뉴스가 없습니다.")
+
+        # (E) 투자 메모 섹션
+        st.divider()
+        st.html(f"<div style='font-size: 1.2rem; font-weight: bold; margin-bottom: 12px;'>📝 {sel} 투자 메모 / 근거</div>")
+
+        memo_key  = f"memo_text_{acc_name}_{sel}"
+        saved_key = f"memo_saved_{acc_name}_{sel}"
+
+        # 초기값: 시트에서 불러온 메모 (세션에 없을 때만)
+        if memo_key not in st.session_state:
+            st.session_state[memo_key] = get_memo(sel, acc_name)
+
+        with st.container(border=True):
+            existing = get_memo(sel, acc_name)
+            if existing:
+                last_dt = memo_df[
+                    (memo_df["종목명"] == sel) & (memo_df["계좌명"] == acc_name)
+                ]["수정일시"].values
+                last_str = last_dt[0] if len(last_dt) > 0 else "-"
+                st.html(f"<div style='font-size:0.8rem; color:rgba(255,255,255,0.4); margin-bottom:8px;'>🕒 마지막 저장: {last_str}</div>")
+
+            new_memo = st.text_area(
+                label="메모 입력",
+                value=st.session_state[memo_key],
+                height=140,
+                placeholder=(
+                    "예) 매수 근거: 반도체 사이클 바닥 확인, HBM 수혜 기대\n"
+                    "목표: 6개월 내 +20% / 손절선: 매입가 -15%\n"
+                    "리스크: 환율 변동, 경쟁사 점유율 확대"
+                ),
+                key=memo_key,
+                label_visibility="collapsed"
+            )
+
+            col_save, col_clear, col_spacer = st.columns([2, 1.5, 6])
+            with col_save:
+                if st.button("💾 저장", key=f"btn_save_{acc_name}_{sel}", use_container_width=True):
+                    if save_memo(sel, acc_name, new_memo):
+                        st.session_state[saved_key] = True
+                        st.rerun()
+            with col_clear:
+                if st.button("🗑️ 삭제", key=f"btn_del_{acc_name}_{sel}", use_container_width=True):
+                    if save_memo(sel, acc_name, ""):
+                        st.session_state[memo_key] = ""
+                        st.rerun()
+
+            if st.session_state.get(saved_key):
+                st.success("✅ 메모가 저장됐습니다.")
+                st.session_state[saved_key] = False
                 
 render_account_tab("서은투자", tabs[1], "서은수익률")
 render_account_tab("서희투자", tabs[2], "서희수익률")
