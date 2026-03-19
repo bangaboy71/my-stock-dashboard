@@ -429,7 +429,10 @@ def find_matching_col(df: pd.DataFrame, account: str, stock: str = None):
 
 
 def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
-    """보유 종목 기준 향후 배당 예정일 목록 계산. 배당월 말일을 예상 지급일로 사용."""
+    """보유 종목 기준 향후 배당·분배금 예정일 목록 계산.
+    DIVIDEND_SCHEDULE은 (월, 일) 튜플 리스트.
+    일(day)=0 이면 해당 월의 말일로 자동 계산.
+    """
     today  = now_kst.date()
     events = []
     for _, row in df.iterrows():
@@ -438,22 +441,35 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
         div_amt = float(row.get("예상배당금", 0))
         if div_amt <= 0:
             continue
-        months = DIVIDEND_SCHEDULE.get(name, [])
-        for m in months:
-            year     = today.year
-            last_day = calendar.monthrange(year, m)[1]
-            pay_date = datetime(year, m, last_day).date()
-            if pay_date < today:
-                last_day = calendar.monthrange(year + 1, m)[1]
-                pay_date = datetime(year + 1, m, last_day).date()
+        schedule = DIVIDEND_SCHEDULE.get(name, [])
+        if not schedule:
+            continue
+
+        for entry in schedule:
+            # 하위 호환: 기존 정수(월만) 형식도 허용
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                m, d = int(entry[0]), int(entry[1])
+            else:
+                m, d = int(entry), 0
+
+            # 지급일 계산: d=0이면 말일
+            for year in [today.year, today.year + 1]:
+                last_day = calendar.monthrange(year, m)[1]
+                pay_day  = last_day if d == 0 else min(d, last_day)
+                pay_date = datetime(year, m, pay_day).date()
+                if pay_date >= today:
+                    break
+
             events.append({
                 "종목명":    name,
                 "계좌명":    acc,
                 "배당월":    m,
+                "지급일":    pay_day,
                 "지급예정일": pay_date,
                 "D_DAY":     (pay_date - today).days,
-                "예상배당금": div_amt / len(months),
+                "예상배당금": div_amt / len(schedule),
             })
+
     events.sort(key=lambda x: (x["D_DAY"], -x["예상배당금"]))
     return events
 
