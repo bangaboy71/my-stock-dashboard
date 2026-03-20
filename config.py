@@ -201,4 +201,6 @@ APP_CSS = """
     border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6);
 }
 .research-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-.target-val { color:
+.target-val { color: #FFD700; font-weight: bold; }
+</style>
+"""
