@@ -446,13 +446,11 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
             continue
 
         for entry in schedule:
-            # 하위 호환: 기존 정수(월만) 형식도 허용
             if isinstance(entry, (list, tuple)) and len(entry) == 2:
                 m, d = int(entry[0]), int(entry[1])
             else:
                 m, d = int(entry), 0
 
-            # 지급일 계산: d=0이면 말일
             for year in [today.year, today.year + 1]:
                 last_day = calendar.monthrange(year, m)[1]
                 pay_day  = last_day if d == 0 else min(d, last_day)
@@ -472,7 +470,6 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
 
     events.sort(key=lambda x: (x["D_DAY"], -x["예상배당금"]))
     return events
-
 
 # ════════════════════════════════════════════════════════
 # 8. 메모 CRUD
