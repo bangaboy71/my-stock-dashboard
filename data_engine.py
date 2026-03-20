@@ -16,7 +16,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import (
-    STOCK_CODES, DIVIDEND_SCHEDULE, DIVIDEND_TAX_RATE,
+    STOCK_CODES, DIVIDEND_SCHEDULE, DIVIDEND_PAY_DAY, DIVIDEND_TAX_RATE,
     KOSPI_BASE_DATE_DEFAULT, STOP_LOSS_PCT, TRAILING_PCT, TARGET_ALERT_PCT,
     WS_PORTFOLIO, WS_TREND, WS_MEMO, WS_SNAPSHOT,
 )
@@ -430,8 +430,8 @@ def find_matching_col(df: pd.DataFrame, account: str, stock: str = None):
 
 def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
     """보유 종목 기준 향후 배당·분배금 예정일 목록 계산.
-    DIVIDEND_SCHEDULE은 (월, 일) 튜플 리스트.
-    일(day)=0 이면 해당 월의 말일로 자동 계산.
+    DIVIDEND_SCHEDULE: {종목명: [지급월, ...]}
+    DIVIDEND_PAY_DAY:  {종목명: 지급일}  — 없으면 말일
     """
     today  = now_kst.date()
     events = []
@@ -441,19 +441,16 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
         div_amt = float(row.get("예상배당금", 0))
         if div_amt <= 0:
             continue
-        schedule = DIVIDEND_SCHEDULE.get(name, [])
-        if not schedule:
+        months = DIVIDEND_SCHEDULE.get(name, [])
+        if not months:
             continue
+        pay_day_fixed = DIVIDEND_PAY_DAY.get(name, 0)   # 0 = 말일
 
-        for entry in schedule:
-            if isinstance(entry, (list, tuple)) and len(entry) == 2:
-                m, d = int(entry[0]), int(entry[1])
-            else:
-                m, d = int(entry), 0
-
+        for m in months:
             for year in [today.year, today.year + 1]:
                 last_day = calendar.monthrange(year, m)[1]
-                pay_day  = last_day if d == 0 else min(d, last_day)
+                pay_day  = last_day if pay_day_fixed == 0 \
+                           else min(pay_day_fixed, last_day)
                 pay_date = datetime(year, m, pay_day).date()
                 if pay_date >= today:
                     break
@@ -465,11 +462,12 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
                 "지급일":    pay_day,
                 "지급예정일": pay_date,
                 "D_DAY":     (pay_date - today).days,
-                "예상배당금": div_amt / len(schedule),
+                "예상배당금": div_amt / len(months),
             })
 
     events.sort(key=lambda x: (x["D_DAY"], -x["예상배당금"]))
     return events
+
 
 # ════════════════════════════════════════════════════════
 # 8. 메모 CRUD
