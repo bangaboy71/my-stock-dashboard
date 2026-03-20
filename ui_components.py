@@ -16,7 +16,7 @@ from config import (
 )
 from data_engine import (
     get_cashflow_grade, find_matching_col,
-    get_stock_news, get_dividend_calendar,
+    get_stock_news, get_dividend_calendar, load_dividend_actual,
     get_memo, save_memo,
     get_csv_bytes, get_excel_bytes,
 )
@@ -967,3 +967,241 @@ def _render_record_manager(
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 오류: {e}")
+
+
+# ════════════════════════════════════════════════════════
+# 배당·분배금 실적 탭
+# ════════════════════════════════════════════════════════
+
+def render_dividend_actual_tab(
+    full_df: pd.DataFrame,
+    conn,
+    now_kst,
+):
+    """배당·분배금 실제 입금 실적 조회·시각화 탭"""
+    st.markdown("## 💸 배당·분배금 실적 관리")
+    st.caption(
+        "구글 시트 **배당실적** 탭에 입금 내역을 기록하면 자동 집계됩니다. "
+        "시트 헤더: `입금일 | 계좌명 | 종목명 | 세전금액 | 세후금액 | 비고`"
+    )
+
+    act_df = load_dividend_actual(conn, portfolio_df=full_df)
+
+    if act_df.empty:
+        st.info(
+            "📋 **배당실적 탭이 없거나 데이터가 없습니다.**\n\n"
+            "구글 시트에 `배당실적` 탭을 추가하고 아래 형식으로 입력하세요.\n\n"
+            "| 입금일 | 계좌명 | 종목명 | 세전금액 | 세후금액 | 비고 |\n"
+            "|---|---|---|---|---|---|\n"
+            "| 2026-03-17 | 큰스님투자 | KODEX200타겟위클리커버드콜 | 733200 | | |\n"
+            "| 2026-04-20 | 서은투자 | 삼성전자 | 125000 | | |\n\n"
+            "세후금액을 비워두면 세전 × 84.6%로 자동 계산됩니다."
+        )
+        return
+
+    # ── 상단 요약 메트릭 ──────────────────────────────────
+    cur_year   = now_kst.year
+    ytd        = act_df[act_df["연도"] == cur_year]
+    total_net  = act_df["세후금액"].sum()
+    ytd_net    = ytd["세후금액"].sum()
+    total_buy  = full_df["매입금액"].sum()
+    yield_rate = (total_net / total_buy * 100) if total_buy > 0 else 0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("누적 세후 수령",   f"{total_net:,.0f}원")
+    m2.metric(f"{cur_year}년 수령", f"{ytd_net:,.0f}원")
+    m3.metric("누적 배당수익률",   f"{yield_rate:.2f}%",
+              help="세후 누적 수령 ÷ 현재 투자원금")
+    m4.metric("입금 건수",         f"{len(act_df)}건")
+
+    st.divider()
+
+    # ── 월별 세후 수령액 막대차트 ─────────────────────────
+    st.markdown("#### 📅 월별 세후 수령액")
+    monthly = (
+        act_df.groupby("연월")["세후금액"].sum().reset_index()
+    )
+    # ── 연도 필터 ──────────────────────────────────────────
+    from config import DIVIDEND_SCHEDULE as DS, DIVIDEND_TAX_RATE as DTR, DIVIDEND_PAY_DAY as DPD
+    import calendar as _cal
+
+    # 올해·전체 연도 선택
+    all_years = sorted(act_df["연도"].unique(), reverse=True)
+    sel_year  = st.selectbox(
+        "조회 연도", ["전체"] + [str(y) for y in all_years],
+        index=0, key="div_year_sel",
+    )
+    if sel_year != "전체":
+        view_df = act_df[act_df["연도"] == int(sel_year)]
+    else:
+        view_df = act_df
+
+    monthly = view_df.groupby("연월")["세후금액"].sum().reset_index()
+
+    # ── 예상 수령액 계산 (DIVIDEND_SCHEDULE 기준) ─────────
+    monthly_pred = {}
+    year_for_pred = int(sel_year) if sel_year != "전체" else cur_year
+    for _, row in full_df.iterrows():
+        name    = row.get("종목명", "")
+        ms      = DS.get(name, [])
+        div_amt = float(row.get("예상배당금", 0))
+        if not ms or div_amt <= 0:
+            continue
+        amt_net = div_amt * (1 - DTR) / len(ms)
+        pay_day_fixed = DPD.get(name, 0)
+        for m in ms:
+            last_day = _cal.monthrange(year_for_pred, m)[1]
+            pay_day  = last_day if pay_day_fixed == 0 else min(pay_day_fixed, last_day)
+            key = f"{year_for_pred}-{m:02d}"
+            monthly_pred[key] = monthly_pred.get(key, 0) + amt_net
+
+    fig_m = go.Figure()
+    fig_m.add_trace(go.Bar(
+        x=monthly["연월"], y=monthly["세후금액"] / 10000,
+        name="실제 수령", marker_color="#7dffb0",
+        text=[f"{v/10000:.1f}만" for v in monthly["세후금액"]],
+        textposition="outside",
+    ))
+    if monthly_pred:
+        pred_keys = sorted(monthly_pred.keys())
+        fig_m.add_trace(go.Scatter(
+            x=pred_keys,
+            y=[monthly_pred[k] / 10000 for k in pred_keys],
+            name=f"{year_for_pred}년 예상",
+            mode="lines+markers",
+            line=dict(color="#FFD700", dash="dot", width=2),
+            marker=dict(size=7),
+        ))
+    fig_m.update_layout(
+        height=320, paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.02)", font_color="white",
+        legend=dict(orientation="h", y=-0.25, xanchor="center", x=0.5),
+        margin=dict(t=20, b=70, l=10, r=10),
+        yaxis=dict(title="세후 수령액 (만원)", tickformat=","),
+        xaxis=dict(tickangle=-30), hovermode="x unified",
+        barmode="group",
+    )
+    st.plotly_chart(fig_m, use_container_width=True)
+
+    st.divider()
+    left_col, right_col = st.columns(2)
+
+    # ── 종목별 누적 수령 ──────────────────────────────────
+    with left_col:
+        st.markdown("#### 📊 종목별 누적 세후 수령액")
+        by_stock = (
+            act_df.groupby("종목명")["세후금액"].sum()
+            .sort_values(ascending=False).reset_index()
+        )
+        fig_s = go.Figure(go.Bar(
+            x=by_stock["세후금액"] / 10000,
+            y=by_stock["종목명"].apply(lambda x: x[:12]),
+            orientation="h",
+            marker_color="#87CEEB",
+            text=[f"{v/10000:.1f}만" for v in by_stock["세후금액"]],
+            textposition="outside",
+        ))
+        fig_s.update_layout(
+            height=300, paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(255,255,255,0.02)", font_color="white",
+            margin=dict(t=10, b=20, l=10, r=60),
+            xaxis=dict(title="만원"),
+        )
+        st.plotly_chart(fig_s, use_container_width=True)
+
+    # ── 계좌별 누적 수령 ──────────────────────────────────
+    with right_col:
+        st.markdown("#### 🏦 계좌별 누적 세후 수령액")
+        by_acc = (
+            act_df.groupby("계좌명")["세후금액"].sum()
+            .sort_values(ascending=False).reset_index()
+        )
+        colors_acc = ["#FFD700", "#87CEEB", "#FF4B4B"]
+        fig_a = go.Figure(go.Bar(
+            x=by_acc["계좌명"],
+            y=by_acc["세후금액"] / 10000,
+            marker_color=colors_acc[:len(by_acc)],
+            text=[f"{v/10000:.1f}만" for v in by_acc["세후금액"]],
+            textposition="outside",
+        ))
+        fig_a.update_layout(
+            height=300, paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(255,255,255,0.02)", font_color="white",
+            margin=dict(t=10, b=20, l=10, r=10),
+            yaxis=dict(title="만원"),
+        )
+        st.plotly_chart(fig_a, use_container_width=True)
+
+    # ── 투자원금 대비 배당수익률 (영리단단리) ───────────────
+    st.divider()
+    st.markdown("#### 📈 종목별 투자원금 대비 누적 배당수익률")
+    by_stock_full = act_df.groupby("종목명")["세후금액"].sum()
+    rows_yield = []
+    for _, row in full_df.drop_duplicates("종목명").iterrows():
+        name    = row["종목명"]
+        buy_amt = float(row.get("매입금액", 0))
+        net_div = float(by_stock_full.get(name, 0))
+        if buy_amt > 0:
+            rows_yield.append({
+                "종목명":      name,
+                "투자원금(만원)": buy_amt / 10000,
+                "세후수령(만원)": net_div / 10000,
+                "배당수익률(%)":  round(net_div / buy_amt * 100, 2),
+            })
+    if rows_yield:
+        yield_df = pd.DataFrame(rows_yield).sort_values("배당수익률(%)", ascending=False)
+        st.dataframe(
+            yield_df, hide_index=True, use_container_width=True,
+            column_config={
+                "투자원금(만원)": st.column_config.NumberColumn(format="%,.1f"),
+                "세후수령(만원)": st.column_config.NumberColumn(format="%,.1f"),
+                "배당수익률(%)":  st.column_config.ProgressColumn(
+                    format="%.2f%%", min_value=0, max_value=20,
+                ),
+            },
+        )
+
+    # ── 종목별 연간 배당 누계 ────────────────────────────────
+    st.divider()
+    st.markdown("#### 📆 종목별 연간 배당 누계")
+    if not act_df.empty:
+        pivot = act_df.pivot_table(
+            index="종목명", columns="연도",
+            values="세후금액", aggfunc="sum", fill_value=0,
+        ).reset_index()
+        # 합계 열 추가
+        year_cols = [c for c in pivot.columns if c != "종목명"]
+        pivot["합계"] = pivot[year_cols].sum(axis=1)
+        pivot = pivot.sort_values("합계", ascending=False)
+
+        # 만원 단위로 표시
+        for col in year_cols + ["합계"]:
+            pivot[col] = (pivot[col] / 10000).round(1)
+
+        col_cfg = {
+            str(yr): st.column_config.NumberColumn(f"{yr}년(만원)", format="%,.1f")
+            for yr in year_cols
+        }
+        col_cfg["합계"] = st.column_config.NumberColumn("합계(만원)", format="%,.1f")
+        col_cfg["종목명"] = st.column_config.TextColumn("종목명")
+        pivot.columns = [str(c) for c in pivot.columns]
+        st.dataframe(pivot, hide_index=True, use_container_width=True,
+                     column_config=col_cfg)
+
+    # ── 전체 실적 테이블 ──────────────────────────────────
+    with st.expander("📋 전체 입금 내역 보기"):
+        disp = act_df.copy()
+        disp["입금일"] = disp["입금일"].dt.strftime("%Y-%m-%d")
+        show_cols = ["입금일","계좌명","종목명","주당금액","수량","세전금액","세후금액"]
+        if "비고" in disp.columns:
+            show_cols.append("비고")
+        disp = disp[[c for c in show_cols if c in disp.columns]]
+        st.dataframe(
+            disp, hide_index=True, use_container_width=True,
+            column_config={
+                "주당금액": st.column_config.NumberColumn("주당금액(원)", format="%,.0f"),
+                "수량":     st.column_config.NumberColumn("수량(주)",    format="%,.0f"),
+                "세전금액": st.column_config.NumberColumn("세전금액(원)", format="%,.0f"),
+                "세후금액": st.column_config.NumberColumn("세후금액(원)", format="%,.0f"),
+            },
+        )
