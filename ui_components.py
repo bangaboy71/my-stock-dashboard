@@ -204,10 +204,22 @@ def _render_growth_chart(history_df: pd.DataFrame, sum_acc: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def _extract_months(schedule: list) -> list[int]:
+    """DIVIDEND_SCHEDULE 값에서 월 번호만 추출 (정수·튜플 모두 지원)"""
+    months = []
+    for entry in schedule:
+        if isinstance(entry, (list, tuple)) and len(entry) >= 1:
+            months.append(int(entry[0]))
+        else:
+            months.append(int(entry))
+    return months
+
+
 def _render_dividend_bar(full_df: pd.DataFrame):
     monthly = {m: 0 for m in range(1, 13)}
     for _, row in full_df.iterrows():
-        months = DIVIDEND_SCHEDULE.get(row["종목명"], [4])
+        sched  = DIVIDEND_SCHEDULE.get(row["종목명"], [(4, 0)])
+        months = _extract_months(sched)
         if row["예상배당금"] > 0:
             for m in months:
                 monthly[m] += row["예상배당금"] / len(months)
@@ -474,9 +486,10 @@ class AccountTabRenderer:
     def _build_dividend_bar(self):
         monthly = {m: 0 for m in range(1, 13)}
         for _, row in self.sub_df.iterrows():
-            sched = DIVIDEND_SCHEDULE.get(row["종목명"], [4])
-            for m in sched:
-                monthly[m] += row["예상배당금"] / len(sched)
+            sched  = DIVIDEND_SCHEDULE.get(row["종목명"], [(4, 0)])
+            months = _extract_months(sched)
+            for m in months:
+                monthly[m] += row["예상배당금"] / len(months)
         fig = go.Figure(go.Bar(
             x=[f"{m}월" for m in range(1, 13)],
             y=list(monthly.values()),
