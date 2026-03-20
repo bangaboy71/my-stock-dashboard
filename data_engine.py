@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup
 from config import (
     STOCK_CODES, DIVIDEND_SCHEDULE, DIVIDEND_PAY_DAY, DIVIDEND_TAX_RATE,
     KOSPI_BASE_DATE_DEFAULT, STOP_LOSS_PCT, TRAILING_PCT, TARGET_ALERT_PCT,
-    WS_PORTFOLIO, WS_TREND, WS_MEMO, WS_SNAPSHOT,
+    WS_PORTFOLIO, WS_TREND, WS_MEMO, WS_SNAPSHOT, WS_DIVIDEND,
 )
 
 
@@ -505,6 +505,69 @@ def save_memo(
     except Exception as e:
         return False, memo_df
 
+
+
+# ════════════════════════════════════════════════════════
+# 8-1. 배당·분배금 실적 로드
+# ════════════════════════════════════════════════════════
+
+def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    구글 시트 '배당실적' 탭에서 실제 입금 데이터 로드.
+
+    탭 헤더: 입금일 | 계좌명 | 종목명 | 주당금액 | 세후금액 | 비고
+    ─────────────────────────────────────────────────────
+    - 주당금액 × 수량(종목현황 탭 자동 조회) = 세전금액 자동 계산
+    - 세후금액이 비어있으면 세전금액 × (1 - 0.154) 자동 계산
+    - portfolio_df: 수량 조회용 종목현황 DataFrame (없으면 수량=0)
+    - 탭 없거나 오류 시 빈 DataFrame 반환
+    """
+    try:
+        df = conn.read(worksheet=WS_DIVIDEND, ttl=0)
+        if df.empty or "입금일" not in df.columns:
+            return pd.DataFrame()
+
+        # 숫자 변환
+        for col in ["주당금액", "세후금액"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", "").str.replace("-", ""),
+                    errors="coerce"
+                ).fillna(0)
+        # 하위 호환: 기존 '세전금액' 컬럼도 지원
+        if "세전금액" in df.columns and "주당금액" not in df.columns:
+            df = df.rename(columns={"세전금액": "주당금액"})
+
+        # ── 수량 조회 (종목현황 탭 기준) ─────────────────────
+        # 계좌명 + 종목명으로 매칭해서 수량 가져오기
+        def _get_shares(row) -> float:
+            if portfolio_df is None or portfolio_df.empty:
+                return 0.0
+            mask = (
+                (portfolio_df["종목명"] == row["종목명"]) &
+                (portfolio_df["계좌명"] == row["계좌명"])
+            )
+            matched = portfolio_df.loc[mask, "수량"]
+            return float(matched.values[0]) if not matched.empty else 0.0
+
+        df["수량"]   = df.apply(_get_shares, axis=1)
+        df["세전금액"] = df["주당금액"] * df["수량"]
+
+        # ── 세후금액 자동 계산 ────────────────────────────────
+        if "세후금액" not in df.columns:
+            df["세후금액"] = 0.0
+        mask = df["세후금액"] == 0
+        df.loc[mask, "세후금액"] = df.loc[mask, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
+
+        # ── 날짜 변환 ─────────────────────────────────────────
+        df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
+        df = df.dropna(subset=["입금일"]).sort_values("입금일")
+        df["연도"] = df["입금일"].dt.year
+        df["월"]   = df["입금일"].dt.month
+        df["연월"] = df["입금일"].dt.strftime("%Y-%m")
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 # ════════════════════════════════════════════════════════
 # 9. 내보내기
