@@ -176,6 +176,7 @@ WS_PORTFOLIO = "종목 현황"
 WS_TREND     = "trend"
 WS_MEMO      = "메모"
 WS_SNAPSHOT  = "snapshot"   # 날짜별 팩트 수치 스냅샷 시트
+WS_DIVIDEND  = "배당실적"     # 실제 배당·분배금 입금 실적
 
 # ── CSS 스타일 ───────────────────────────────────────────
 APP_CSS = """
@@ -200,6 +201,4 @@ APP_CSS = """
     border-bottom: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.6);
 }
 .research-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-.target-val { color: #FFD700; font-weight: bold; }
-</style>
-"""
+.target-val { color:
