@@ -21,6 +21,7 @@ from data_engine import (
     resolve_settings,
 )
 from ui_components import (
+    render_dividend_actual_tab,
     render_market_hud,
     render_summary_tab,
     render_account_tab,
@@ -117,7 +118,7 @@ render_market_hud(m_status)
 # ════════════════════════════════════════════════════════
 # 5. 메인 탭
 # ════════════════════════════════════════════════════════
-tab_labels = ["📊 총괄 현황"] + [a["label"] for a in config.ACCOUNTS]
+tab_labels = ["📊 총괄 현황"] + [a["label"] for a in config.ACCOUNTS] + ["💸 배당 실적"]
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
@@ -133,6 +134,10 @@ for idx, acc in enumerate(config.ACCOUNTS):
         conn       = conn,
         now_kst    = now_kst,
     )
+
+# 배당 실적 탭 (마지막 탭)
+with tabs[-1]:
+    render_dividend_actual_tab(full_df, conn, now_kst)
 
 # ════════════════════════════════════════════════════════
 # 6. 사이드바
