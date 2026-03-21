@@ -1137,16 +1137,19 @@ def render_dividend_actual_tab(
     st.divider()
     st.markdown("#### 📈 종목별 투자원금 대비 누적 배당수익률")
     by_stock_full = act_df.groupby("종목명")["세후금액"].sum()
+
+    # 종목명 기준 전체 계좌 매입금액 합산 (drop_duplicates 사용 시 다계좌 누락 방지)
+    buy_by_stock  = full_df.groupby("종목명")["매입금액"].sum()
+
     rows_yield = []
-    for _, row in full_df.drop_duplicates("종목명").iterrows():
-        name    = row["종목명"]
-        buy_amt = float(row.get("매입금액", 0))
+    for name in buy_by_stock.index:
+        buy_amt = float(buy_by_stock.get(name, 0))
         net_div = float(by_stock_full.get(name, 0))
         if buy_amt > 0:
             rows_yield.append({
-                "종목명":      name,
-                "투자원금(만원)": buy_amt / 10000,
-                "세후수령(만원)": net_div / 10000,
+                "종목명":        name,
+                "투자원금(만원)": round(buy_amt / 10000, 1),
+                "세후수령(만원)": round(net_div / 10000, 1),
                 "배당수익률(%)":  round(net_div / buy_amt * 100, 2),
             })
     if rows_yield:
