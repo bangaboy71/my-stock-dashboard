@@ -554,36 +554,62 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
             columns=["계좌명","종목명","보유수량","평균단가","총매입금액","실현손익"]
         )
 
-    results = []
-    groups  = trades_df.groupby(["계좌명","종목명"])
+    results      = []
+    sell_records = []   # 매도 상세 내역
+    groups       = trades_df.groupby(["계좌명","종목명"])
 
     for (acc, nm), grp in groups:
         qty_hold   = 0.0
-        cost_total = 0.0   # 총 매입금액 (이동평균 기준)
-        realized   = 0.0   # 실현 손익
+        cost_total = 0.0
+        realized   = 0.0
+        first_buy_date = None
 
         for _, row in grp.iterrows():
-            q     = float(row["수량"])
-            price = float(row["단가"])
-            fee   = float(row.get("수수료", 0) or 0)
-            구분  = row["구분"]
+            q      = float(row["수량"])
+            price  = float(row["단가"])
+            fee    = float(row.get("수수료", 0) or 0)
+            구분   = row["구분"]
+            dt     = row.get("날짜", None)
 
             if 구분 == "매수":
+                if first_buy_date is None and pd.notna(dt):
+                    first_buy_date = dt
                 cost_total += q * price + fee
                 qty_hold   += q
             elif 구분 == "매도" and qty_hold > 0:
-                # 이동평균 매입단가 기준 실현손익 계산
-                avg = cost_total / qty_hold if qty_hold > 0 else 0
-                realized  += (price - avg) * min(q, qty_hold) - fee
-                sold_cost  = avg * min(q, qty_hold)
+                avg      = cost_total / qty_hold if qty_hold > 0 else 0
+                sold_q   = min(q, qty_hold)
+                gain     = (price - avg) * sold_q - fee
+                realized += gain
+                sold_cost = avg * sold_q
                 cost_total = max(0, cost_total - sold_cost)
-                qty_hold   = max(0, qty_hold - q)
+                qty_hold   = max(0, qty_hold - sold_q)
 
-        if qty_hold > 0:
-            avg_cost = cost_total / qty_hold
-        else:
-            avg_cost   = 0.0
-            cost_total = 0.0
+                # 보유기간 계산
+                hold_days = None
+                if first_buy_date is not None and pd.notna(dt):
+                    try:
+                        hold_days = (pd.Timestamp(dt) - pd.Timestamp(first_buy_date)).days
+                    except Exception:
+                        hold_days = None
+
+                sell_records.append({
+                    "매도일":    pd.Timestamp(dt).strftime("%Y-%m-%d") if pd.notna(dt) else "",
+                    "계좌명":    acc,
+                    "종목명":    nm,
+                    "매도수량":  int(sold_q),
+                    "매입단가":  round(avg),
+                    "매도단가":  int(price),
+                    "매도금액":  int(price * sold_q),
+                    "실현손익":  round(gain),
+                    "수익률(%)": round((price / avg - 1) * 100, 2) if avg > 0 else 0,
+                    "보유일수":  hold_days,
+                    "수수료":    int(fee),
+                })
+
+        avg_cost = cost_total / qty_hold if qty_hold > 0 else 0.0
+        if qty_hold <= 0:
+            avg_cost = cost_total = 0.0
 
         results.append({
             "계좌명":    acc,
@@ -594,7 +620,14 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
             "실현손익":  round(realized),
         })
 
-    return pd.DataFrame(results)
+    avg_df  = pd.DataFrame(results)
+    sell_df = pd.DataFrame(sell_records) if sell_records else pd.DataFrame(
+        columns=["매도일","계좌명","종목명","매도수량","매입단가","매도단가",
+                 "매도금액","실현손익","수익률(%)","보유일수","수수료"]
+    )
+    # sell_df를 avg_df의 속성으로 전달 (호출부 호환성 유지)
+    avg_df.attrs["sell_df"] = sell_df
+    return avg_df
 
 
 def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
