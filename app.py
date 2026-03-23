@@ -7,6 +7,7 @@ app.py — 가족 자산 관제탑 메인 진입점
 """
 
 import streamlit as st
+import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 
 import config
