@@ -973,6 +973,153 @@ def _render_record_manager(
 # 배당·분배금 실적 탭
 # ════════════════════════════════════════════════════════
 
+
+
+def render_trades_tab(
+    trades_df: pd.DataFrame,
+    avg_cost_df: pd.DataFrame,
+    portfolio_df: pd.DataFrame,
+):
+    """📋 거래내역 탭 — 매수/매도 이력 + 평균단가 + 실현손익"""
+    st.markdown("#### 📋 거래내역 & 평균단가 관리")
+
+    # ── 시트 미연동 안내 ─────────────────────────────────
+    if trades_df.empty:
+        st.info(
+            "**구글 시트에 `거래내역` 탭을 추가하고 아래 헤더로 구성하세요.**\n\n"
+            "```\n날짜 | 계좌명 | 종목명 | 구분 | 수량 | 단가 | 수수료 | 메모\n```\n\n"
+            "| 날짜 | 계좌명 | 종목명 | 구분 | 수량 | 단가 | 수수료 | 메모 |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            "| 2026-01-15 | ISA | 삼성전자 | 매수 | 100 | 60000 | 0 | 최초 매수 |\n"
+            "| 2026-03-20 | ISA | 삼성전자 | 매수 | 50 | 55000 | 0 | 추가 매입 |\n"
+            "| 2026-03-20 | ISA | 삼성전자 | 매도 | 30 | 62000 | 0 | 일부 매도 |\n\n"
+            "거래내역이 있는 종목은 **수량·매입단가가 자동 계산**되어 대시보드에 반영됩니다."
+        )
+        # 평균단가 계산기 (시트 없어도 사용 가능)
+        st.divider()
+        st.markdown("**💹 추가매입 평균단가 계산기**")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            _cur_qty   = st.number_input("현재 보유 수량", min_value=0, value=100, step=1)
+            _cur_price = st.number_input("현재 평균단가 (원)", min_value=0, value=60000, step=100)
+        with cc2:
+            _add_qty   = st.number_input("추가 매입 수량", min_value=0, value=50, step=1)
+            _add_price = st.number_input("추가 매입 단가 (원)", min_value=0, value=55000, step=100)
+        if _cur_qty + _add_qty > 0:
+            _new_qty   = _cur_qty + _add_qty
+            _new_avg   = (_cur_qty*_cur_price + _add_qty*_add_price) / _new_qty
+            _add_amt   = _add_qty * _add_price
+            ca, cb, cc = st.columns(3)
+            ca.metric("합산 수량",  f"{_new_qty:,}주")
+            cb.metric("새 평균단가", f"{_new_avg:,.0f}원",
+                      delta=f"{_new_avg-_cur_price:+,.0f}원",
+                      delta_color="inverse" if _new_avg > _cur_price else "normal")
+            cc.metric("추가 투자금", f"{_add_amt:,.0f}원")
+            st.caption(f"👉 시트에 수량: {_new_qty:,} / 매입단가: {_new_avg:,.0f} 으로 수정하세요.")
+        return
+
+    # ── 요약 카드 ────────────────────────────────────────
+    _total_buy  = trades_df[trades_df["구분"]=="매수"]["수량"].mul(
+                      trades_df[trades_df["구분"]=="매수"]["단가"]).sum()
+    _total_sell = trades_df[trades_df["구분"]=="매도"]["수량"].mul(
+                      trades_df[trades_df["구분"]=="매도"]["단가"]).sum()
+    _realized   = avg_cost_df["실현손익"].sum() if not avg_cost_df.empty else 0
+    _hold_cnt   = (avg_cost_df["보유수량"] > 0).sum() if not avg_cost_df.empty else 0
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("총 매수금액", f"{_total_buy:,.0f}원")
+    s2.metric("총 매도금액", f"{_total_sell:,.0f}원")
+    s3.metric("실현 손익",   f"{_realized:+,.0f}원",
+              delta_color="normal" if _realized >= 0 else "inverse")
+    s4.metric("현재 보유 종목", f"{_hold_cnt}개")
+
+    st.divider()
+
+    # ── 계좌·종목별 평균단가 현황 ───────────────────────
+    st.markdown("**💼 계좌별 평균단가 현황** (거래내역 자동 계산)")
+    if not avg_cost_df.empty:
+        # 현재가 병합
+        if not portfolio_df.empty and "현재가" in portfolio_df.columns:
+            price_map = portfolio_df.set_index(["계좌명","종목명"])["현재가"].to_dict()
+            avg_cost_df["현재가"] = avg_cost_df.apply(
+                lambda r: price_map.get((r["계좌명"],r["종목명"]), 0), axis=1
+            )
+            avg_cost_df["평가금액"] = avg_cost_df["보유수량"] * avg_cost_df["현재가"]
+            avg_cost_df["미실현손익"] = avg_cost_df["평가금액"] - avg_cost_df["총매입금액"]
+            avg_cost_df["수익률(%)"] = (
+                avg_cost_df["미실현손익"] / avg_cost_df["총매입금액"].replace(0, float("nan")) * 100
+            ).fillna(0).round(2)
+
+        disp_cols = ["계좌명","종목명","보유수량","평균단가","총매입금액"]
+        if "현재가" in avg_cost_df.columns:
+            disp_cols += ["현재가","평가금액","미실현손익","수익률(%)"]
+        disp_cols.append("실현손익")
+
+        st.dataframe(
+            avg_cost_df[disp_cols],
+            hide_index=True, use_container_width=True,
+            column_config={
+                "보유수량":    st.column_config.NumberColumn(format="%,.0f"),
+                "평균단가":    st.column_config.NumberColumn(format="%,.0f"),
+                "총매입금액":  st.column_config.NumberColumn(format="%,.0f"),
+                "현재가":      st.column_config.NumberColumn(format="%,.0f"),
+                "평가금액":    st.column_config.NumberColumn(format="%,.0f"),
+                "미실현손익":  st.column_config.NumberColumn(format="%+,.0f"),
+                "수익률(%)":   st.column_config.NumberColumn(format="%+.2f%%"),
+                "실현손익":    st.column_config.NumberColumn(format="%+,.0f"),
+            },
+        )
+
+    # ── 전체 거래내역 ────────────────────────────────────
+    st.divider()
+    st.markdown("**📅 전체 거래내역**")
+
+    # 필터
+    f1, f2, f3 = st.columns(3)
+    _acc_opts  = ["전체"] + sorted(trades_df["계좌명"].unique().tolist())
+    _stk_opts  = ["전체"] + sorted(trades_df["종목명"].unique().tolist())
+    _type_opts = ["전체", "매수", "매도"]
+    _sel_acc   = f1.selectbox("계좌", _acc_opts,  key="tr_acc",  label_visibility="collapsed")
+    _sel_stk   = f2.selectbox("종목", _stk_opts,  key="tr_stk",  label_visibility="collapsed")
+    _sel_type  = f3.selectbox("구분", _type_opts, key="tr_type", label_visibility="collapsed")
+
+    disp_tr = trades_df.copy()
+    if _sel_acc  != "전체": disp_tr = disp_tr[disp_tr["계좌명"]==_sel_acc]
+    if _sel_stk  != "전체": disp_tr = disp_tr[disp_tr["종목명"]==_sel_stk]
+    if _sel_type != "전체": disp_tr = disp_tr[disp_tr["구분"]==_sel_type]
+
+    disp_tr["금액"] = disp_tr["수량"] * disp_tr["단가"]
+    disp_tr["날짜"] = disp_tr["날짜"].dt.strftime("%Y-%m-%d")
+
+    st.dataframe(
+        disp_tr[["날짜","계좌명","종목명","구분","수량","단가","금액","수수료"] +
+                (["메모"] if "메모" in disp_tr.columns else [])].sort_values("날짜", ascending=False),
+        hide_index=True, use_container_width=True,
+        column_config={
+            "수량":   st.column_config.NumberColumn(format="%,.0f"),
+            "단가":   st.column_config.NumberColumn(format="%,.0f"),
+            "금액":   st.column_config.NumberColumn(format="%,.0f"),
+            "수수료": st.column_config.NumberColumn(format="%,.0f"),
+        },
+    )
+
+    # ── 추가매입 평균단가 계산기 ─────────────────────────
+    with st.expander("💹 추가매입 평균단가 계산기"):
+        cc1, cc2 = st.columns(2)
+        _cur_qty   = cc1.number_input("현재 보유 수량",    min_value=0, value=100, step=1,  key="calc_cq")
+        _cur_price = cc1.number_input("현재 평균단가 (원)", min_value=0, value=60000, step=100, key="calc_cp")
+        _add_qty   = cc2.number_input("추가 매입 수량",    min_value=0, value=50,  step=1,  key="calc_aq")
+        _add_price = cc2.number_input("추가 매입 단가 (원)", min_value=0, value=55000, step=100, key="calc_ap")
+        if _cur_qty + _add_qty > 0:
+            _new_qty = _cur_qty + _add_qty
+            _new_avg = (_cur_qty*_cur_price + _add_qty*_add_price) / _new_qty
+            ra, rb, rc = st.columns(3)
+            ra.metric("합산 수량",   f"{_new_qty:,}주")
+            rb.metric("새 평균단가", f"{_new_avg:,.0f}원",
+                      delta=f"{_new_avg-_cur_price:+,.0f}원",
+                      delta_color="inverse" if _new_avg > _cur_price else "normal")
+            rc.metric("추가 투자금", f"{_add_qty*_add_price:,.0f}원")
+
 def render_dividend_actual_tab(
     full_df: pd.DataFrame,
     conn,
