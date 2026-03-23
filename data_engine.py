@@ -600,9 +600,14 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
 def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
                                avg_df: pd.DataFrame) -> pd.DataFrame:
     """
-    calc_avg_cost 결과를 종목현황 DataFrame에 병합.
-    거래내역이 있는 종목은 수량·매입단가를 거래내역 기준으로 덮어씀.
-    없는 종목은 기존 시트값 유지.
+    거래내역(추가분) + 종목현황 시트(기존분) 합산 병합.
+
+    원칙:
+    - 거래내역은 항상 '추가분만' 입력 기준
+    - 시트 기존 수량·매입단가 + 거래내역 추가분을 합산
+    - 합산 수량 = 시트 수량 + 거래내역 순매수(매수-매도) 수량
+    - 합산 평균단가 = (시트 매입금액 + 거래내역 매입금액) / 합산 수량
+    - 매도 발생 시: 합산 수량에서 차감, 실현손익은 거래내역 탭에서 별도 표시
     """
     if avg_df.empty:
         return portfolio_df
@@ -610,9 +615,35 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
     df = portfolio_df.copy()
     for _, row in avg_df.iterrows():
         mask = (df["계좌명"] == row["계좌명"]) & (df["종목명"] == row["종목명"])
-        if mask.any() and row["보유수량"] > 0:
-            df.loc[mask, "수량"]    = row["보유수량"]
-            df.loc[mask, "매입단가"] = row["평균단가"]
+        if not mask.any():
+            continue
+
+        trade_qty_net = float(row["보유수량"])  # 거래내역 순매수 수량 (매수-매도)
+        trade_cost    = float(row["총매입금액"]) # 거래내역 총매입금액
+        sheet_qty     = float(df.loc[mask, "수량"].iloc[0])
+        sheet_price   = float(df.loc[mask, "매입단가"].iloc[0])
+        sheet_cost    = sheet_qty * sheet_price
+
+        # ── 합산 수량·평균단가 계산 ──────────────────────
+        new_qty = sheet_qty + trade_qty_net   # 시트 + 거래내역 순매수
+
+        if new_qty <= 0:
+            # 전량 매도된 경우 → 수량 0, 단가 유지
+            df.loc[mask, "수량"] = 0
+            continue
+
+        if trade_qty_net > 0 and trade_cost > 0:
+            # 추가 매수분 반영: 가중평균단가 재계산
+            new_avg = (sheet_cost + trade_cost) / new_qty
+        elif trade_qty_net < 0:
+            # 일부 매도: 평균단가는 유지, 수량만 차감
+            new_avg = sheet_price
+        else:
+            new_avg = sheet_price
+
+        df.loc[mask, "수량"]     = new_qty
+        df.loc[mask, "매입단가"] = round(new_avg)
+
     return df
 
 def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
