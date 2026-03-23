@@ -613,13 +613,42 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
         return portfolio_df
 
     df = portfolio_df.copy()
+
+    # 컬럼명 정규화 — 시트에 따라 "계좌명" 대신 다른 이름일 수 있음
+    # 계좌 컬럼 자동 감지
+    acc_col = None
+    for candidate in ["계좌명", "계좌", "account", "Account"]:
+        if candidate in df.columns:
+            acc_col = candidate
+            break
+
+    # avg_df 계좌명 컬럼도 정규화
+    avg_acc_col = "계좌명" if "계좌명" in avg_df.columns else "계좌"
+
+    if acc_col is None:
+        # 계좌 컬럼 없으면 종목명만으로 매칭
+        use_acc = False
+    else:
+        use_acc = True
+
     for _, row in avg_df.iterrows():
-        mask = (df["계좌명"] == row["계좌명"]) & (df["종목명"] == row["종목명"])
+        row_acc = str(row.get(avg_acc_col, "")).strip()
+        row_nm  = str(row.get("종목명", "")).strip()
+
+        if use_acc:
+            mask = (
+                df[acc_col].astype(str).str.strip() == row_acc
+            ) & (
+                df["종목명"].astype(str).str.strip() == row_nm
+            )
+        else:
+            mask = df["종목명"].astype(str).str.strip() == row_nm
+
         if not mask.any():
             continue
 
-        trade_qty_net = float(row["보유수량"])  # 거래내역 순매수 수량 (매수-매도)
-        trade_cost    = float(row["총매입금액"]) # 거래내역 총매입금액
+        trade_qty_net = float(row.get("보유수량", 0))
+        trade_cost    = float(row.get("총매입금액", 0))
         sheet_qty     = float(df.loc[mask, "수량"].iloc[0])
         sheet_price   = float(df.loc[mask, "매입단가"].iloc[0])
         sheet_cost    = sheet_qty * sheet_price
@@ -643,6 +672,8 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
 
         df.loc[mask, "수량"]     = new_qty
         df.loc[mask, "매입단가"] = round(new_avg)
+        # 매입금액도 즉시 재계산 (process_portfolio 전 미리 반영)
+        df.loc[mask, "매입금액"] = new_qty * round(new_avg)
 
     return df
 
