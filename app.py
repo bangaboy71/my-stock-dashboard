@@ -11,6 +11,7 @@ from streamlit_gsheets import GSheetsConnection
 
 import config
 from data_engine import (
+    load_trades, calc_avg_cost, merge_trades_to_portfolio,
     get_now_kst,
     get_market_status,
     get_stock_data_parallel,
@@ -22,6 +23,7 @@ from data_engine import (
 )
 from ui_components import (
     render_dividend_actual_tab,
+    render_trades_tab,
     render_market_hud,
     render_summary_tab,
     render_account_tab,
@@ -50,6 +52,13 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
     st.write("📋 구글 시트 연결 중...")
     try:
         full_df, history_df, memo_df = load_sheets(conn)
+
+
+        # 거래내역 로드 → 평균단가 자동 계산 → 종목현황에 병합
+        trades_df = load_trades(conn)
+        avg_cost_df = calc_avg_cost(trades_df)
+        if not avg_cost_df.empty:
+            full_df = merge_trades_to_portfolio(full_df, avg_cost_df)
     except Exception as e:
         st.error(f"⚠️ 구글 시트 연결 오류: {e}")
         st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
@@ -118,7 +127,7 @@ render_market_hud(m_status)
 # ════════════════════════════════════════════════════════
 # 5. 메인 탭
 # ════════════════════════════════════════════════════════
-tab_labels = ["📊 총괄 현황"] + [a["label"] for a in config.ACCOUNTS] + ["💸 배당 실적"]
+tab_labels = ["📊 총괄 현황"] + [a["label"] for a in config.ACCOUNTS] + ["💸 배당 실적", "📋 거래내역"]
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
@@ -138,6 +147,9 @@ for idx, acc in enumerate(config.ACCOUNTS):
 # 배당 실적 탭 (마지막 탭)
 with tabs[-1]:
     render_dividend_actual_tab(full_df, conn, now_kst)
+
+with tabs[-1]:
+    render_trades_tab(trades_df, avg_cost_df, full_df)
 
 # ════════════════════════════════════════════════════════
 # 6. 사이드바
