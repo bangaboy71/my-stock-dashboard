@@ -511,6 +511,110 @@ def save_memo(
 # 8-1. 배당·분배금 실적 로드
 # ════════════════════════════════════════════════════════
 
+
+
+def load_trades(conn) -> pd.DataFrame:
+    """
+    구글 시트 '거래내역' 탭 로드.
+    헤더: 날짜 | 계좌명 | 종목명 | 구분 | 수량 | 단가 | 수수료 | 메모
+    구분: 매수 / 매도
+    반환: 정렬된 DataFrame (날짜 오름차순)
+    """
+    try:
+        from config import WS_TRADES
+        df = conn.read(worksheet=WS_TRADES, ttl=0)
+        if df.empty or "종목명" not in df.columns:
+            return pd.DataFrame()
+        # 타입 정규화
+        for col in ["수량", "단가", "수수료"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", ""),
+                    errors="coerce"
+                ).fillna(0)
+        df["날짜"]  = pd.to_datetime(df["날짜"], errors="coerce")
+        df["구분"]  = df["구분"].astype(str).str.strip()
+        df["계좌명"] = df["계좌명"].astype(str).str.strip()
+        df["종목명"] = df["종목명"].astype(str).str.strip()
+        df = df.dropna(subset=["날짜"]).sort_values("날짜").reset_index(drop=True)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    거래내역 DataFrame → 계좌별·종목별 현재 보유수량·평균단가·총매입금액 계산.
+    FIFO 방식이 아닌 이동평균법(총매입금액/보유수량) 적용.
+
+    반환 컬럼: 계좌명 | 종목명 | 보유수량 | 평균단가 | 총매입금액 | 실현손익
+    """
+    if trades_df.empty:
+        return pd.DataFrame(
+            columns=["계좌명","종목명","보유수량","평균단가","총매입금액","실현손익"]
+        )
+
+    results = []
+    groups  = trades_df.groupby(["계좌명","종목명"])
+
+    for (acc, nm), grp in groups:
+        qty_hold   = 0.0
+        cost_total = 0.0   # 총 매입금액 (이동평균 기준)
+        realized   = 0.0   # 실현 손익
+
+        for _, row in grp.iterrows():
+            q     = float(row["수량"])
+            price = float(row["단가"])
+            fee   = float(row.get("수수료", 0) or 0)
+            구분  = row["구분"]
+
+            if 구분 == "매수":
+                cost_total += q * price + fee
+                qty_hold   += q
+            elif 구분 == "매도" and qty_hold > 0:
+                # 이동평균 매입단가 기준 실현손익 계산
+                avg = cost_total / qty_hold if qty_hold > 0 else 0
+                realized  += (price - avg) * min(q, qty_hold) - fee
+                sold_cost  = avg * min(q, qty_hold)
+                cost_total = max(0, cost_total - sold_cost)
+                qty_hold   = max(0, qty_hold - q)
+
+        if qty_hold > 0:
+            avg_cost = cost_total / qty_hold
+        else:
+            avg_cost   = 0.0
+            cost_total = 0.0
+
+        results.append({
+            "계좌명":    acc,
+            "종목명":    nm,
+            "보유수량":  qty_hold,
+            "평균단가":  round(avg_cost),
+            "총매입금액": round(cost_total),
+            "실현손익":  round(realized),
+        })
+
+    return pd.DataFrame(results)
+
+
+def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
+                               avg_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    calc_avg_cost 결과를 종목현황 DataFrame에 병합.
+    거래내역이 있는 종목은 수량·매입단가를 거래내역 기준으로 덮어씀.
+    없는 종목은 기존 시트값 유지.
+    """
+    if avg_df.empty:
+        return portfolio_df
+
+    df = portfolio_df.copy()
+    for _, row in avg_df.iterrows():
+        mask = (df["계좌명"] == row["계좌명"]) & (df["종목명"] == row["종목명"])
+        if mask.any() and row["보유수량"] > 0:
+            df.loc[mask, "수량"]    = row["보유수량"]
+            df.loc[mask, "매입단가"] = row["평균단가"]
+    return df
+
 def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
     """
     구글 시트 '배당실적' 탭에서 실제 입금 데이터 로드.
