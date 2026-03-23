@@ -144,10 +144,11 @@ for idx, acc in enumerate(config.ACCOUNTS):
         now_kst    = now_kst,
     )
 
-# 배당 실적 탭 (마지막 탭)
-with tabs[-1]:
+# 배당 실적 탭
+with tabs[-2]:
     render_dividend_actual_tab(full_df, conn, now_kst)
 
+# 거래내역 탭
 with tabs[-1]:
     render_trades_tab(trades_df, avg_cost_df, full_df)
 
