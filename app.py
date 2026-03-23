@@ -48,6 +48,10 @@ conn    = st.connection("gsheets", type=GSheetsConnection)
 # ════════════════════════════════════════════════════════
 with st.status("📡 데이터를 불러오는 중...", expanded=True) as status:
 
+    sell_df   = pd.DataFrame()   # 편매 실적 (초기화)
+    trades_df = pd.DataFrame()
+    avg_cost_df = pd.DataFrame()
+
     # STEP 1 — 구글 시트 + 설정 로드
     st.write("📋 구글 시트 연결 중...")
     try:
@@ -57,6 +61,7 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
         # 거래내역 로드 → 평균단가 자동 계산 → 종목현황에 병합
         trades_df = load_trades(conn)
         avg_cost_df = calc_avg_cost(trades_df)
+        sell_df     = avg_cost_df.attrs.get("sell_df", __import__("pandas").DataFrame())
         if not avg_cost_df.empty:
             full_df = merge_trades_to_portfolio(full_df, avg_cost_df)
             st.write(f"📋 거래내역 반영: {len(avg_cost_df)}건 처리 완료")
@@ -128,7 +133,7 @@ render_market_hud(m_status)
 # ════════════════════════════════════════════════════════
 # 5. 메인 탭
 # ════════════════════════════════════════════════════════
-tab_labels = ["📊 총괄 현황"] + [a["label"] for a in config.ACCOUNTS] + ["💸 배당 실적", "📋 거래내역"]
+tab_labels = ["📊 총괄 현황"] + [a["label"] for a in config.ACCOUNTS] + ["💸 배당 실적", "📋 편매 실적"]
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
@@ -151,7 +156,7 @@ with tabs[-2]:
 
 # 거래내역 탭
 with tabs[-1]:
-    render_trades_tab(trades_df, avg_cost_df, full_df)
+    render_trades_tab(trades_df, avg_cost_df, full_df, sell_df)
 
 # ════════════════════════════════════════════════════════
 # 6. 사이드바
