@@ -59,6 +59,7 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
         avg_cost_df = calc_avg_cost(trades_df)
         if not avg_cost_df.empty:
             full_df = merge_trades_to_portfolio(full_df, avg_cost_df)
+            st.write(f"📋 거래내역 반영: {len(avg_cost_df)}건 처리 완료")
     except Exception as e:
         st.error(f"⚠️ 구글 시트 연결 오류: {e}")
         st.info("API 할당량 초과일 수 있습니다. 1분 후 새로고침(F5)을 눌러주세요.")
