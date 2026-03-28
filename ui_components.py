@@ -59,18 +59,20 @@ def hex_to_rgba(hex_color: str, alpha: float = 0.08) -> str:
 # ════════════════════════════════════════════════════════
 
 def render_market_hud(m_status: dict):
-    """KOSPI·KOSDAQ·USD/KRW·거래량 4칸 HUD 렌더링"""
-    titles = ["KOSPI", "KOSDAQ", "USD/KRW", "MARKET VOL"]
-    keys   = ["KOSPI", "KOSDAQ", "USD/KRW", "VOLUME"]
+    """KOSPI·KOSDAQ·USD/KRW·미국 10년물 국채금리 4칸 HUD 렌더링"""
+    titles = ["KOSPI", "KOSDAQ", "USD/KRW", "🇺🇸 US10Y"]
+    keys   = ["KOSPI", "KOSDAQ", "USD/KRW", "US10Y"]
     cols   = st.columns(4)
     for i, col in enumerate(cols):
         with col:
-            d = m_status[keys[i]]
-            border = (
-                f"{d['color']}44" if keys[i] != "VOLUME"
-                else "rgba(255,255,255,0.1)"
+            d         = m_status[keys[i]]
+            border    = f"{d['color']}44"
+            txt_color = d["color"]
+            # US10Y: 숫자값에 % 단위 표시
+            val_display = (
+                f"{d['val']}%" if keys[i] == "US10Y" and d["val"] != "-"
+                else d["val"]
             )
-            txt_color = d["color"] if keys[i] != "VOLUME" else "#aaa"
             st.markdown(f"""
                 <div style='text-align:center; padding:15px; border-radius:12px;
                             background:rgba(255,255,255,0.03); border:1px solid {border};'>
@@ -78,7 +80,7 @@ def render_market_hud(m_status: dict):
                         {titles[i]}
                     </div>
                     <div style='color:{d["color"]}; font-size:1.8rem; font-weight:bold; line-height:1.2;'>
-                        {d["val"]}
+                        {val_display}
                     </div>
                     <div style='color:{txt_color}; font-size:1.0rem; font-weight:500; margin-top:5px;'>
                         {d["pct"]}
