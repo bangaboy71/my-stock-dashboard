@@ -36,12 +36,12 @@ def get_now_kst() -> datetime:
 # ════════════════════════════════════════════════════════
 
 def get_market_status() -> dict:
-    """KOSPI·KOSDAQ·USD/KRW·거래량 실시간 수집"""
+    """KOSPI·KOSDAQ·USD/KRW·미국 10년물 국채금리 실시간 수집"""
     data = {
-        "KOSPI":   {"val": "-", "pct": "0.00%", "color": "#ffffff"},
-        "KOSDAQ":  {"val": "-", "pct": "0.00%", "color": "#ffffff"},
-        "USD/KRW": {"val": "-", "pct": "0원",   "color": "#ffffff"},
-        "VOLUME":  {"val": "-", "pct": "천주",  "color": "#ffffff"},
+        "KOSPI":   {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
+        "KOSDAQ":  {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
+        "USD/KRW": {"val": "-", "pct": "0원",    "color": "#ffffff"},
+        "US10Y":   {"val": "-", "pct": "0.00%p", "color": "#ffffff"},
     }
     header = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.naver.com/"}
     try:
@@ -66,12 +66,6 @@ def get_market_status() -> dict:
                     data[code]["color"] = "#87CEEB"
                 data[code]["pct"] = raw.strip()
 
-            if code == "KOSPI":
-                vol_el = soup.select_one("#quant")
-                if vol_el:
-                    data["VOLUME"]["val"] = vol_el.get_text(strip=True)
-                    data["VOLUME"]["pct"] = "천주"
-
         ex_res = requests.get(
             "https://finance.naver.com/marketindex/", headers=header, timeout=5
         )
@@ -90,6 +84,23 @@ def get_market_status() -> dict:
             data["USD/KRW"]["pct"] = f"{sign}{ex_change}원"
     except Exception:
         pass
+
+    # US10Y — 네이버 스크래핑과 완전히 독립된 별도 try/except
+    # 금리 상승 = 빨강(#FF4B4B) / 하락 = 파랑(#87CEEB) — 기존 색상 규칙 유지
+    try:
+        import yfinance as yf
+        tnx  = yf.Ticker("^TNX")
+        hist = tnx.history(period="5d")
+        if len(hist) >= 2:
+            cur   = float(hist["Close"].iloc[-1])
+            prev  = float(hist["Close"].iloc[-2])
+            delta = cur - prev
+            data["US10Y"]["val"]   = f"{cur:.2f}"
+            data["US10Y"]["pct"]   = f"{delta:+.2f}%p"
+            data["US10Y"]["color"] = "#FF4B4B" if delta > 0 else "#87CEEB"
+    except Exception:
+        pass
+
     return data
 
 
