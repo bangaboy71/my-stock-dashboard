@@ -43,16 +43,8 @@ st.markdown(config.APP_CSS, unsafe_allow_html=True)
 # ════════════════════════════════════════════════════════
 now_kst = get_now_kst()
 conn    = st.connection("gsheets", type=GSheetsConnection)
-
-# ── sheets_pipeline SheetsWriter 초기화 (사이드바 저장 버튼용) ──
-# conn 에서 gspread 클라이언트를 추출해 세션 전역으로 보관
-# 실패해도 앱 전체가 멈추지 않도록 None 으로 폴백
-try:
-    from sheets_pipeline import SheetsWriter
-    if "sheets_writer" not in st.session_state:
-        st.session_state["sheets_writer"] = SheetsWriter.from_streamlit(conn)
-except Exception:
-    st.session_state.setdefault("sheets_writer", None)
+# ※ SheetsWriter 초기화는 버튼 클릭 시점에 지연 생성
+#   (앱 시작 시 초기화 시 Sheets API 추가 호출 → Rate Limit 유발)
 
 # ════════════════════════════════════════════════════════
 # 2. 데이터 로드 + 정제 (st.status 진행률 표시)
