@@ -173,8 +173,7 @@ with tabs[-1]:
 # 6. 사이드바
 # ════════════════════════════════════════════════════════
 render_sidebar(full_df, history_df, now_kst, m_status, conn,
-               snapshot=settings["snapshot"],
-               sheets_writer=st.session_state.get("sheets_writer"))
+               snapshot=settings["snapshot"])
 
 # ════════════════════════════════════════════════════════
 # 7. 푸터
