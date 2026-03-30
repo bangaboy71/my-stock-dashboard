@@ -723,11 +723,28 @@ class AccountTabRenderer:
         memo_key  = f"memo_text_{self.acc_name}_{sel}"
         saved_key = f"memo_saved_{self.acc_name}_{sel}"
 
+        # ── 수정 1: nan 방어 ─────────────────────────────────
+        # Google Sheets 빈 셀 → pandas NaN → str() 변환 시 "nan" 문자열 발생
+        # None / "nan" / "NaN" 모두 빈 문자열로 정규화
+        def _safe_memo(text) -> str:
+            if text is None:
+                return ""
+            s = str(text).strip()
+            return "" if s.lower() == "nan" else s
+
+        # ── 수정 2: value + key 동시 지정 충돌 해소 ─────────────
+        # st.text_area에 key= 를 지정하면 Session State가 위젯 값을 자동 관리함
+        # value= 를 동시에 지정하면 "두 곳에서 값을 제어" 충돌 경고 발생
+        # → Session State 초기화 블록에서만 초기값 설정, value= 인자 제거
         if memo_key not in st.session_state:
-            st.session_state[memo_key] = get_memo(self.memo_df, sel, self.acc_name)
+            st.session_state[memo_key] = _safe_memo(
+                get_memo(self.memo_df, sel, self.acc_name)
+            )
+        else:
+            st.session_state[memo_key] = _safe_memo(st.session_state[memo_key])
 
         with st.container(border=True):
-            existing = get_memo(self.memo_df, sel, self.acc_name)
+            existing = _safe_memo(get_memo(self.memo_df, sel, self.acc_name))
             if existing:
                 last = self.memo_df[
                     (self.memo_df["종목명"] == sel) &
@@ -741,7 +758,6 @@ class AccountTabRenderer:
 
             new_memo = st.text_area(
                 label="메모 입력",
-                value=st.session_state[memo_key],
                 height=140, key=memo_key,
                 placeholder=(
                     "예) 매수 근거: 반도체 사이클 바닥 확인\n"
