@@ -692,7 +692,11 @@ class AccountTabRenderer:
             f"<div style='font-size:1.2rem; font-weight:bold; margin-bottom:15px;'>"
             f"📰 {sel} 실시간 주요 뉴스</div>"
         )
-        items = get_stock_news(sel)
+        try:
+            from mem_cache import get_news_cached
+            items = get_news_cached(sel)
+        except Exception:
+            items = get_stock_news(sel)
         if not items:
             st.caption("새로운 뉴스가 없습니다.")
             return
@@ -818,8 +822,8 @@ def render_sidebar(
     with st.sidebar:
         st.header("⚙️ 관리 메뉴")
         if st.button("🔄 실시간 데이터 전체 갱신"):
-            st.session_state.pop("toasted_targets", None)
-            st.cache_data.clear()
+            from mem_cache import clear_data_cache
+            clear_data_cache()
             st.rerun()
         st.divider()
 
