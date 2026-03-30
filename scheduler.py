@@ -123,6 +123,84 @@ def task_collect_ohlcv(stock_codes: Optional[dict] = None) -> None:
         logger.error(f"OHLCV 수집 태스크 실패: {e}")
 
 
+def task_eod_sheets_save() -> None:
+    """
+    장 마감 후 Google Sheets 전체 저장 태스크.
+    SQLite 캐시에서 현재가를 읽어 full_df 를 재구성한 뒤
+    sheets_pipeline.run_eod_pipeline() 을 실행합니다.
+
+    Streamlit Cloud 환경에서는 secrets.toml 의 spreadsheet ID 를 사용하고
+    st-gsheets-connection 내부 서비스 계정 인증을 재활용합니다.
+    """
+    try:
+        import pandas as pd
+        from datetime import datetime, timedelta, timezone
+
+        KST_tz  = timezone(timedelta(hours=9))
+        now_kst = datetime.now(KST_tz)
+
+        from sheets_pipeline import SheetsWriter, run_eod_pipeline, save_collection_log
+        from market_collector import get_market_status_v2, get_krx_ohlcv
+        from data_store import get_cached_price
+        from config import STOCK_CODES
+
+        # ── Spreadsheet ID: secrets.toml 에서 읽기 ──────────────
+        spreadsheet_id = ""
+        try:
+            import streamlit as st
+            spreadsheet_id = (
+                st.secrets.get("connections", {})
+                .get("gsheets", {})
+                .get("spreadsheet", "")
+            )
+        except Exception:
+            pass
+
+        if not spreadsheet_id:
+            logger.error("SPREADSHEET_ID 미설정 — secrets.toml [connections.gsheets.spreadsheet] 확인")
+            return
+
+        # ── 인증: 서비스 계정 JSON (secrets.toml 에서 인라인 또는 파일) ──
+        credential_path = "service_account.json"
+        writer = SheetsWriter.from_service_account(spreadsheet_id, credential_path)
+
+        # ── 시장 지표 수집 ──────────────────────────────────────
+        market_status = get_market_status_v2()
+
+        # ── OHLCV (최근 5 영업일) ───────────────────────────────
+        from_date = (now_kst - timedelta(days=7)).strftime("%Y%m%d")
+        ohlcv_map: dict = {}
+        for name, code in STOCK_CODES.items():
+            try:
+                df = get_krx_ohlcv(code, from_date)
+                if not df.empty:
+                    ohlcv_map[name] = df
+            except Exception as e:
+                logger.warning(f"OHLCV {name}: {e}")
+
+        # ── SQLite 캐시 → full_df 재구성 ───────────────────────
+        rows = []
+        for name, code in STOCK_CODES.items():
+            cached = get_cached_price(code)
+            if cached and cached[0] > 0:
+                rows.append({
+                    "종목명": name, "현재가": cached[0],
+                    "매입금액": 0, "평가금액": 0,
+                    "손익": 0,    "계좌명": "",
+                })
+        full_df = pd.DataFrame(rows) if rows else pd.DataFrame()
+
+        # ── 파이프라인 실행 ─────────────────────────────────────
+        results = run_eod_pipeline(writer, full_df, market_status, ohlcv_map, now_kst)
+        save_collection_log(writer, results, source="scheduler_eod", now_kst=now_kst)
+
+        ok = sum(1 for v in results.values() if v is True)
+        logger.info(f"[Sheets EOD] 완료 — {ok}/{len(results)} 성공: {results}")
+
+    except Exception as e:
+        logger.error(f"task_eod_sheets_save 실패: {e}")
+
+
 def task_purge_cache() -> None:
     """30일 초과 캐시 데이터 자동 정리"""
     try:
@@ -191,6 +269,21 @@ def build_scheduler():
         ),
         id="ohlcv_eod",
         name="장 마감 OHLCV 수집",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # ── 장 마감: 15:50 Google Sheets 자동 저장 ──
+    scheduler.add_job(
+        task_eod_sheets_save,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=15,
+            minute=50,
+            timezone=KST,
+        ),
+        id="sheets_eod",
+        name="장 마감 Sheets 저장",
         replace_existing=True,
         misfire_grace_time=300,
     )
