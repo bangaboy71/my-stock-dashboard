@@ -813,7 +813,6 @@ def render_sidebar(
     full_df: pd.DataFrame, history_df: pd.DataFrame,
     now_kst, m_status: dict, conn,
     snapshot: dict = None,
-    sheets_writer=None,          # SheetsWriter 인스턴스 (app.py 에서 전달)
 ):
     """사이드바 전체 렌더링"""
     with st.sidebar:
@@ -843,7 +842,7 @@ def render_sidebar(
         st.divider()
 
         # ── Google Sheets 수동 저장 ───────────────────────────
-        _render_sheets_save_section(sheets_writer, full_df, m_status, now_kst)
+        _render_sheets_save_section(conn, full_df, m_status, now_kst)
         st.divider()
 
         # 기록 관리자
@@ -851,28 +850,22 @@ def render_sidebar(
                                 snapshot=snapshot)
 
 
-def _render_sheets_save_section(sheets_writer, full_df, m_status, now_kst):
+def _render_sheets_save_section(conn, full_df, m_status, now_kst):
     """
     사이드바 — Google Sheets 수동 저장 섹션.
-    sheets_writer 가 None 이면 안내 메시지만 표시.
+    SheetsWriter 는 버튼 클릭 시점에만 생성 → 앱 시작 시 API 호출 없음.
     """
-    st.subheader("☁️ Sheets 자동 저장")
-
-    if sheets_writer is None:
-        st.caption("Sheets 연결을 초기화하는 중이거나 연결 불가 상태입니다.")
-        return
+    st.subheader("☁️ Sheets 저장")
 
     if st.button("📤 지금 저장", use_container_width=True, key="btn_sheets_save"):
         with st.spinner("Google Sheets 저장 중..."):
             try:
-                from sheets_pipeline import run_eod_pipeline, save_collection_log
-                results = run_eod_pipeline(
-                    sheets_writer, full_df, m_status, now_kst=now_kst
-                )
-                save_collection_log(
-                    sheets_writer, results,
-                    source="manual_sidebar", now_kst=now_kst,
-                )
+                from sheets_pipeline import SheetsWriter, run_eod_pipeline, save_collection_log
+                # 버튼 클릭 시점에만 SheetsWriter 생성 (Rate Limit 방지)
+                writer  = SheetsWriter.from_streamlit(conn)
+                results = run_eod_pipeline(writer, full_df, m_status, now_kst=now_kst)
+                save_collection_log(writer, results, source="manual_sidebar", now_kst=now_kst)
+                st.session_state["sheets_last_save"] = now_kst.strftime("%m/%d %H:%M")
                 for item, ok in results.items():
                     if ok is None:
                         st.caption(f"⏭️ {item}: 스킵")
@@ -883,7 +876,6 @@ def _render_sheets_save_section(sheets_writer, full_df, m_status, now_kst):
             except Exception as e:
                 st.error(f"저장 오류: {e}")
 
-    # 마지막 자동 저장 시각 표시 (collection_log 기반)
     last_save = st.session_state.get("sheets_last_save")
     if last_save:
         st.caption(f"마지막 저장: {last_save}")
