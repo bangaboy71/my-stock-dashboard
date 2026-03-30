@@ -30,8 +30,7 @@ from ui_components import (
     render_account_tab,
     render_sidebar,
 )
-from scheduler import start_scheduler
-start_scheduler()
+
 
 # ════════════════════════════════════════════════════════
 # 0. 페이지 설정 (반드시 최상단)
@@ -44,6 +43,16 @@ st.markdown(config.APP_CSS, unsafe_allow_html=True)
 # ════════════════════════════════════════════════════════
 now_kst = get_now_kst()
 conn    = st.connection("gsheets", type=GSheetsConnection)
+
+# ── sheets_pipeline SheetsWriter 초기화 (사이드바 저장 버튼용) ──
+# conn 에서 gspread 클라이언트를 추출해 세션 전역으로 보관
+# 실패해도 앱 전체가 멈추지 않도록 None 으로 폴백
+try:
+    from sheets_pipeline import SheetsWriter
+    if "sheets_writer" not in st.session_state:
+        st.session_state["sheets_writer"] = SheetsWriter.from_streamlit(conn)
+except Exception:
+    st.session_state.setdefault("sheets_writer", None)
 
 # ════════════════════════════════════════════════════════
 # 2. 데이터 로드 + 정제 (st.status 진행률 표시)
@@ -164,7 +173,8 @@ with tabs[-1]:
 # 6. 사이드바
 # ════════════════════════════════════════════════════════
 render_sidebar(full_df, history_df, now_kst, m_status, conn,
-               snapshot=settings["snapshot"])
+               snapshot=settings["snapshot"],
+               sheets_writer=st.session_state.get("sheets_writer"))
 
 # ════════════════════════════════════════════════════════
 # 7. 푸터
