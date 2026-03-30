@@ -30,7 +30,8 @@ from ui_components import (
     render_account_tab,
     render_sidebar,
 )
-
+from scheduler import start_scheduler
+start_scheduler()
 
 # ════════════════════════════════════════════════════════
 # 0. 페이지 설정 (반드시 최상단)
