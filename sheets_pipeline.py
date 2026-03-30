@@ -61,108 +61,41 @@ class SheetsWriter:
     """
     Google Sheets 쓰기 전용 클라이언트.
 
-    사용법 A — Streamlit Cloud (기존 st.connection 활용):
-        writer = SheetsWriter.from_streamlit(conn)
+    st-gsheets-connection(conn) 을 직접 래핑합니다.
+    gspread 클라이언트 추출 없이 conn.read() / conn.update() 를 사용해
+    Streamlit Cloud 환경에서 추가 설정 없이 동작합니다.
 
-    사용법 B — 로컬 / 서버 독립 실행 (gspread):
-        writer = SheetsWriter.from_service_account(
-            spreadsheet_id="1AbCd...",
-            credential_path="service_account.json",
-        )
+    사용법:
+        writer = SheetsWriter.from_streamlit(conn)
     """
 
-    def __init__(self, spreadsheet_id: str, gc):
-        self._spreadsheet_id = spreadsheet_id
-        self._gc             = gc          # gspread.Client
-        self._sh             = None        # 지연 초기화
-
-    # ── 팩토리 메서드 ──────────────────────────────────
+    def __init__(self, conn):
+        self._conn = conn   # st-gsheets-connection 객체
 
     @classmethod
     def from_streamlit(cls, conn) -> "SheetsWriter":
         """
-        Streamlit st-gsheets-connection 객체로 SheetsWriter 생성.
-        내부적으로 gspread 클라이언트를 추출합니다.
+        st-gsheets-connection conn 객체로 SheetsWriter 생성.
+        conn.read() / conn.update() 를 직접 사용하므로
+        gspread 클라이언트 추출이 필요 없습니다.
         """
-        try:
-            # st-gsheets-connection 내부 gspread 클라이언트 접근
-            gc = conn.client          # GSheetsConnection.client → gspread.Client
-            sh = conn.spreadsheet     # 이미 열린 Spreadsheet 객체
-            instance = cls.__new__(cls)
-            instance._gc             = gc
-            instance._sh             = sh
-            instance._spreadsheet_id = sh.id
-            return instance
-        except AttributeError:
-            raise RuntimeError(
-                "conn 에서 gspread 클라이언트를 추출할 수 없습니다.\n"
-                "독립 실행 시 from_service_account() 를 사용하세요."
-            )
-
-    @classmethod
-    def from_service_account(
-        cls,
-        spreadsheet_id: str,
-        credential_path: str = "service_account.json",
-    ) -> "SheetsWriter":
-        """
-        서비스 계정 JSON 으로 SheetsWriter 생성 (로컬·서버 독립 실행용).
-
-        서비스 계정 발급 방법:
-          1. Google Cloud Console → IAM → 서비스 계정 생성
-          2. 키 발급 → JSON 다운로드 → service_account.json 저장
-          3. 스프레드시트 공유 → 서비스 계정 이메일 편집자 추가
-        """
-        try:
-            import gspread
-            from google.oauth2.service_account import Credentials
-        except ImportError:
-            raise ImportError(
-                "pip install gspread>=6.0.0 google-auth>=2.28.0"
-            )
-
-        scopes = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds = Credentials.from_service_account_file(credential_path, scopes=scopes)
-        gc    = gspread.authorize(creds)
-        return cls(spreadsheet_id=spreadsheet_id, gc=gc)
+        return cls(conn)
 
     # ── 내부 헬퍼 ──────────────────────────────────────
-
-    def _get_spreadsheet(self):
-        if self._sh is None:
-            self._sh = self._gc.open_by_key(self._spreadsheet_id)
-        return self._sh
-
-    def _get_or_create_worksheet(self, title: str, rows: int = 5000, cols: int = 30):
-        """워크시트 조회 — 없으면 자동 생성"""
-        sh = self._get_spreadsheet()
-        try:
-            return sh.worksheet(title)
-        except Exception:
-            logger.info(f"워크시트 '{title}' 신규 생성")
-            return sh.add_worksheet(title=title, rows=rows, cols=cols)
 
     def _read_worksheet_df(self, title: str) -> pd.DataFrame:
         """워크시트 전체를 DataFrame으로 읽기"""
         try:
-            ws = self._get_or_create_worksheet(title)
-            records = ws.get_all_records(numericise_ignore=["all"])
-            return pd.DataFrame(records) if records else pd.DataFrame()
+            df = self._conn.read(worksheet=title, ttl=0)
+            return df if df is not None else pd.DataFrame()
         except Exception as e:
             logger.warning(f"'{title}' 읽기 실패: {e}")
             return pd.DataFrame()
 
     def _write_df_to_worksheet(self, title: str, df: pd.DataFrame) -> bool:
-        """DataFrame 을 워크시트에 전체 덮어쓰기"""
+        """DataFrame 을 워크시트에 전체 덮어쓰기 (conn.update 사용)"""
         try:
-            ws = self._get_or_create_worksheet(title, rows=max(len(df) + 100, 5000))
-            # 헤더 + 데이터를 문자열 리스트로 변환 (gspread 요구)
-            data = [df.columns.tolist()] + df.astype(str).values.tolist()
-            ws.clear()
-            ws.update(data, value_input_option="USER_ENTERED")
+            self._conn.update(worksheet=title, data=df)
             logger.info(f"'{title}' 저장 완료 ({len(df)}행)")
             return True
         except Exception as e:
