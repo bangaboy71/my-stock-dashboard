@@ -14,13 +14,17 @@ import config
 from data_engine import (
     load_trades, calc_avg_cost, merge_trades_to_portfolio,
     get_now_kst,
-    get_market_status,
-    get_stock_data_parallel,
-    load_sheets,
     process_portfolio,
     process_history,
     check_and_toast_targets,
     resolve_settings,
+)
+from mem_cache import (
+    init_session_state,
+    get_market_status_cached,
+    load_sheets_cached,
+    get_prices_with_progress,
+    clear_data_cache,
 )
 from ui_components import (
     render_dividend_actual_tab,
@@ -37,6 +41,9 @@ from ui_components import (
 # ════════════════════════════════════════════════════════
 st.set_page_config(page_title=config.APP_TITLE, layout="wide")
 st.markdown(config.APP_CSS, unsafe_allow_html=True)
+
+# session_state 기본값 초기화 (재실행 시 기존 값 유지)
+init_session_state()
 
 # ════════════════════════════════════════════════════════
 # 1. 시간 및 DB 연결
@@ -58,7 +65,7 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
     # STEP 1 — 구글 시트 + 설정 로드
     st.write("📋 구글 시트 연결 중...")
     try:
-        full_df, history_df, memo_df = load_sheets(conn)
+        full_df, history_df, memo_df = load_sheets_cached(conn)
 
 
         # 거래내역 로드 → 평균단가 자동 계산 → 종목현황에 병합
@@ -81,14 +88,9 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
     n_stocks = len(full_df["종목명"].unique()) if not full_df.empty else 0
     prog     = st.progress(0, text=f"📈 실시간 주가 수집 중... (0 / {n_stocks})")
 
-    def _on_progress(done, total, name):
-        short = name[:10] + ".." if len(name) > 10 else name
-        prog.progress(done / total,
-                      text=f"📈 주가 수집 중... ({done}/{total})  · {short} ✓")
-
-    prices = get_stock_data_parallel(
+    prices = get_prices_with_progress(
         full_df["종목명"].tolist() if not full_df.empty else [],
-        on_progress=_on_progress,
+        progress_widget=prog,
     )
     prog.progress(1.0, text=f"✅ 주가 수집 완료 ({n_stocks}/{n_stocks})")
 
@@ -130,7 +132,7 @@ st.markdown(
 # ════════════════════════════════════════════════════════
 # 4. 시장 HUD
 # ════════════════════════════════════════════════════════
-m_status = get_market_status()
+m_status = get_market_status_cached()
 render_market_hud(m_status)
 
 # ════════════════════════════════════════════════════════
