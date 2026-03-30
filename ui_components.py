@@ -723,19 +723,16 @@ class AccountTabRenderer:
         memo_key  = f"memo_text_{self.acc_name}_{sel}"
         saved_key = f"memo_saved_{self.acc_name}_{sel}"
 
-        # ── 수정 1: nan 방어 ─────────────────────────────────
-        # Google Sheets 빈 셀 → pandas NaN → str() 변환 시 "nan" 문자열 발생
-        # None / "nan" / "NaN" 모두 빈 문자열로 정규화
+        # ── 버그픽스 1: nan 방어 ────────────────────────────────
+        # Google Sheets 빈 셀 → pandas NaN → str() → "nan" 문자열 발생
         def _safe_memo(text) -> str:
             if text is None:
                 return ""
             s = str(text).strip()
             return "" if s.lower() == "nan" else s
 
-        # ── 수정 2: value + key 동시 지정 충돌 해소 ─────────────
-        # st.text_area에 key= 를 지정하면 Session State가 위젯 값을 자동 관리함
-        # value= 를 동시에 지정하면 "두 곳에서 값을 제어" 충돌 경고 발생
-        # → Session State 초기화 블록에서만 초기값 설정, value= 인자 제거
+        # ── 버그픽스 2: value + key 동시 지정 충돌 해소 ─────────
+        # key= 지정 시 Session State 가 위젯을 자동 관리 → value= 제거
         if memo_key not in st.session_state:
             st.session_state[memo_key] = _safe_memo(
                 get_memo(self.memo_df, sel, self.acc_name)
@@ -816,6 +813,7 @@ def render_sidebar(
     full_df: pd.DataFrame, history_df: pd.DataFrame,
     now_kst, m_status: dict, conn,
     snapshot: dict = None,
+    sheets_writer=None,          # SheetsWriter 인스턴스 (app.py 에서 전달)
 ):
     """사이드바 전체 렌더링"""
     with st.sidebar:
@@ -844,9 +842,51 @@ def render_sidebar(
         st.caption("엑셀: 전체·계좌별·수익률 추이 시트 포함")
         st.divider()
 
+        # ── Google Sheets 수동 저장 ───────────────────────────
+        _render_sheets_save_section(sheets_writer, full_df, m_status, now_kst)
+        st.divider()
+
         # 기록 관리자
         _render_record_manager(full_df, history_df, now_kst, m_status, conn,
                                 snapshot=snapshot)
+
+
+def _render_sheets_save_section(sheets_writer, full_df, m_status, now_kst):
+    """
+    사이드바 — Google Sheets 수동 저장 섹션.
+    sheets_writer 가 None 이면 안내 메시지만 표시.
+    """
+    st.subheader("☁️ Sheets 자동 저장")
+
+    if sheets_writer is None:
+        st.caption("Sheets 연결을 초기화하는 중이거나 연결 불가 상태입니다.")
+        return
+
+    if st.button("📤 지금 저장", use_container_width=True, key="btn_sheets_save"):
+        with st.spinner("Google Sheets 저장 중..."):
+            try:
+                from sheets_pipeline import run_eod_pipeline, save_collection_log
+                results = run_eod_pipeline(
+                    sheets_writer, full_df, m_status, now_kst=now_kst
+                )
+                save_collection_log(
+                    sheets_writer, results,
+                    source="manual_sidebar", now_kst=now_kst,
+                )
+                for item, ok in results.items():
+                    if ok is None:
+                        st.caption(f"⏭️ {item}: 스킵")
+                    elif ok:
+                        st.success(f"✅ {item}")
+                    else:
+                        st.error(f"❌ {item} 실패")
+            except Exception as e:
+                st.error(f"저장 오류: {e}")
+
+    # 마지막 자동 저장 시각 표시 (collection_log 기반)
+    last_save = st.session_state.get("sheets_last_save")
+    if last_save:
+        st.caption(f"마지막 저장: {last_save}")
 
 
 def _render_dividend_dday(full_df: pd.DataFrame, now_kst):
