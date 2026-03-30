@@ -1,13 +1,22 @@
 """
-data_engine.py — 가족 자산 관제탑 데이터 엔진
-외부 데이터 수집(크롤링), 정제, 지표 계산, 저장 로직을 담당합니다.
+data_engine.py — 가족 자산 관제탑 데이터 엔진 (v2 — pykrx 고도화)
+====================================================================
+변경 이력
+─────────────────────────────────────────────────────────────
+v2 (2026-03)  pykrx + yfinance 연동, SQLite 캐시 통합
+              get_stock_data()        → pykrx 우선, 네이버 폴백
+              get_stock_data_parallel → 캐시 → pykrx → 네이버 3단 폴백
+              get_market_status()     → yfinance 우선, 네이버 폴백
+              ※ 모든 기존 함수 시그니처·반환 타입 유지 (app.py 수정 불필요)
+─────────────────────────────────────────────────────────────
 Streamlit import 없이 순수 Python/Pandas 로직만 포함합니다.
-  → 테스트·재사용 가능 / UI 레이어와 완전 분리
 """
 from __future__ import annotations
 
 import calendar
 import io
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
@@ -21,6 +30,8 @@ from config import (
     WS_PORTFOLIO, WS_TREND, WS_MEMO, WS_SNAPSHOT, WS_DIVIDEND,
 )
 
+logger = logging.getLogger(__name__)
+
 
 # ════════════════════════════════════════════════════════
 # 1. 시간 헬퍼
@@ -32,11 +43,46 @@ def get_now_kst() -> datetime:
 
 
 # ════════════════════════════════════════════════════════
-# 2. 시장 지수 수집
+# 2. 시장 지수 수집 (yfinance 우선 → 네이버 폴백)
 # ════════════════════════════════════════════════════════
 
 def get_market_status() -> dict:
-    """KOSPI·KOSDAQ·USD/KRW·미국 10년물 국채금리 실시간 수집"""
+    """
+    KOSPI·KOSDAQ·USD/KRW·미국 10년물 국채금리 실시간 수집.
+    수집 전략: yfinance 우선, 실패 시 네이버 크롤링 폴백.
+    반환 형식 유지 — app.py / ui_components.py 수정 불필요.
+    """
+    data = {
+        "KOSPI":   {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
+        "KOSDAQ":  {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
+        "USD/KRW": {"val": "-", "pct": "0원",    "color": "#ffffff"},
+        "US10Y":   {"val": "-", "pct": "0.00%p", "color": "#ffffff"},
+    }
+
+    # ── 1차: yfinance (구조 변경 없음, 안정적) ──
+    try:
+        from market_collector import get_yf_market_status_compatible
+        yf_data = get_yf_market_status_compatible()
+        for key in data:
+            if key in yf_data and yf_data[key]["val"] != "-":
+                data[key] = yf_data[key]
+    except Exception as e:
+        logger.warning(f"yfinance 시장 지표 수집 실패: {e}")
+
+    # ── 2차 폴백: 네이버 크롤링 (실패한 지표만) ──
+    missing = [k for k, v in data.items() if v["val"] == "-"]
+    if missing:
+        logger.info(f"네이버 폴백: {missing}")
+        naver_data = _get_market_status_naver()
+        for key in missing:
+            if key in naver_data and naver_data[key]["val"] != "-":
+                data[key] = naver_data[key]
+
+    return data
+
+
+def _get_market_status_naver() -> dict:
+    """네이버 크롤링 기반 시장 지표 수집 (폴백 전용, 기존 로직 그대로 유지)"""
     data = {
         "KOSPI":   {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
         "KOSDAQ":  {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
@@ -50,11 +96,9 @@ def get_market_status() -> dict:
             res = requests.get(url, headers=header, timeout=5)
             res.encoding = "euc-kr"
             soup = BeautifulSoup(res.text, "html.parser")
-
             now_el = soup.select_one("#now_value")
             if now_el:
                 data[code]["val"] = now_el.get_text(strip=True)
-
             diff_el = soup.select_one("#change_value_and_rate")
             if diff_el:
                 raw = diff_el.get_text(" ", strip=True)
@@ -66,11 +110,9 @@ def get_market_status() -> dict:
                     data[code]["color"] = "#87CEEB"
                 data[code]["pct"] = raw.strip()
 
-        ex_res = requests.get(
-            "https://finance.naver.com/marketindex/", headers=header, timeout=5
-        )
+        ex_res  = requests.get("https://finance.naver.com/marketindex/", headers=header, timeout=5)
         ex_soup = BeautifulSoup(ex_res.text, "html.parser")
-        ex_val = ex_soup.select_one("span.value")
+        ex_val  = ex_soup.select_one("span.value")
         if ex_val:
             data["USD/KRW"]["val"] = ex_val.get_text(strip=True)
             ex_change = ex_soup.select_one("span.change").get_text(strip=True)
@@ -85,8 +127,6 @@ def get_market_status() -> dict:
     except Exception:
         pass
 
-    # US10Y — 네이버 스크래핑과 완전히 독립된 별도 try/except
-    # 금리 상승 = 빨강(#FF4B4B) / 하락 = 파랑(#87CEEB) — 기존 색상 규칙 유지
     try:
         import yfinance as yf
         tnx  = yf.Ticker("^TNX")
@@ -105,14 +145,48 @@ def get_market_status() -> dict:
 
 
 # ════════════════════════════════════════════════════════
-# 3. 종목 주가 수집
+# 3. 종목 주가 수집 (캐시 → pykrx → 네이버 3단 폴백)
 # ════════════════════════════════════════════════════════
 
 def get_stock_data(name: str) -> tuple[int, int]:
-    """종목명 → (현재가, 전일종가) 반환. 실패 시 (0, 0)"""
+    """
+    종목명 → (현재가, 전일종가) 반환.
+    수집 전략: SQLite 캐시 → pykrx → 네이버 크롤링 순으로 시도.
+    실패 시 (0, 0).
+    """
     code = STOCK_CODES.get(str(name).replace(" ", ""))
     if not code:
         return 0, 0
+
+    # ── 1단: SQLite 캐시 조회 ──
+    try:
+        from data_store import get_cached_price
+        cached = get_cached_price(code)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+
+    # ── 2단: pykrx (KRX 공식) ──
+    try:
+        from market_collector import get_krx_price
+        current, prev = get_krx_price(code)
+        if current > 0:
+            try:
+                from data_store import set_cached_price
+                set_cached_price(code, current, prev)
+            except Exception:
+                pass
+            return current, prev
+    except Exception as e:
+        logger.warning(f"pykrx {name}({code}) 실패: {e}")
+
+    # ── 3단: 네이버 크롤링 폴백 ──
+    return _get_stock_data_naver(code)
+
+
+def _get_stock_data_naver(code: str) -> tuple[int, int]:
+    """네이버 크롤링 주가 수집 (폴백 전용, 기존 로직 유지)"""
     try:
         res = requests.get(
             f"https://finance.naver.com/item/main.naver?code={code}",
@@ -133,34 +207,63 @@ def get_stock_data_parallel(
     names: list[str], on_progress=None
 ) -> list[tuple[int, int]]:
     """
-    종목 리스트를 ThreadPoolExecutor로 병렬 수집 (원본 순서 보장).
+    종목 리스트를 병렬 수집 (원본 순서 보장).
+    캐시 히트 종목은 즉시 반환, 나머지만 pykrx 병렬 수집.
     on_progress(done, total, name): 종목 1개 완료 시 호출되는 콜백.
     """
-    results = {}
+    results: dict[str, tuple[int, int]] = {}
     total = len(names)
     done  = 0
-    with ThreadPoolExecutor(max_workers=min(total, 10)) as executor:
-        future_to_name = {
-            executor.submit(get_stock_data, n): n for n in names
-        }
-        for future in as_completed(future_to_name):
-            n = future_to_name[future]
-            try:
-                results[n] = future.result()
-            except Exception:
-                results[n] = (0, 0)
+
+    # ── 캐시 선조회 (빠른 종목 먼저 처리) ──
+    cache_miss = []
+    for n in names:
+        code = STOCK_CODES.get(str(n).replace(" ", ""))
+        if not code:
+            results[n] = (0, 0)
             done += 1
             if on_progress:
                 on_progress(done, total, n)
+            continue
+        try:
+            from data_store import get_cached_price
+            cached = get_cached_price(code)
+            if cached:
+                results[n] = cached
+                done += 1
+                if on_progress:
+                    on_progress(done, total, n)
+                continue
+        except Exception:
+            pass
+        cache_miss.append(n)
+
+    # ── 캐시 미스 종목만 병렬 수집 ──
+    if cache_miss:
+        max_workers = min(len(cache_miss), 5)   # pykrx: 5 이하 권장
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_name = {
+                executor.submit(get_stock_data, n): n for n in cache_miss
+            }
+            for future in as_completed(future_to_name):
+                n = future_to_name[future]
+                try:
+                    results[n] = future.result()
+                except Exception:
+                    results[n] = (0, 0)
+                done += 1
+                if on_progress:
+                    on_progress(done, total, n)
+
     return [results.get(n, (0, 0)) for n in names]
 
 
 # ════════════════════════════════════════════════════════
-# 4. 뉴스 수집
+# 4. 뉴스 수집 (기존 유지 — 대체 무료 소스 없음)
 # ════════════════════════════════════════════════════════
 
 def get_stock_news(name: str) -> list[dict]:
-    """종목명 → 최신 뉴스 6개 반환"""
+    """종목명 → 최신 뉴스 6개 반환 (네이버 크롤링 유지)"""
     code = STOCK_CODES.get(str(name).replace(" ", ""))
     if not code:
         return []
@@ -208,15 +311,11 @@ def get_stock_news(name: str) -> list[dict]:
 
 
 # ════════════════════════════════════════════════════════
-# 5. 구글 시트 데이터 로드
+# 5. 구글 시트 데이터 로드 (기존 유지)
 # ════════════════════════════════════════════════════════
 
 def load_sheets(conn) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    구글 시트에서 세 워크시트를 읽어 반환.
-    Returns: (full_df, history_df, memo_df)
-    실패 시 ValueError 발생 → 호출부에서 st.stop() 처리
-    """
+    """구글 시트에서 세 워크시트를 읽어 반환 (기존 로직 유지)"""
     full_df    = conn.read(worksheet=WS_PORTFOLIO, ttl="1m")
     history_df = conn.read(worksheet=WS_TREND,     ttl=0)
     try:
@@ -229,18 +328,7 @@ def load_sheets(conn) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
 
 def load_snapshot(conn) -> dict:
-    """
-    구글 시트 'snapshot' 워크시트에서 날짜별 팩트 수치를 읽어 반환.
-
-    시트 구조 (헤더: 날짜 | 항목 | 값)
-    ─────────────────────────────────
-    2026-03-09 | KOSPI                        | 5251.87
-    2026-03-09 | 삼성전자                     | 111400
-    2026-03-09 | KODEX200타겟위클리커버드콜   | 16515
-
-    반환: {"2026-03-09": {"KOSPI": 5251.87, "삼성전자": 111400.0, ...}, ...}
-    시트 없음 / 오류 시 빈 dict 반환 (앱은 현재가로 폴백)
-    """
+    """구글 시트 'snapshot' 워크시트에서 날짜별 팩트 수치 반환 (기존 유지)"""
     try:
         df = conn.read(worksheet=WS_SNAPSHOT, ttl=0)
         if df.empty or not {"날짜", "항목", "값"}.issubset(df.columns):
@@ -260,20 +348,7 @@ def load_snapshot(conn) -> dict:
 
 
 def load_overrides(path: str = "overrides.toml") -> dict:
-    """
-    로컬 overrides.toml에서 설정을 읽어 반환 (오프라인 폴백).
-    파일 없으면 빈 dict 반환.
-
-    overrides.toml 예시
-    ───────────────────
-    [app]
-    kospi_base_date = "2026-03-03"
-
-    [snapshots."2026-03-09"]
-    KOSPI                        = 5251.87
-    삼성전자                     = 111400.0
-    KODEX200타겟위클리커버드콜   = 16515.0
-    """
+    """overrides.toml 설정 로드 (기존 유지)"""
     try:
         import sys
         if sys.version_info >= (3, 11):
@@ -281,7 +356,7 @@ def load_overrides(path: str = "overrides.toml") -> dict:
             with open(path, "rb") as f:
                 return tomllib.load(f)
         else:
-            import tomli  # pip install tomli
+            import tomli
             with open(path, "rb") as f:
                 return tomli.load(f)
     except FileNotFoundError:
@@ -291,22 +366,11 @@ def load_overrides(path: str = "overrides.toml") -> dict:
 
 
 def resolve_settings(conn) -> dict:
-    """
-    설정값을 우선순위에 따라 병합해 반환.
-    우선순위: secrets.toml  >  구글 시트 snapshot  >  overrides.toml  >  코드 기본값
-
-    반환 dict 키
-    ─────────────────────────────────────────────────────
-    kospi_base_date : str   — KOSPI 상대비교 기준일
-    snapshot        : dict  — { "날짜": {"항목": 값, ...} }
-    """
-    # 1. 코드 기본값
+    """설정값 우선순위 병합 (기존 유지)"""
     settings = {
         "kospi_base_date": KOSPI_BASE_DATE_DEFAULT,
         "snapshot":        {},
     }
-
-    # 2. overrides.toml (로컬 폴백)
     overrides = load_overrides()
     if "app" in overrides:
         if "kospi_base_date" in overrides["app"]:
@@ -315,18 +379,15 @@ def resolve_settings(conn) -> dict:
         for date_str, vals in overrides["snapshots"].items():
             settings["snapshot"].setdefault(date_str, {}).update(vals)
 
-    # 3. 구글 시트 snapshot (overrides보다 우선)
     sheet_snap = load_snapshot(conn)
     for date_str, vals in sheet_snap.items():
         settings["snapshot"].setdefault(date_str, {}).update(vals)
 
-    # 4. Streamlit secrets.toml (최우선)
     try:
         import streamlit as st
-        sec_app = st.secrets.get("app", {})
+        sec_app  = st.secrets.get("app", {})
         if "kospi_base_date" in sec_app:
             settings["kospi_base_date"] = sec_app["kospi_base_date"]
-        # secrets의 스냅샷 (선택적)
         sec_snap = st.secrets.get("snapshots", {})
         for date_str, vals in sec_snap.items():
             settings["snapshot"].setdefault(date_str, {}).update(dict(vals))
@@ -337,18 +398,14 @@ def resolve_settings(conn) -> dict:
 
 
 # ════════════════════════════════════════════════════════
-# 6. 데이터 정제 및 지표 계산
+# 6. 데이터 정제 및 지표 계산 (기존 유지)
 # ════════════════════════════════════════════════════════
 
 def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFrame:
-    """
-    주가 수집 결과를 받아 수익 지표·보유일수 계산 후 반환.
-    prices: get_stock_data_parallel() 결과 리스트
-    """
+    """주가 수집 결과를 받아 수익 지표·보유일수 계산 후 반환 (기존 유지)"""
     df = full_df.copy()
     df.columns = [c.strip() for c in df.columns]
 
-    # 숫자 컬럼 변환
     num_cols = ["수량", "매입단가", "52주최고가", "매입후최고가", "목표가", "주당 배당금", "목표수익률"]
     for c in num_cols:
         if c in df.columns:
@@ -359,10 +416,8 @@ def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFram
         elif c == "목표수익률":
             df["목표수익률"] = 10.0
 
-    # 주가 반영
     df["현재가"],  df["전일종가"] = zip(*prices)
 
-    # 수익 지표
     df["매입금액"]       = df["수량"] * df["매입단가"]
     df["평가금액"]       = df["수량"] * df["현재가"]
     df["손익"]           = df["평가금액"] - df["매입금액"]
@@ -379,7 +434,6 @@ def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFram
         axis=1,
     )
 
-    # 보유일수
     if "최초매입일" in df.columns:
         df["최초매입일"] = pd.to_datetime(df["최초매입일"], errors="coerce")
         base = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -397,7 +451,7 @@ def process_history(
     history_df: pd.DataFrame,
     kospi_base_date: str = KOSPI_BASE_DATE_DEFAULT,
 ) -> pd.DataFrame:
-    """수익률 추이 정규화 및 KOSPI 상대 수익률 계산"""
+    """수익률 추이 정규화 및 KOSPI 상대 수익률 계산 (기존 유지)"""
     df = (
         history_df.copy()
         .pipe(lambda d: d.assign(Date=pd.to_datetime(d["Date"], errors="coerce")))
@@ -414,11 +468,10 @@ def process_history(
 
 
 # ════════════════════════════════════════════════════════
-# 7. 헬퍼 함수
+# 7. 헬퍼 함수 (기존 유지)
 # ════════════════════════════════════════════════════════
 
 def get_cashflow_grade(amount: float) -> str:
-    """월 세후 수령액 기준 등급 반환"""
     if amount >= 1_000_000: return "💎 Diamond"
     if amount >= 300_000:   return "🥇 Gold"
     if amount >= 100_000:   return "🥈 Silver"
@@ -426,7 +479,6 @@ def get_cashflow_grade(amount: float) -> str:
 
 
 def find_matching_col(df: pd.DataFrame, account: str, stock: str = None):
-    """계좌명(+종목명) 기준으로 history_df 컬럼명 탐색"""
     prefix = account.replace("투자", "").replace(" ", "")
     target = (
         f"{prefix}{stock}수익률".replace(" ", "").replace("_", "")
@@ -440,10 +492,6 @@ def find_matching_col(df: pd.DataFrame, account: str, stock: str = None):
 
 
 def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
-    """보유 종목 기준 향후 배당·분배금 예정일 목록 계산.
-    DIVIDEND_SCHEDULE: {종목명: [지급월, ...]}
-    DIVIDEND_PAY_DAY:  {종목명: 지급일}  — 없으면 말일
-    """
     today  = now_kst.date()
     events = []
     for _, row in df.iterrows():
@@ -455,8 +503,7 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
         months = DIVIDEND_SCHEDULE.get(name, [])
         if not months:
             continue
-        pay_day_fixed = DIVIDEND_PAY_DAY.get(name, 0)   # 0 = 말일
-
+        pay_day_fixed = DIVIDEND_PAY_DAY.get(name, 0)
         for m in months:
             for year in [today.year, today.year + 1]:
                 last_day = calendar.monthrange(year, m)[1]
@@ -465,7 +512,6 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
                 pay_date = datetime(year, m, pay_day).date()
                 if pay_date >= today:
                     break
-
             events.append({
                 "종목명":    name,
                 "계좌명":    acc,
@@ -475,17 +521,15 @@ def get_dividend_calendar(df: pd.DataFrame, now_kst: datetime) -> list[dict]:
                 "D_DAY":     (pay_date - today).days,
                 "예상배당금": div_amt / len(months),
             })
-
     events.sort(key=lambda x: (x["D_DAY"], -x["예상배당금"]))
     return events
 
 
 # ════════════════════════════════════════════════════════
-# 8. 메모 CRUD
+# 8. 메모 CRUD (기존 유지)
 # ════════════════════════════════════════════════════════
 
 def get_memo(memo_df: pd.DataFrame, stock_name: str, acc_name: str) -> str:
-    """메모 DataFrame에서 특정 종목+계좌 메모 반환"""
     if memo_df.empty:
         return ""
     row = memo_df[
@@ -499,52 +543,82 @@ def save_memo(
     stock_name: str, acc_name: str,
     text: str, now_kst: datetime,
 ) -> tuple[bool, pd.DataFrame]:
-    """
-    메모 upsert 후 (성공여부, 갱신된 memo_df) 반환.
-    conn: Streamlit GSheets 연결 객체 (app.py에서 전달)
-    """
     now_str = now_kst.strftime("%Y-%m-%d %H:%M:%S")
     new_row = pd.DataFrame([{
         "종목명": stock_name, "계좌명": acc_name,
         "메모": text, "수정일시": now_str,
     }])
-    mask        = ~((memo_df["종목명"] == stock_name) & (memo_df["계좌명"] == acc_name))
-    updated_df  = pd.concat([memo_df[mask], new_row], ignore_index=True)
+    mask       = ~((memo_df["종목명"] == stock_name) & (memo_df["계좌명"] == acc_name))
+    updated_df = pd.concat([memo_df[mask], new_row], ignore_index=True)
     try:
         conn.update(worksheet=WS_MEMO, data=updated_df)
         return True, updated_df
-    except Exception as e:
+    except Exception:
         return False, memo_df
 
 
+# ════════════════════════════════════════════════════════
+# 8-1. 배당 실적 로드 (기존 유지)
+# ════════════════════════════════════════════════════════
+
+def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
+    try:
+        df = conn.read(worksheet=WS_DIVIDEND, ttl=0)
+        if df.empty or "입금일" not in df.columns:
+            return pd.DataFrame()
+        for col in ["주당금액", "세후금액"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", "").str.replace("-", ""),
+                    errors="coerce"
+                ).fillna(0)
+        if "세전금액" in df.columns and "주당금액" not in df.columns:
+            df = df.rename(columns={"세전금액": "주당금액"})
+
+        def _get_shares(row) -> float:
+            if portfolio_df is None or portfolio_df.empty:
+                return 0.0
+            mask = (
+                (portfolio_df["종목명"] == row["종목명"]) &
+                (portfolio_df["계좌명"] == row["계좌명"])
+            )
+            matched = portfolio_df.loc[mask, "수량"]
+            return float(matched.values[0]) if not matched.empty else 0.0
+
+        df["수량"]   = df.apply(_get_shares, axis=1)
+        df["세전금액"] = df["주당금액"] * df["수량"]
+        if "세후금액" not in df.columns:
+            df["세후금액"] = 0.0
+        mask = df["세후금액"] == 0
+        df.loc[mask, "세후금액"] = df.loc[mask, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
+        df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
+        df = df.dropna(subset=["입금일"]).sort_values("입금일")
+        df["연도"] = df["입금일"].dt.year
+        df["월"]   = df["입금일"].dt.month
+        df["연월"] = df["입금일"].dt.strftime("%Y-%m")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
 
 # ════════════════════════════════════════════════════════
-# 8-1. 배당·분배금 실적 로드
+# 8-2. 거래내역 & 평균단가 (기존 유지)
 # ════════════════════════════════════════════════════════
-
-
 
 def load_trades(conn) -> pd.DataFrame:
-    """
-    구글 시트 '거래내역' 탭 로드.
-    헤더: 날짜 | 계좌명 | 종목명 | 구분 | 수량 | 단가 | 수수료 | 메모
-    구분: 매수 / 매도
-    반환: 정렬된 DataFrame (날짜 오름차순)
-    """
     try:
         from config import WS_TRADES
         df = conn.read(worksheet=WS_TRADES, ttl=0)
         if df.empty or "종목명" not in df.columns:
             return pd.DataFrame()
-        # 타입 정규화
         for col in ["수량", "단가", "수수료"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(
                     df[col].astype(str).str.replace(",", ""),
                     errors="coerce"
                 ).fillna(0)
-        df["날짜"]  = pd.to_datetime(df["날짜"], errors="coerce")
-        df["구분"]  = df["구분"].astype(str).str.strip()
+        df["날짜"]   = pd.to_datetime(df["날짜"], errors="coerce")
+        df["구분"]   = df["구분"].astype(str).str.strip()
         df["계좌명"] = df["계좌명"].astype(str).str.strip()
         df["종목명"] = df["종목명"].astype(str).str.strip()
         df = df.dropna(subset=["날짜"]).sort_values("날짜").reset_index(drop=True)
@@ -554,19 +628,12 @@ def load_trades(conn) -> pd.DataFrame:
 
 
 def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    거래내역 DataFrame → 계좌별·종목별 현재 보유수량·평균단가·총매입금액 계산.
-    FIFO 방식이 아닌 이동평균법(총매입금액/보유수량) 적용.
-
-    반환 컬럼: 계좌명 | 종목명 | 보유수량 | 평균단가 | 총매입금액 | 실현손익
-    """
     if trades_df.empty:
         return pd.DataFrame(
             columns=["계좌명","종목명","보유수량","평균단가","총매입금액","실현손익"]
         )
-
     results      = []
-    sell_records = []   # 매도 상세 내역
+    sell_records = []
     groups       = trades_df.groupby(["계좌명","종목명"])
 
     for (acc, nm), grp in groups:
@@ -576,11 +643,11 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
         first_buy_date = None
 
         for _, row in grp.iterrows():
-            q      = float(row["수량"])
-            price  = float(row["단가"])
-            fee    = float(row.get("수수료", 0) or 0)
-            구분   = row["구분"]
-            dt     = row.get("날짜", None)
+            q     = float(row["수량"])
+            price = float(row["단가"])
+            fee   = float(row.get("수수료", 0) or 0)
+            구분  = row["구분"]
+            dt    = row.get("날짜", None)
 
             if 구분 == "매수":
                 if first_buy_date is None and pd.notna(dt):
@@ -592,18 +659,14 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
                 sold_q   = min(q, qty_hold)
                 gain     = (price - avg) * sold_q - fee
                 realized += gain
-                sold_cost = avg * sold_q
-                cost_total = max(0, cost_total - sold_cost)
+                cost_total = max(0, cost_total - avg * sold_q)
                 qty_hold   = max(0, qty_hold - sold_q)
-
-                # 보유기간 계산
-                hold_days = None
+                hold_days  = None
                 if first_buy_date is not None and pd.notna(dt):
                     try:
                         hold_days = (pd.Timestamp(dt) - pd.Timestamp(first_buy_date)).days
                     except Exception:
                         hold_days = None
-
                 sell_records.append({
                     "매도일":    pd.Timestamp(dt).strftime("%Y-%m-%d") if pd.notna(dt) else "",
                     "계좌명":    acc,
@@ -621,7 +684,6 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
         avg_cost = cost_total / qty_hold if qty_hold > 0 else 0.0
         if qty_hold <= 0:
             avg_cost = cost_total = 0.0
-
         results.append({
             "계좌명":    acc,
             "종목명":    nm,
@@ -636,49 +698,27 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
         columns=["매도일","계좌명","종목명","매도수량","매입단가","매도단가",
                  "매도금액","실현손익","수익률(%)","보유일수","수수료"]
     )
-    # sell_df를 avg_df의 속성으로 전달 (호출부 호환성 유지)
     avg_df.attrs["sell_df"] = sell_df
     return avg_df
 
 
 def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
                                avg_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    거래내역(추가분) + 종목현황 시트(기존분) 합산 병합.
-
-    원칙:
-    - 거래내역은 항상 '추가분만' 입력 기준
-    - 시트 기존 수량·매입단가 + 거래내역 추가분을 합산
-    - 합산 수량 = 시트 수량 + 거래내역 순매수(매수-매도) 수량
-    - 합산 평균단가 = (시트 매입금액 + 거래내역 매입금액) / 합산 수량
-    - 매도 발생 시: 합산 수량에서 차감, 실현손익은 거래내역 탭에서 별도 표시
-    """
+    """거래내역(추가분) + 종목현황 시트(기존분) 합산 병합 (기존 유지)"""
     if avg_df.empty:
         return portfolio_df
-
     df = portfolio_df.copy()
-
-    # 컬럼명 정규화 — 시트에 따라 "계좌명" 대신 다른 이름일 수 있음
-    # 계좌 컬럼 자동 감지
     acc_col = None
     for candidate in ["계좌명", "계좌", "account", "Account"]:
         if candidate in df.columns:
             acc_col = candidate
             break
-
-    # avg_df 계좌명 컬럼도 정규화
     avg_acc_col = "계좌명" if "계좌명" in avg_df.columns else "계좌"
-
-    if acc_col is None:
-        # 계좌 컬럼 없으면 종목명만으로 매칭
-        use_acc = False
-    else:
-        use_acc = True
+    use_acc = acc_col is not None
 
     for _, row in avg_df.iterrows():
         row_acc = str(row.get(avg_acc_col, "")).strip()
         row_nm  = str(row.get("종목명", "")).strip()
-
         if use_acc:
             mask = (
                 df[acc_col].astype(str).str.strip() == row_acc
@@ -687,104 +727,34 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
             )
         else:
             mask = df["종목명"].astype(str).str.strip() == row_nm
-
         if not mask.any():
             continue
-
         trade_qty_net = float(row.get("보유수량", 0))
         trade_cost    = float(row.get("총매입금액", 0))
         sheet_qty     = float(df.loc[mask, "수량"].iloc[0])
         sheet_price   = float(df.loc[mask, "매입단가"].iloc[0])
         sheet_cost    = sheet_qty * sheet_price
-
-        # ── 합산 수량·평균단가 계산 ──────────────────────
-        new_qty = sheet_qty + trade_qty_net   # 시트 + 거래내역 순매수
-
+        new_qty       = sheet_qty + trade_qty_net
         if new_qty <= 0:
-            # 전량 매도된 경우 → 수량 0, 단가 유지
             df.loc[mask, "수량"] = 0
             continue
-
         if trade_qty_net > 0 and trade_cost > 0:
-            # 추가 매수분 반영: 가중평균단가 재계산
             new_avg = (sheet_cost + trade_cost) / new_qty
         elif trade_qty_net < 0:
-            # 일부 매도: 평균단가는 유지, 수량만 차감
             new_avg = sheet_price
         else:
             new_avg = sheet_price
-
         df.loc[mask, "수량"]     = new_qty
         df.loc[mask, "매입단가"] = round(new_avg)
-        # 매입금액도 즉시 재계산 (process_portfolio 전 미리 반영)
         df.loc[mask, "매입금액"] = new_qty * round(new_avg)
-
     return df
 
-def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
-    """
-    구글 시트 '배당실적' 탭에서 실제 입금 데이터 로드.
-
-    탭 헤더: 입금일 | 계좌명 | 종목명 | 주당금액 | 세후금액 | 비고
-    ─────────────────────────────────────────────────────
-    - 주당금액 × 수량(종목현황 탭 자동 조회) = 세전금액 자동 계산
-    - 세후금액이 비어있으면 세전금액 × (1 - 0.154) 자동 계산
-    - portfolio_df: 수량 조회용 종목현황 DataFrame (없으면 수량=0)
-    - 탭 없거나 오류 시 빈 DataFrame 반환
-    """
-    try:
-        df = conn.read(worksheet=WS_DIVIDEND, ttl=0)
-        if df.empty or "입금일" not in df.columns:
-            return pd.DataFrame()
-
-        # 숫자 변환
-        for col in ["주당금액", "세후금액"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(",", "").str.replace("-", ""),
-                    errors="coerce"
-                ).fillna(0)
-        # 하위 호환: 기존 '세전금액' 컬럼도 지원
-        if "세전금액" in df.columns and "주당금액" not in df.columns:
-            df = df.rename(columns={"세전금액": "주당금액"})
-
-        # ── 수량 조회 (종목현황 탭 기준) ─────────────────────
-        # 계좌명 + 종목명으로 매칭해서 수량 가져오기
-        def _get_shares(row) -> float:
-            if portfolio_df is None or portfolio_df.empty:
-                return 0.0
-            mask = (
-                (portfolio_df["종목명"] == row["종목명"]) &
-                (portfolio_df["계좌명"] == row["계좌명"])
-            )
-            matched = portfolio_df.loc[mask, "수량"]
-            return float(matched.values[0]) if not matched.empty else 0.0
-
-        df["수량"]   = df.apply(_get_shares, axis=1)
-        df["세전금액"] = df["주당금액"] * df["수량"]
-
-        # ── 세후금액 자동 계산 ────────────────────────────────
-        if "세후금액" not in df.columns:
-            df["세후금액"] = 0.0
-        mask = df["세후금액"] == 0
-        df.loc[mask, "세후금액"] = df.loc[mask, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
-
-        # ── 날짜 변환 ─────────────────────────────────────────
-        df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
-        df = df.dropna(subset=["입금일"]).sort_values("입금일")
-        df["연도"] = df["입금일"].dt.year
-        df["월"]   = df["입금일"].dt.month
-        df["연월"] = df["입금일"].dt.strftime("%Y-%m")
-        return df
-    except Exception:
-        return pd.DataFrame()
 
 # ════════════════════════════════════════════════════════
-# 9. 내보내기
+# 9. 내보내기 (기존 유지)
 # ════════════════════════════════════════════════════════
 
 def build_export_df(df: pd.DataFrame) -> pd.DataFrame:
-    """내보내기용 컬럼 추출 및 포맷 정리"""
     cols = [
         "계좌명", "종목명", "수량", "매입단가", "매입금액",
         "현재가", "평가금액", "손익", "누적수익률",
@@ -821,18 +791,13 @@ def get_excel_bytes(df: pd.DataFrame, history_df: pd.DataFrame) -> bytes:
 
 
 # ════════════════════════════════════════════════════════
-# 10. 목표가 도달 토스트 알림
+# 10. 목표가 도달 토스트 알림 (기존 유지)
 # ════════════════════════════════════════════════════════
 
 def check_and_toast_targets(df: pd.DataFrame):
-    """
-    현재가가 목표가에 도달·근접한 종목을 st.toast로 알림.
-    Streamlit import는 이 함수 내에서만 사용 (data_engine 전체를 오염시키지 않음).
-    """
     import streamlit as st
     if df.empty or "현재가" not in df.columns or "목표가" not in df.columns:
         return
-
     alerted = st.session_state.get("toasted_targets", set())
     for _, row in df.iterrows():
         name   = row.get("종목명", "")
