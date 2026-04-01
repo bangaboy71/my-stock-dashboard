@@ -124,8 +124,8 @@ def get_krx_prices_as_list(
 
 # yfinance 티커 정의
 _YF_TICKERS = {
-    "KOSPI":   "^KS11",      # KOSPI 지수
-    "KOSDAQ":  "^KQ11",      # KOSDAQ 지수
+    # "KOSPI":   "^KS11",   # ❌ Yahoo Finance 2배 스케일 버그 — pykrx 사용
+    # "KOSDAQ":  "^KQ11",   # ❌ Yahoo Finance 2배 스케일 버그 — pykrx 사용
     "USD/KRW": "USDKRW=X",  # 환율
     "US10Y":   "^TNX",       # 미국 10년물 국채금리
     "S&P500":  "^GSPC",      # S&P 500
@@ -220,32 +220,71 @@ def get_yf_market_status(
 def get_yf_market_status_compatible() -> dict:
     """
     기존 get_market_status() 인터페이스 호환 래퍼.
-    app.py / ui_components.py 에서 import 교체 없이 즉시 사용 가능.
 
-    변경 내용:
-    - KOSPI, KOSDAQ: yfinance ^KS11 / ^KQ11 로 대체
-    - USD/KRW:       yfinance USDKRW=X 로 대체
-    - US10Y:         yfinance ^TNX (기존 로직 유지)
-    - 기존 color 규칙(상승=빨강, 하락=파랑) 동일하게 유지
+    수집 전략:
+    - KOSPI / KOSDAQ : pykrx (KRX 공식) — ^KS11/^KQ11 사용 금지(2배 버그)
+    - USD/KRW        : yfinance USDKRW=X
+    - US10Y          : yfinance ^TNX
     """
-    status = get_yf_market_status(
-        tickers={
-            "KOSPI":   "^KS11",
-            "KOSDAQ":  "^KQ11",
-            "USD/KRW": "USDKRW=X",
-            "US10Y":   "^TNX",
-        }
-    )
-    # 혹시 일부 지표 실패 시 기본값으로 채움
     defaults = {
         "KOSPI":   {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
         "KOSDAQ":  {"val": "-", "pct": "0.00%",  "color": "#ffffff"},
         "USD/KRW": {"val": "-", "pct": "0원",    "color": "#ffffff"},
         "US10Y":   {"val": "-", "pct": "0.00%p", "color": "#ffffff"},
     }
-    for k, v in defaults.items():
-        status.setdefault(k, v)
-    return status
+
+    # ── KOSPI / KOSDAQ: pykrx ────────────────────────────
+    try:
+        from pykrx import stock as _krx
+        import datetime as _dt
+
+        def _pykrx_index(ticker_code: str, label: str) -> dict:
+            """pykrx 지수 OHLCV → 현재가·전일대비 계산"""
+            for _back in range(7):
+                _d  = (_dt.date.today() - _dt.timedelta(days=_back)).strftime("%Y%m%d")
+                _d0 = (_dt.date.today() - _dt.timedelta(days=_back + 10)).strftime("%Y%m%d")
+                try:
+                    _df = _krx.get_index_ohlcv_by_date(_d0, _d, ticker_code)
+                    if _df is None or _df.empty:
+                        continue
+                    _df = _df[_df["종가"] > 0]
+                    if len(_df) < 2:
+                        continue
+                    _cur  = float(_df["종가"].iloc[-1])
+                    _prev = float(_df["종가"].iloc[-2])
+                    _chg  = _cur - _prev
+                    _pct  = (_chg / _prev * 100) if _prev > 0 else 0.0
+                    _sign = "+" if _chg >= 0 else ""
+                    return {
+                        "val":   f"{_cur:,.2f}",
+                        "pct":   f"{_sign}{_pct:.2f}%",
+                        "color": "#FF4B4B" if _chg >= 0 else "#87CEEB",
+                    }
+                except Exception:
+                    continue
+            return defaults[label].copy()
+
+        defaults["KOSPI"]  = _pykrx_index("1001", "KOSPI")   # KOSPI
+        defaults["KOSDAQ"] = _pykrx_index("2001", "KOSDAQ")  # KOSDAQ
+
+    except Exception as e:
+        logger.warning(f"pykrx 지수 수집 실패: {e}")
+
+    # ── USD/KRW · US10Y: yfinance ────────────────────────
+    try:
+        yf_data = get_yf_market_status(
+            tickers={
+                "USD/KRW": "USDKRW=X",
+                "US10Y":   "^TNX",
+            }
+        )
+        for k in ("USD/KRW", "US10Y"):
+            if k in yf_data and yf_data[k]["val"] != "-":
+                defaults[k] = yf_data[k]
+    except Exception as e:
+        logger.warning(f"yfinance USD/US10Y 수집 실패: {e}")
+
+    return defaults
 
 
 # ════════════════════════════════════════════════════════
