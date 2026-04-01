@@ -869,10 +869,34 @@ def _render_sheets_save_section(conn, full_df, m_status, now_kst):
     if st.button("📤 지금 저장", use_container_width=True, key="btn_sheets_save"):
         with st.spinner("Google Sheets 저장 중..."):
             try:
+                from datetime import timedelta
                 from sheets_pipeline import SheetsWriter, run_eod_pipeline, save_collection_log
+                from market_collector import get_krx_ohlcv
+                from config import STOCK_CODES
+
                 # 버튼 클릭 시점에만 SheetsWriter 생성 (Rate Limit 방지)
-                writer  = SheetsWriter.from_streamlit(conn)
-                results = run_eod_pipeline(writer, full_df, m_status, now_kst=now_kst)
+                writer = SheetsWriter.from_streamlit(conn)
+
+                # ── [FIX] ohlcv_map 수집 후 전달 ──────────────────────────
+                # 기존 코드: run_eod_pipeline(..., now_kst=now_kst) 만 전달
+                # → ohlcv_map=None 기본값으로 실행되어 ohlcv_log 항상 스킵됨
+                # 수정: 버튼 클릭 시 최근 7일 OHLCV 를 수집해서 함께 전달
+                from_date = (now_kst - timedelta(days=7)).strftime("%Y%m%d")
+                ohlcv_map: dict = {}
+                with st.spinner("📈 OHLCV 수집 중..."):
+                    for name, code in STOCK_CODES.items():
+                        try:
+                            df = get_krx_ohlcv(code, from_date)
+                            if not df.empty:
+                                ohlcv_map[name] = df
+                        except Exception:
+                            pass  # 개별 종목 실패는 무시하고 계속 진행
+
+                results = run_eod_pipeline(
+                    writer, full_df, m_status,
+                    ohlcv_map=ohlcv_map,   # ← ohlcv_map 명시 전달
+                    now_kst=now_kst,
+                )
                 save_collection_log(writer, results, source="manual_sidebar", now_kst=now_kst)
                 st.session_state["sheets_last_save"] = now_kst.strftime("%m/%d %H:%M")
                 for item, ok in results.items():
