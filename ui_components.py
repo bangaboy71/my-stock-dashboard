@@ -877,28 +877,55 @@ def _render_sheets_save_section(conn, full_df, m_status, now_kst):
                 # 버튼 클릭 시점에만 SheetsWriter 생성 (Rate Limit 방지)
                 writer = SheetsWriter.from_streamlit(conn)
 
-                # ── [FIX] ohlcv_map 수집 후 전달 ──────────────────────────
-                # 기존 코드: run_eod_pipeline(..., now_kst=now_kst) 만 전달
-                # → ohlcv_map=None 기본값으로 실행되어 ohlcv_log 항상 스킵됨
-                # 수정: 버튼 클릭 시 최근 7일 OHLCV 를 수집해서 함께 전달
+                # ── OHLCV 수집 (pykrx → yfinance 자동 폴백) ──────────────
+                # 근본 원인: Streamlit Cloud 에서 KRX 도메인(krx.co.kr)이
+                # 방화벽 차단(403)으로 pykrx 가 빈 DataFrame 을 반환.
+                # get_krx_ohlcv() 내부에서 yfinance 로 자동 폴백하도록 수정됨.
                 from_date = (now_kst - timedelta(days=7)).strftime("%Y%m%d")
                 ohlcv_map: dict = {}
-                with st.spinner("📈 OHLCV 수집 중..."):
-                    for name, code in STOCK_CODES.items():
-                        try:
-                            df = get_krx_ohlcv(code, from_date)
-                            if not df.empty:
-                                ohlcv_map[name] = df
-                        except Exception:
-                            pass  # 개별 종목 실패는 무시하고 계속 진행
+                failed_names: list = []
 
+                prog = st.progress(0, text="📈 OHLCV 수집 중...")
+                total_codes = len(STOCK_CODES)
+
+                for idx, (name, code) in enumerate(STOCK_CODES.items(), start=1):
+                    short = name[:8] + ".." if len(name) > 8 else name
+                    prog.progress(idx / total_codes,
+                                  text=f"📈 OHLCV 수집 중... ({idx}/{total_codes}) {short}")
+                    try:
+                        df = get_krx_ohlcv(code, from_date)
+                        if df is not None and not df.empty:
+                            ohlcv_map[name] = df
+                        else:
+                            failed_names.append(name)
+                    except Exception:
+                        failed_names.append(name)
+
+                prog.progress(1.0, text=f"✅ OHLCV 수집 완료 ({len(ohlcv_map)}/{total_codes}종목)")
+
+                # 수집 결과 요약 표시
+                if failed_names:
+                    st.warning(
+                        f"⚠️ OHLCV 수집 실패 {len(failed_names)}종목: "
+                        f"{', '.join(failed_names[:5])}"
+                        + (" 외" if len(failed_names) > 5 else "")
+                    )
+                if not ohlcv_map:
+                    st.error(
+                        "❌ 전체 종목 OHLCV 수집 실패 — "
+                        "pykrx(KRX 차단) + yfinance 모두 실패.\n"
+                        "requirements.txt 에 yfinance>=0.2.36 이 있는지 확인하세요."
+                    )
+
+                # ── 파이프라인 실행 ──────────────────────────────────────
                 results = run_eod_pipeline(
                     writer, full_df, m_status,
-                    ohlcv_map=ohlcv_map,   # ← ohlcv_map 명시 전달
+                    ohlcv_map=ohlcv_map if ohlcv_map else None,
                     now_kst=now_kst,
                 )
                 save_collection_log(writer, results, source="manual_sidebar", now_kst=now_kst)
                 st.session_state["sheets_last_save"] = now_kst.strftime("%m/%d %H:%M")
+
                 for item, ok in results.items():
                     if ok is None:
                         st.caption(f"⏭️ {item}: 스킵")
@@ -906,6 +933,7 @@ def _render_sheets_save_section(conn, full_df, m_status, now_kst):
                         st.success(f"✅ {item}")
                     else:
                         st.error(f"❌ {item} 실패")
+
             except Exception as e:
                 st.error(f"저장 오류: {e}")
 
