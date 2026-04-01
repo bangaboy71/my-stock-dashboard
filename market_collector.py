@@ -329,27 +329,80 @@ def get_krx_ohlcv(
     to_date: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    pykrx 일봉 OHLCV DataFrame 반환.
+    종목 코드 → 일봉 OHLCV DataFrame 반환.
     컬럼: Date | 시가 | 고가 | 저가 | 종가 | 거래량
 
-    [FIX] pykrx 버전에 따라 reset_index() 후 인덱스 컬럼명이
-    "날짜" 또는 "Date" 로 다르게 나올 수 있음.
-    save_ohlcv_log() 에서 row.get("Date") 로 고정 참조하므로
-    여기서 "날짜" → "Date" 로 통일 정규화.
+    수집 우선순위:
+      1차) pykrx  — KRX 공식 데이터 (로컬 / 허용 네트워크 환경)
+      2차) yfinance — Yahoo Finance (Streamlit Cloud 등 KRX 차단 환경 폴백)
+
+    배경:
+      Streamlit Cloud 에서 krx.co.kr / stock.naver.com 이 방화벽(403)으로
+      차단되어 pykrx 가 항상 빈 DataFrame 을 반환함.
+      yfinance 는 Yahoo Finance 를 사용하므로 정상 동작.
     """
+    to_date_fmt = to_date if to_date is not None else datetime.now().strftime("%Y%m%d")
+
+    # ── 1차: pykrx ────────────────────────────────────────────────
     try:
         from pykrx import stock as krx
-        if to_date is None:
-            to_date = datetime.now().strftime("%Y%m%d")
-        df = krx.get_market_ohlcv(from_date, to_date, code)
-        df.index.name = "Date"
-        df = df.reset_index()
-        # ── [FIX] 컬럼명 정규화: "날짜" → "Date" ──────────────────
-        if "날짜" in df.columns:
-            df = df.rename(columns={"날짜": "Date"})
-        return df
+        df = krx.get_market_ohlcv(from_date, to_date_fmt, code)
+        if df is not None and not df.empty:
+            df.index.name = "Date"
+            df = df.reset_index()
+            # pykrx 버전별 컬럼명 정규화: "날짜" → "Date"
+            if "날짜" in df.columns:
+                df = df.rename(columns={"날짜": "Date"})
+            logger.info(f"pykrx OHLCV 수집 성공({code}): {len(df)}행")
+            return df
+        logger.warning(f"pykrx OHLCV 빈 결과({code}) — yfinance 폴백 시도")
     except Exception as e:
-        logger.error(f"get_krx_ohlcv({code}): {e}")
+        logger.warning(f"pykrx OHLCV 실패({code}): {e} — yfinance 폴백 시도")
+
+    # ── 2차: yfinance 폴백 ────────────────────────────────────────
+    try:
+        import yfinance as yf
+
+        # YYYYMMDD → YYYY-MM-DD 변환
+        from_dt = datetime.strptime(from_date,    "%Y%m%d").strftime("%Y-%m-%d")
+        to_dt   = datetime.strptime(to_date_fmt, "%Y%m%d").strftime("%Y-%m-%d")
+
+        ticker = yf.Ticker(f"{code}.KS")
+        df = ticker.history(start=from_dt, end=to_dt, interval="1d")
+
+        if df is None or df.empty:
+            logger.warning(f"yfinance OHLCV 빈 결과({code}.KS)")
+            return pd.DataFrame()
+
+        df = df.reset_index()
+
+        # yfinance 컬럼명 → 국내 표준 컬럼명으로 매핑
+        col_map = {
+            "Date":     "Date",
+            "Datetime": "Date",
+            "Open":     "시가",
+            "High":     "고가",
+            "Low":      "저가",
+            "Close":    "종가",
+            "Volume":   "거래량",
+        }
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+        # Date 컬럼을 문자열 "YYYY-MM-DD" 로 정규화
+        if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce") \
+                           .dt.tz_localize(None) \
+                           .dt.strftime("%Y-%m-%d")
+
+        # 필요한 컬럼만 추출 (없는 컬럼은 무시)
+        keep = [c for c in ["Date", "시가", "고가", "저가", "종가", "거래량"] if c in df.columns]
+        df = df[keep].dropna(subset=["Date"])
+
+        logger.info(f"yfinance OHLCV 폴백 성공({code}.KS): {len(df)}행")
+        return df
+
+    except Exception as e:
+        logger.error(f"yfinance OHLCV 폴백도 실패({code}): {e}")
         return pd.DataFrame()
 
 
