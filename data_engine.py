@@ -69,6 +69,27 @@ def get_market_status() -> dict:
     except Exception as e:
         logger.warning(f"yfinance 시장 지표 수집 실패: {e}")
 
+    # ── 1.5차: yfinance 직접 계산 폴백 (market_collector 실패 시) ──
+    if data["KOSPI"]["val"] == "-" or data["KOSDAQ"]["val"] == "-":
+        try:
+            import yfinance as _yf
+            for _key, _ticker in [("KOSPI", "^KS11"), ("KOSDAQ", "^KQ11")]:
+                if data[_key]["val"] != "-":
+                    continue
+                _tk   = _yf.Ticker(_ticker)
+                _hist = _tk.history(period="5d")
+                if len(_hist) >= 2:
+                    _cur  = float(_hist["Close"].iloc[-1])
+                    _prev = float(_hist["Close"].iloc[-2])
+                    _chg  = _cur - _prev
+                    _pct  = (_chg / _prev * 100) if _prev > 0 else 0.0
+                    _sign = "+" if _chg >= 0 else ""
+                    data[_key]["val"]   = f"{_cur:,.2f}"
+                    data[_key]["pct"]   = f"{_sign}{_pct:.2f}%"
+                    data[_key]["color"] = "#FF4B4B" if _chg >= 0 else "#87CEEB"
+        except Exception as _e:
+            logger.warning(f"yfinance 직접 지수 수집 실패: {_e}")
+
     # ── 2차 폴백: 네이버 크롤링 (실패한 지표만) ──
     missing = [k for k, v in data.items() if v["val"] == "-"]
     if missing:
@@ -104,11 +125,23 @@ def _get_market_status_naver() -> dict:
                 raw = diff_el.get_text(" ", strip=True)
                 for word in ["상승", "하락", "보합"]:
                     raw = raw.replace(word, "")
-                if "+" in raw:
+                raw = raw.strip()
+                # 퍼센트 값만 추출 ("12.34 +0.46%" → "+0.46%")
+                import re as _re
+                pct_match = _re.search(r"([+\-]?[0-9]+\.?[0-9]*%)", raw)
+                if pct_match:
+                    pct_str = pct_match.group(1)
+                    # 부호 없는 경우 맨 앞 숫자(절대변동) 뒤의 부호 있는 값 사용
+                    if pct_str and not pct_str.startswith(("+", "-")):
+                        pct_match2 = _re.search(r"([+\-][0-9]+\.?[0-9]*%)", raw)
+                        pct_str = pct_match2.group(1) if pct_match2 else pct_str
+                else:
+                    pct_str = raw
+                if "+" in pct_str or (pct_str and pct_str[0].isdigit()):
                     data[code]["color"] = "#FF4B4B"
-                elif "-" in raw:
+                elif "-" in pct_str:
                     data[code]["color"] = "#87CEEB"
-                data[code]["pct"] = raw.strip()
+                data[code]["pct"] = pct_str
 
         ex_res  = requests.get("https://finance.naver.com/marketindex/", headers=header, timeout=5)
         ex_soup = BeautifulSoup(ex_res.text, "html.parser")
