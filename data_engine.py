@@ -49,7 +49,10 @@ def get_now_kst() -> datetime:
 def get_market_status() -> dict:
     """
     KOSPI·KOSDAQ·USD/KRW·미국 10년물 국채금리 실시간 수집.
-    수집 전략: yfinance 우선, 실패 시 네이버 크롤링 폴백.
+    수집 전략:
+      1차: pykrx (KRX 공식 데이터 — 가장 정확)
+      2차: yfinance market_collector
+      3차: 네이버 크롤링 폴백
     반환 형식 유지 — app.py / ui_components.py 수정 불필요.
     """
     data = {
@@ -59,38 +62,88 @@ def get_market_status() -> dict:
         "US10Y":   {"val": "-", "pct": "0.00%p", "color": "#ffffff"},
     }
 
-    # ── 1차: yfinance (구조 변경 없음, 안정적) ──
+    # ── 1차: pykrx — KRX 공식 지수 (가장 정확) ──────────
+    try:
+        from pykrx import stock as _pykrx
+        import datetime as _dt
+        _today = _dt.date.today().strftime("%Y%m%d")
+        # 최근 5거래일 중 데이터 있는 날 탐색
+        for _offset in range(5):
+            _d = (_dt.date.today() - _dt.timedelta(days=_offset)).strftime("%Y%m%d")
+            try:
+                _df = _pykrx.get_index_ohlcv_by_date(_d, _d, "1001")  # KOSPI
+                if not _df.empty:
+                    _cur  = float(_df["종가"].iloc[-1])
+                    _prev = float(_df["시가"].iloc[-1])  # 당일 시가 대신 전일종가 필요
+                    # 전일종가: 2일치 조회
+                    _d2  = (_dt.date.today() - _dt.timedelta(days=_offset+5)).strftime("%Y%m%d")
+                    _df2 = _pykrx.get_index_ohlcv_by_date(_d2, _d, "1001")
+                    if len(_df2) >= 2:
+                        _prev = float(_df2["종가"].iloc[-2])
+                    _chg  = _cur - _prev
+                    _pct  = (_chg / _prev * 100) if _prev > 0 else 0.0
+                    _sign = "+" if _chg >= 0 else ""
+                    data["KOSPI"]["val"]   = f"{_cur:,.2f}"
+                    data["KOSPI"]["pct"]   = f"{_sign}{_pct:.2f}%"
+                    data["KOSPI"]["color"] = "#FF4B4B" if _chg >= 0 else "#87CEEB"
+                    break
+            except Exception:
+                continue
+
+        for _offset in range(5):
+            _d = (_dt.date.today() - _dt.timedelta(days=_offset)).strftime("%Y%m%d")
+            try:
+                _df = _pykrx.get_index_ohlcv_by_date(_d, _d, "2001")  # KOSDAQ
+                if not _df.empty:
+                    _cur  = float(_df["종가"].iloc[-1])
+                    _d2   = (_dt.date.today() - _dt.timedelta(days=_offset+5)).strftime("%Y%m%d")
+                    _df2  = _pykrx.get_index_ohlcv_by_date(_d2, _d, "2001")
+                    if len(_df2) >= 2:
+                        _prev = float(_df2["종가"].iloc[-2])
+                    else:
+                        _prev = _cur
+                    _chg  = _cur - _prev
+                    _pct  = (_chg / _prev * 100) if _prev > 0 else 0.0
+                    _sign = "+" if _chg >= 0 else ""
+                    data["KOSDAQ"]["val"]   = f"{_cur:,.2f}"
+                    data["KOSDAQ"]["pct"]   = f"{_sign}{_pct:.2f}%"
+                    data["KOSDAQ"]["color"] = "#FF4B4B" if _chg >= 0 else "#87CEEB"
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning(f"pykrx 지수 수집 실패: {e}")
+
+    # ── 2차: market_collector (yfinance 기반) ────────────
     try:
         from market_collector import get_yf_market_status_compatible
         yf_data = get_yf_market_status_compatible()
         for key in data:
             if key in yf_data and yf_data[key]["val"] != "-":
+                # KOSPI/KOSDAQ는 pykrx가 성공한 경우 덮어쓰지 않음
+                if key in ("KOSPI", "KOSDAQ") and data[key]["val"] != "-":
+                    continue
                 data[key] = yf_data[key]
     except Exception as e:
         logger.warning(f"yfinance 시장 지표 수집 실패: {e}")
 
-    # ── 1.5차: yfinance 직접 계산 폴백 (market_collector 실패 시) ──
-    if data["KOSPI"]["val"] == "-" or data["KOSDAQ"]["val"] == "-":
+    # ── 2.5차: US10Y — yfinance 직접 (market_collector 없어도) ─
+    if data["US10Y"]["val"] == "-":
         try:
-            import yfinance as _yf
-            for _key, _ticker in [("KOSPI", "^KS11"), ("KOSDAQ", "^KQ11")]:
-                if data[_key]["val"] != "-":
-                    continue
-                _tk   = _yf.Ticker(_ticker)
-                _hist = _tk.history(period="5d")
-                if len(_hist) >= 2:
-                    _cur  = float(_hist["Close"].iloc[-1])
-                    _prev = float(_hist["Close"].iloc[-2])
-                    _chg  = _cur - _prev
-                    _pct  = (_chg / _prev * 100) if _prev > 0 else 0.0
-                    _sign = "+" if _chg >= 0 else ""
-                    data[_key]["val"]   = f"{_cur:,.2f}"
-                    data[_key]["pct"]   = f"{_sign}{_pct:.2f}%"
-                    data[_key]["color"] = "#FF4B4B" if _chg >= 0 else "#87CEEB"
-        except Exception as _e:
-            logger.warning(f"yfinance 직접 지수 수집 실패: {_e}")
+            import yfinance as _yf2
+            _tnx  = _yf2.Ticker("^TNX")
+            _hist = _tnx.history(period="5d")
+            if len(_hist) >= 2:
+                _cur  = float(_hist["Close"].iloc[-1])
+                _prev = float(_hist["Close"].iloc[-2])
+                _d    = _cur - _prev
+                data["US10Y"]["val"]   = f"{_cur:.2f}"
+                data["US10Y"]["pct"]   = f"{_d:+.2f}%p"
+                data["US10Y"]["color"] = "#FF4B4B" if _d >= 0 else "#87CEEB"
+        except Exception:
+            pass
 
-    # ── 2차 폴백: 네이버 크롤링 (실패한 지표만) ──
+    # ── 3차: 네이버 크롤링 폴백 (여전히 "-"인 지표만) ───
     missing = [k for k, v in data.items() if v["val"] == "-"]
     if missing:
         logger.info(f"네이버 폴백: {missing}")
@@ -122,22 +175,19 @@ def _get_market_status_naver() -> dict:
                 data[code]["val"] = now_el.get_text(strip=True)
             diff_el = soup.select_one("#change_value_and_rate")
             if diff_el:
+                import re as _re
                 raw = diff_el.get_text(" ", strip=True)
                 for word in ["상승", "하락", "보합"]:
                     raw = raw.replace(word, "")
                 raw = raw.strip()
-                # 퍼센트 값만 추출 ("12.34 +0.46%" → "+0.46%")
-                import re as _re
-                pct_match = _re.search(r"([+\-]?[0-9]+\.?[0-9]*%)", raw)
-                if pct_match:
-                    pct_str = pct_match.group(1)
-                    # 부호 없는 경우 맨 앞 숫자(절대변동) 뒤의 부호 있는 값 사용
-                    if pct_str and not pct_str.startswith(("+", "-")):
-                        pct_match2 = _re.search(r"([+\-][0-9]+\.?[0-9]*%)", raw)
-                        pct_str = pct_match2.group(1) if pct_match2 else pct_str
+                # "12.34 +0.46%" → "+0.46%" 퍼센트만 추출
+                _m = _re.search(r"([+][0-9]+\.?[0-9]*%|[-][0-9]+\.?[0-9]*%)", raw)
+                if _m:
+                    pct_str = _m.group(1)
                 else:
-                    pct_str = raw
-                if "+" in pct_str or (pct_str and pct_str[0].isdigit()):
+                    _m2 = _re.search(r"([0-9]+\.?[0-9]*%)", raw)
+                    pct_str = _m2.group(1) if _m2 else raw
+                if "+" in pct_str:
                     data[code]["color"] = "#FF4B4B"
                 elif "-" in pct_str:
                     data[code]["color"] = "#87CEEB"
