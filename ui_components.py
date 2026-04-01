@@ -44,12 +44,12 @@ def style_pnl(df: pd.DataFrame, cols: list[str]):
             if val > 0: return "color: #FF4B4B; font-weight:600"
             if val < 0: return "color: #87CEEB; font-weight:600"
         return ""
-styler = df.style
-try:
-    styler = styler.map(_color, subset=[c for c in cols if c in df.columns])
-except AttributeError:
-    styler = styler.applymap(_color, subset=[c for c in cols if c in df.columns])
-return styler
+    styler = df.style
+    try:
+        styler = styler.map(_color, subset=[c for c in cols if c in df.columns])
+    except AttributeError:
+        styler = styler.applymap(_color, subset=[c for c in cols if c in df.columns])
+    return styler
 
 
 def hex_to_rgba(hex_color: str, alpha: float = 0.08) -> str:
