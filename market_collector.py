@@ -330,7 +330,12 @@ def get_krx_ohlcv(
 ) -> pd.DataFrame:
     """
     pykrx 일봉 OHLCV DataFrame 반환.
-    컬럼: 시가, 고가, 저가, 종가, 거래량
+    컬럼: Date | 시가 | 고가 | 저가 | 종가 | 거래량
+
+    [FIX] pykrx 버전에 따라 reset_index() 후 인덱스 컬럼명이
+    "날짜" 또는 "Date" 로 다르게 나올 수 있음.
+    save_ohlcv_log() 에서 row.get("Date") 로 고정 참조하므로
+    여기서 "날짜" → "Date" 로 통일 정규화.
     """
     try:
         from pykrx import stock as krx
@@ -339,6 +344,9 @@ def get_krx_ohlcv(
         df = krx.get_market_ohlcv(from_date, to_date, code)
         df.index.name = "Date"
         df = df.reset_index()
+        # ── [FIX] 컬럼명 정규화: "날짜" → "Date" ──────────────────
+        if "날짜" in df.columns:
+            df = df.rename(columns={"날짜": "Date"})
         return df
     except Exception as e:
         logger.error(f"get_krx_ohlcv({code}): {e}")
