@@ -46,8 +46,13 @@ KST = timezone(timedelta(hours=9))
 
 TTL_MARKET   = 300    # 시장 지표: 5분 (장중 충분히 빠름)
 TTL_PRICES   = 240    # 종목 주가: 4분
-TTL_SHEETS   = 60     # Google Sheets 읽기: 1분 (기존 ttl="1m" 유지)
+TTL_SHEETS   = 300    # Google Sheets 포트폴리오: 5분 (Rate Limit 방어용 상향)
 TTL_NEWS     = 600    # 뉴스: 10분 (자주 변하지 않음)
+# ── Rate Limit 429 방어용 추가 TTL ───────────────────────────────
+# trades / dividend / snapshot 은 장중 실시간 변경이 없으므로 길게 설정
+TTL_TRADES   = 300    # 거래내역: 5분 (수동 입력 시트)
+TTL_DIVIDEND = 300    # 배당실적: 5분 (수동 입력 시트)
+TTL_SNAPSHOT = 600    # 스냅샷:  10분 (장 마감 1회 저장 → 장중 변경 없음)
 
 
 # ════════════════════════════════════════════════════════
@@ -109,7 +114,7 @@ def get_news_cached(stock_name: str) -> list[dict]:
 @st.cache_data(ttl=TTL_SHEETS, show_spinner=False)
 def load_sheets_cached(_conn) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Google Sheets 워크시트 로드 캐시. TTL=1분.
+    Google Sheets 워크시트 로드 캐시. TTL=5분.
     _conn 앞의 언더스코어: Streamlit 이 이 인자를 해시하지 않도록 처리.
     (연결 객체는 해시 불가 → 언더스코어 prefix 로 무시)
 
@@ -123,6 +128,71 @@ def load_sheets_cached(_conn) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
     from data_engine import load_sheets
     logger.info("Google Sheets 실제 읽기 (캐시 미스)")
     return load_sheets(_conn)
+
+
+@st.cache_data(ttl=TTL_TRADES, show_spinner=False)
+def load_trades_cached(_conn) -> pd.DataFrame:
+    """
+    거래내역 시트 캐시. TTL=5분.
+
+    [Rate Limit 방어] load_trades() 는 캐시 없이 매 재실행마다 conn.read() 호출.
+    새로고침이 잦은 환경에서 429 오류의 주범 중 하나.
+
+    app.py 교체:
+        # 기존
+        trades_df = load_trades(conn)
+        # 변경
+        from mem_cache import load_trades_cached
+        trades_df = load_trades_cached(conn)
+    """
+    from data_engine import load_trades
+    logger.info("거래내역 실제 읽기 (캐시 미스)")
+    return load_trades(_conn)
+
+
+@st.cache_data(ttl=TTL_DIVIDEND, show_spinner=False)
+def load_dividend_cached(_conn, _portfolio_df_hash: int = 0) -> pd.DataFrame:
+    """
+    배당실적 시트 캐시. TTL=5분.
+
+    [Rate Limit 방어] load_dividend_actual() 은 배당 탭 렌더링 시마다 호출.
+    탭을 전환할 때마다 읽기가 발생해 429 를 유발할 수 있음.
+
+    _portfolio_df_hash: portfolio_df 의 len() 을 전달 → 종목 수 변경 시 캐시 무효화
+    (연결 객체·DataFrame 은 해시 불가 → 간접 해시값으로 우회)
+
+    app.py / ui_components.py 교체:
+        # 기존
+        act_df = load_dividend_actual(conn, portfolio_df=full_df)
+        # 변경
+        from mem_cache import load_dividend_cached
+        act_df = load_dividend_cached(conn, _portfolio_df_hash=len(full_df))
+        # ※ portfolio_df 는 별도로 전달 불가 → load_dividend_actual 래퍼에서 내부 처리
+    """
+    from data_engine import load_dividend_actual
+    logger.info("배당실적 실제 읽기 (캐시 미스)")
+    return load_dividend_actual(_conn)
+
+
+@st.cache_data(ttl=TTL_SNAPSHOT, show_spinner=False)
+def load_snapshot_cached(_conn) -> dict:
+    """
+    스냅샷 시트 캐시. TTL=10분.
+
+    [Rate Limit 방어] resolve_settings() → load_snapshot() 은 매 재실행마다 호출.
+    snapshot 시트는 장 마감 후 1회만 갱신되므로 10분 캐시로 충분.
+
+    data_engine.resolve_settings() 내부에서 직접 호출하도록 교체:
+        # 기존 (data_engine.py 내부)
+        sheet_snap = load_snapshot(conn)
+        # 변경
+        from mem_cache import load_snapshot_cached
+        sheet_snap = load_snapshot_cached(conn)
+    """
+    from data_engine import load_snapshot
+    logger.info("스냅샷 실제 읽기 (캐시 미스)")
+    return load_snapshot(_conn)
+
 
 
 # ════════════════════════════════════════════════════════
@@ -226,6 +296,19 @@ def clear_prices_cache() -> None:
     """주가만 선택 초기화 (시장 지표는 유지)."""
     get_prices_cached.clear()
     ss_set("prices_fetched_at", None)
+
+
+def clear_sheets_cache() -> None:
+    """
+    Sheets 관련 캐시만 선택 초기화.
+    수동으로 시트를 수정한 뒤 즉시 반영하고 싶을 때 사용.
+    주가·시장 지표 캐시는 유지.
+    """
+    load_sheets_cached.clear()
+    load_trades_cached.clear()
+    load_dividend_cached.clear()
+    load_snapshot_cached.clear()
+    logger.info("Sheets 캐시 초기화 (포트폴리오·거래내역·배당실적·스냅샷)")
 
 
 # ════════════════════════════════════════════════════════
