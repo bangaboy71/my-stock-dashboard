@@ -87,8 +87,10 @@ class _GspreadConnCompat:
 
     def update(self, worksheet: str, data: pd.DataFrame) -> None:
         ws = self._ss.worksheet(worksheet)
-        # 헤더 + 데이터 행으로 변환
-        values = [data.columns.tolist()] + data.astype(str).values.tolist()
+        # ★ NaN → 빈 문자열 변환 후 직렬화
+        # astype(str) 만 하면 NaN → "nan" 텍스트로 기록됨
+        clean = data.where(data.notna(), "")
+        values = [clean.columns.tolist()] + clean.astype(str).replace("nan", "").values.tolist()
         ws.clear()
         ws.update(values)
 
@@ -169,7 +171,11 @@ class SheetsWriter:
     def _write_df_to_worksheet(self, title: str, df: pd.DataFrame) -> bool:
         """DataFrame 을 워크시트에 전체 덮어쓰기 (conn.update 사용)"""
         try:
-            self._conn.update(worksheet=title, data=df)
+            # ★ NaN → 빈 문자열로 정리 후 전달
+            # st-gsheets-connection의 conn.update() 는 내부적으로 astype(str) 하므로
+            # NaN → "nan" 텍스트로 기록됨 → 미리 빈 문자열로 치환
+            clean_df = df.where(df.notna(), "")
+            self._conn.update(worksheet=title, data=clean_df)
             logger.info(f"'{title}' 저장 완료 ({len(df)}행)")
             return True
         except Exception as e:
@@ -304,7 +310,19 @@ def save_trend(
         existing = writer._read_worksheet_df(WS_TREND)
         if not existing.empty and "Date" in existing.columns:
             existing = existing[existing["Date"].astype(str) != today]
-            combined = pd.concat([existing, new_df], ignore_index=True)
+
+            # ★ 기존 컬럼 구조 보존
+            # new_df에 없는 컬럼(종목별 수익률 등)이 concat 후 NaN→"nan" 텍스트로
+            # 시트에 기록되는 것을 방지. 기존 컬럼 순서를 유지하고
+            # new_df에만 있는 신규 컬럼은 뒤에 추가.
+            existing_cols = existing.columns.tolist()
+            new_only_cols = [c for c in new_df.columns if c not in existing_cols]
+            all_cols = existing_cols + new_only_cols
+            combined = pd.concat(
+                [existing.reindex(columns=all_cols),
+                 new_df.reindex(columns=all_cols)],
+                ignore_index=True,
+            )
         else:
             combined = new_df
 
