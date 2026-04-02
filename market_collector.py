@@ -365,7 +365,13 @@ def get_krx_ohlcv(
 
         # YYYYMMDD → YYYY-MM-DD 변환
         from_dt = datetime.strptime(from_date,    "%Y%m%d").strftime("%Y-%m-%d")
-        to_dt   = datetime.strptime(to_date_fmt, "%Y%m%d").strftime("%Y-%m-%d")
+
+        # ★ yfinance history()의 end 파라미터는 exclusive (해당 날짜 미포함)
+        # end="2026-04-02" 이면 2026-04-01 까지만 반환 → 당일 데이터 누락
+        # 수정: to_date_fmt + 1일을 end 로 설정해야 당일 데이터 포함됨
+        to_dt = (
+            datetime.strptime(to_date_fmt, "%Y%m%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
 
         ticker = yf.Ticker(f"{code}.KS")
         df = ticker.history(start=from_dt, end=to_dt, interval="1d")
