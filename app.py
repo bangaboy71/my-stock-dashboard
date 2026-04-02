@@ -12,7 +12,7 @@ from streamlit_gsheets import GSheetsConnection
 
 import config
 from data_engine import (
-    load_trades, calc_avg_cost, merge_trades_to_portfolio,
+    calc_avg_cost, merge_trades_to_portfolio,
     get_now_kst,
     process_portfolio,
     process_history,
@@ -23,6 +23,7 @@ from mem_cache import (
     init_session_state,
     get_market_status_cached,
     load_sheets_cached,
+    load_trades_cached,       # [Rate Limit 방어] 거래내역 캐시 버전
     get_prices_with_progress,
     clear_data_cache,
 )
@@ -69,7 +70,8 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
 
 
         # 거래내역 로드 → 평균단가 자동 계산 → 종목현황에 병합
-        trades_df = load_trades(conn)
+        # [Rate Limit 방어] load_trades → load_trades_cached (TTL=5분)
+        trades_df = load_trades_cached(conn)
         avg_cost_df = calc_avg_cost(trades_df)
         sell_df     = avg_cost_df.attrs.get("sell_df", __import__("pandas").DataFrame())
         if not avg_cost_df.empty:
@@ -156,6 +158,8 @@ for idx, acc in enumerate(config.ACCOUNTS):
     )
 
 # 배당 실적 탭
+# [Rate Limit 방어] load_dividend_actual → load_dividend_cached (TTL=5분)
+# render_dividend_actual_tab 내부에서 캐시 버전을 사용하도록 ui_components.py 수정됨
 with tabs[-2]:
     render_dividend_actual_tab(full_df, conn, now_kst)
 
