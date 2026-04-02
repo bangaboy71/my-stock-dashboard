@@ -409,12 +409,22 @@ def get_krx_ohlcv(
         keep = [c for c in ["Date", "시가", "고가", "저가", "종가", "거래량"] if c in df.columns]
         df = df[keep].dropna(subset=["Date"])
 
+        # yfinance가 반환한 데이터가 비어있으면 빈 DataFrame 처리
+        if df.empty:
+            logger.warning(f"yfinance OHLCV 컬럼 정리 후 빈 결과({code}.KS)")
+            return pd.DataFrame()
+
         logger.info(f"yfinance OHLCV 폴백 성공({code}.KS): {len(df)}행")
         return df
 
     except Exception as e:
         logger.error(f"yfinance OHLCV 폴백도 실패({code}): {e}")
-        return pd.DataFrame()
+
+    # ── 3차: yfinance 실패 종목 — 빈 DataFrame 반환 후 로그 ──────────
+    # 테스(095610), 에스티팜(237690) 등 Yahoo Finance 미등록 소형주는
+    # yfinance에서 빈 결과를 반환함. 이 경우 해당 종목만 ohlcv_log에서 제외되며
+    # 나머지 종목 저장에는 영향 없음 (ui_components의 failed_names 목록에 표시됨)
+    return pd.DataFrame()
 
 
 def get_krx_investor_trend(
