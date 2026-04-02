@@ -364,17 +364,16 @@ def get_krx_ohlcv(
         import yfinance as yf
 
         # YYYYMMDD → YYYY-MM-DD 변환
-        from_dt = datetime.strptime(from_date,    "%Y%m%d").strftime("%Y-%m-%d")
+        from_dt = datetime.strptime(from_date, "%Y%m%d").strftime("%Y-%m-%d")
 
-        # ★ yfinance history()의 end 파라미터는 exclusive (해당 날짜 미포함)
-        # end="2026-04-02" 이면 2026-04-01 까지만 반환 → 당일 데이터 누락
-        # 수정: to_date_fmt + 1일을 end 로 설정해야 당일 데이터 포함됨
-        to_dt = (
-            datetime.strptime(to_date_fmt, "%Y%m%d") + timedelta(days=1)
-        ).strftime("%Y-%m-%d")
-
+        # ★ end+1일 방식 제거
+        # 문제: end='2026-04-03'으로 요청해도 yfinance가 04-02 데이터를
+        #       아직 제공 안 하면 04-01까지만 반환 → upsert today(=04-02) 기준
+        #       중복제거가 실패 → 04-01 데이터가 매 저장마다 중복 append됨
+        # 해결: end를 명시하지 않고 start만 지정 → yfinance가 최신 데이터까지
+        #       자동으로 반환 (당일 장 마감 후면 당일 포함, 미마감이면 전일까지)
         ticker = yf.Ticker(f"{code}.KS")
-        df = ticker.history(start=from_dt, end=to_dt, interval="1d")
+        df = ticker.history(start=from_dt, interval="1d")
 
         if df is None or df.empty:
             logger.warning(f"yfinance OHLCV 빈 결과({code}.KS)")
