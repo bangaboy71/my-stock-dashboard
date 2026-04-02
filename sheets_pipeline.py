@@ -389,11 +389,15 @@ def save_ohlcv_log(
     try:
         existing = writer._read_worksheet_df(WS_OHLCV_LOG)
         if not existing.empty and {"날짜", "종목코드"}.issubset(existing.columns):
-            # 오늘 날짜 + 같은 종목코드 행 제거 후 upsert
-            today_codes = new_df["종목코드"].unique().tolist()
+            # ★ upsert 기준: today(저장 버튼 누른 날) → new_df 실제 날짜 목록으로 변경
+            # 문제: today='2026-04-02' 기준 삭제 → 실제 데이터가 04-01이면 삭제 안 됨
+            #       → 매번 04-01 데이터가 중복 append됨
+            # 수정: new_df에 실제로 있는 날짜+종목코드 조합을 기준으로 삭제
+            new_dates  = new_df["날짜"].unique().tolist()
+            new_codes  = new_df["종목코드"].astype(str).unique().tolist()
             mask_remove = (
-                (existing["날짜"].astype(str) == today) &
-                (existing["종목코드"].astype(str).isin(today_codes))
+                existing["날짜"].astype(str).isin(new_dates) &
+                existing["종목코드"].astype(str).isin(new_codes)
             )
             existing = existing[~mask_remove]
             combined = pd.concat([existing, new_df], ignore_index=True)
