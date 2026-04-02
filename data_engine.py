@@ -462,7 +462,15 @@ def resolve_settings(conn) -> dict:
         for date_str, vals in overrides["snapshots"].items():
             settings["snapshot"].setdefault(date_str, {}).update(vals)
 
-    sheet_snap = load_snapshot(conn)
+    # ── [Rate Limit 방어] load_snapshot → 캐시 버전 사용 ──────────
+    # 기존: load_snapshot(conn) → 매 재실행마다 conn.read() 호출 (TTL=0)
+    # 변경: load_snapshot_cached(conn) → TTL=10분 캐시로 읽기 횟수 대폭 감소
+    try:
+        from mem_cache import load_snapshot_cached
+        sheet_snap = load_snapshot_cached(conn)
+    except Exception:
+        sheet_snap = load_snapshot(conn)   # 폴백: 캐시 모듈 import 실패 시
+
     for date_str, vals in sheet_snap.items():
         settings["snapshot"].setdefault(date_str, {}).update(vals)
 
