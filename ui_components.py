@@ -826,10 +826,18 @@ def render_sidebar(
     """사이드바 전체 렌더링"""
     with st.sidebar:
         st.header("⚙️ 관리 메뉴")
-        if st.button("🔄 실시간 데이터 전체 갱신"):
-            from mem_cache import clear_data_cache
-            clear_data_cache()
-            st.rerun()
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            if st.button("🔄 전체 갱신", use_container_width=True):
+                from mem_cache import clear_data_cache
+                clear_data_cache()
+                st.rerun()
+        with col_r2:
+            if st.button("📋 시트 갱신", use_container_width=True,
+                         help="포트폴리오·거래내역·배당실적·스냅샷 캐시만 초기화 (주가·시장 지표 유지)"):
+                from mem_cache import clear_sheets_cache
+                clear_sheets_cache()
+                st.rerun()
         st.divider()
 
         # 배당 D-Day
@@ -877,55 +885,28 @@ def _render_sheets_save_section(conn, full_df, m_status, now_kst):
                 # 버튼 클릭 시점에만 SheetsWriter 생성 (Rate Limit 방지)
                 writer = SheetsWriter.from_streamlit(conn)
 
-                # ── OHLCV 수집 (pykrx → yfinance 자동 폴백) ──────────────
-                # 근본 원인: Streamlit Cloud 에서 KRX 도메인(krx.co.kr)이
-                # 방화벽 차단(403)으로 pykrx 가 빈 DataFrame 을 반환.
-                # get_krx_ohlcv() 내부에서 yfinance 로 자동 폴백하도록 수정됨.
+                # ── [FIX] ohlcv_map 수집 후 전달 ──────────────────────────
+                # 기존 코드: run_eod_pipeline(..., now_kst=now_kst) 만 전달
+                # → ohlcv_map=None 기본값으로 실행되어 ohlcv_log 항상 스킵됨
+                # 수정: 버튼 클릭 시 최근 7일 OHLCV 를 수집해서 함께 전달
                 from_date = (now_kst - timedelta(days=7)).strftime("%Y%m%d")
                 ohlcv_map: dict = {}
-                failed_names: list = []
+                with st.spinner("📈 OHLCV 수집 중..."):
+                    for name, code in STOCK_CODES.items():
+                        try:
+                            df = get_krx_ohlcv(code, from_date)
+                            if not df.empty:
+                                ohlcv_map[name] = df
+                        except Exception:
+                            pass  # 개별 종목 실패는 무시하고 계속 진행
 
-                prog = st.progress(0, text="📈 OHLCV 수집 중...")
-                total_codes = len(STOCK_CODES)
-
-                for idx, (name, code) in enumerate(STOCK_CODES.items(), start=1):
-                    short = name[:8] + ".." if len(name) > 8 else name
-                    prog.progress(idx / total_codes,
-                                  text=f"📈 OHLCV 수집 중... ({idx}/{total_codes}) {short}")
-                    try:
-                        df = get_krx_ohlcv(code, from_date)
-                        if df is not None and not df.empty:
-                            ohlcv_map[name] = df
-                        else:
-                            failed_names.append(name)
-                    except Exception:
-                        failed_names.append(name)
-
-                prog.progress(1.0, text=f"✅ OHLCV 수집 완료 ({len(ohlcv_map)}/{total_codes}종목)")
-
-                # 수집 결과 요약 표시
-                if failed_names:
-                    st.warning(
-                        f"⚠️ OHLCV 수집 실패 {len(failed_names)}종목: "
-                        f"{', '.join(failed_names[:5])}"
-                        + (" 외" if len(failed_names) > 5 else "")
-                    )
-                if not ohlcv_map:
-                    st.error(
-                        "❌ 전체 종목 OHLCV 수집 실패 — "
-                        "pykrx(KRX 차단) + yfinance 모두 실패.\n"
-                        "requirements.txt 에 yfinance>=0.2.36 이 있는지 확인하세요."
-                    )
-
-                # ── 파이프라인 실행 ──────────────────────────────────────
                 results = run_eod_pipeline(
                     writer, full_df, m_status,
-                    ohlcv_map=ohlcv_map if ohlcv_map else None,
+                    ohlcv_map=ohlcv_map,   # ← ohlcv_map 명시 전달
                     now_kst=now_kst,
                 )
                 save_collection_log(writer, results, source="manual_sidebar", now_kst=now_kst)
                 st.session_state["sheets_last_save"] = now_kst.strftime("%m/%d %H:%M")
-
                 for item, ok in results.items():
                     if ok is None:
                         st.caption(f"⏭️ {item}: 스킵")
@@ -933,7 +914,6 @@ def _render_sheets_save_section(conn, full_df, m_status, now_kst):
                         st.success(f"✅ {item}")
                     else:
                         st.error(f"❌ {item} 실패")
-
             except Exception as e:
                 st.error(f"저장 오류: {e}")
 
@@ -1219,7 +1199,17 @@ def render_dividend_actual_tab(
         "시트 헤더: `입금일 | 계좌명 | 종목명 | 주당금액 | 세후금액 | 비고`"
     )
 
-    act_df = load_dividend_actual(conn, portfolio_df=full_df)
+    # [Rate Limit 방어] load_dividend_actual(conn) → load_dividend_cached(conn)
+    # 배당 탭을 열 때마다 conn.read(WS_DIVIDEND, ttl=0) 이 실행되던 것을
+    # TTL=5분 캐시로 전환 → 분당 읽기 횟수 대폭 감소
+    try:
+        from mem_cache import load_dividend_cached
+        act_df = load_dividend_cached(conn, _portfolio_df_hash=len(full_df))
+        # 캐시는 portfolio_df 없이 읽으므로 수량/세전금액 후처리는 여기서 보완
+        if not act_df.empty and "수량" not in act_df.columns:
+            act_df = load_dividend_actual(conn, portfolio_df=full_df)
+    except Exception:
+        act_df = load_dividend_actual(conn, portfolio_df=full_df)  # 폴백
 
     if act_df.empty:
         st.info(
