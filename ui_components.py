@@ -835,8 +835,12 @@ def render_sidebar(
         with col_r2:
             if st.button("📋 시트 갱신", use_container_width=True,
                          help="포트폴리오·거래내역·배당실적·스냅샷 캐시만 초기화 (주가·시장 지표 유지)"):
-                from mem_cache import clear_sheets_cache
-                clear_sheets_cache()
+                try:
+                    from mem_cache import clear_sheets_cache
+                    clear_sheets_cache()
+                except ImportError:
+                    from mem_cache import clear_data_cache as clear_sheets_cache
+                    clear_sheets_cache()
                 st.rerun()
         st.divider()
 
