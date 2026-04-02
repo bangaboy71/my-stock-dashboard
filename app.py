@@ -12,7 +12,7 @@ from streamlit_gsheets import GSheetsConnection
 
 import config
 from data_engine import (
-    calc_avg_cost, merge_trades_to_portfolio,
+    load_trades, calc_avg_cost, merge_trades_to_portfolio,
     get_now_kst,
     process_portfolio,
     process_history,
@@ -23,10 +23,16 @@ from mem_cache import (
     init_session_state,
     get_market_status_cached,
     load_sheets_cached,
-    load_trades_cached,       # [Rate Limit 방어] 거래내역 캐시 버전
     get_prices_with_progress,
     clear_data_cache,
 )
+
+# ── Rate Limit 방어: 새 캐시 함수 안전 import ────────────────────
+# mem_cache.py 가 구버전일 때도 앱이 정상 기동되도록 폴백 처리
+try:
+    from mem_cache import load_trades_cached
+except ImportError:
+    load_trades_cached = load_trades  # 구버전 폴백: 캐시 없이 직접 호출
 from ui_components import (
     render_dividend_actual_tab,
     render_trades_tab,
