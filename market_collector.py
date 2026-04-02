@@ -394,11 +394,17 @@ def get_krx_ohlcv(
         }
         df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
-        # Date 컬럼을 문자열 "YYYY-MM-DD" 로 정규화
+        # Date 컬럼을 문자열 "YYYY-MM-DD" 로 정규화 (KST 기준)
+        # ★ yfinance KS 종목은 날짜를 UTC 15:00 (= KST 00:00 다음날) 로 반환
+        #   tz_localize(None) 만 하면 UTC 날짜 그대로 → 하루 전 날짜로 기록됨
+        #   수정: tz_convert("Asia/Seoul") 로 KST 변환 후 날짜 추출
         if "Date" in df.columns:
-            df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce") \
-                           .dt.tz_localize(None) \
-                           .dt.strftime("%Y-%m-%d")
+            df["Date"] = (
+                pd.to_datetime(df["Date"], utc=True, errors="coerce")
+                .dt.tz_convert("Asia/Seoul")   # UTC → KST (+9h) 변환
+                .dt.tz_localize(None)           # tz 제거 (naive datetime)
+                .dt.strftime("%Y-%m-%d")
+            )
 
         # 필요한 컬럼만 추출 (없는 컬럼은 무시)
         keep = [c for c in ["Date", "시가", "고가", "저가", "종가", "거래량"] if c in df.columns]
