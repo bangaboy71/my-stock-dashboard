@@ -158,20 +158,34 @@ def load_dividend_cached(_conn, _portfolio_df_hash: int = 0) -> pd.DataFrame:
     [Rate Limit 방어] load_dividend_actual() 은 배당 탭 렌더링 시마다 호출.
     탭을 전환할 때마다 읽기가 발생해 429 를 유발할 수 있음.
 
-    _portfolio_df_hash: portfolio_df 의 len() 을 전달 → 종목 수 변경 시 캐시 무효화
-    (연결 객체·DataFrame 은 해시 불가 → 간접 해시값으로 우회)
-
-    app.py / ui_components.py 교체:
-        # 기존
-        act_df = load_dividend_actual(conn, portfolio_df=full_df)
-        # 변경
-        from mem_cache import load_dividend_cached
-        act_df = load_dividend_cached(conn, _portfolio_df_hash=len(full_df))
-        # ※ portfolio_df 는 별도로 전달 불가 → load_dividend_actual 래퍼에서 내부 처리
+    ※ 수량·세전금액·세후금액 계산은 ui_components.py에서 full_df로 후처리함.
+    여기서는 시트 원본 데이터만 캐싱.
     """
     from data_engine import load_dividend_actual
     logger.info("배당실적 실제 읽기 (캐시 미스)")
-    return load_dividend_actual(_conn)
+    # portfolio_df 없이 시트 원본만 로드 (수량 계산은 호출부에서 후처리)
+    try:
+        from config import WS_DIVIDEND
+        df = _conn.read(worksheet=WS_DIVIDEND, ttl=0)
+        if df.empty or "입금일" not in df.columns:
+            return pd.DataFrame()
+        import pandas as _pd
+        for col in ["주당금액", "세후금액"]:
+            if col in df.columns:
+                df[col] = _pd.to_numeric(
+                    df[col].astype(str).str.replace(",","").str.replace("-",""),
+                    errors="coerce"
+                ).fillna(0)
+        if "세전금액" in df.columns and "주당금액" not in df.columns:
+            df = df.rename(columns={"세전금액": "주당금액"})
+        df["입금일"] = _pd.to_datetime(df["입금일"], errors="coerce")
+        df = df.dropna(subset=["입금일"]).sort_values("입금일")
+        df["연도"] = df["입금일"].dt.year
+        df["월"]   = df["입금일"].dt.month
+        df["연월"] = df["입금일"].dt.strftime("%Y-%m")
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=TTL_SNAPSHOT, show_spinner=False)
