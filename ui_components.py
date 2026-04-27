@@ -1206,14 +1206,37 @@ def render_dividend_actual_tab(
     # [Rate Limit 방어] load_dividend_actual(conn) → load_dividend_cached(conn)
     # 배당 탭을 열 때마다 conn.read(WS_DIVIDEND, ttl=0) 이 실행되던 것을
     # TTL=5분 캐시로 전환 → 분당 읽기 횟수 대폭 감소
+    #
+    # [버그 수정] 캐시 로드 후 반드시 portfolio_df로 수량·세전금액 후처리
+    # load_dividend_actual이 portfolio_df=None이어도 "수량" 컬럼을 0으로 추가하므로
+    # "수량 not in columns" 조건은 항상 False → portfolio_df 없이 세후금액=0이 캐시됨
+    # → 캐시 후 항상 세전금액/세후금액 재계산으로 수정
     try:
         from mem_cache import load_dividend_cached
         act_df = load_dividend_cached(conn, _portfolio_df_hash=len(full_df))
-        # 캐시는 portfolio_df 없이 읽으므로 수량/세전금액 후처리는 여기서 보완
-        if not act_df.empty and "수량" not in act_df.columns:
-            act_df = load_dividend_actual(conn, portfolio_df=full_df)
     except Exception:
-        act_df = load_dividend_actual(conn, portfolio_df=full_df)  # 폴백
+        act_df = load_dividend_actual(conn, portfolio_df=full_df)
+
+    # 캐시로 읽은 경우 portfolio_df 없이 수량=0으로 저장됐을 수 있으므로
+    # full_df로 수량·세전금액·세후금액 후처리 항상 수행
+    if not act_df.empty and not full_df.empty:
+        acc_col = next((c for c in ["계좌명","계좌"] if c in full_df.columns), None)
+        def _recompute_shares(row):
+            if acc_col is None:
+                m = full_df["종목명"] == row.get("종목명","")
+            else:
+                m = (full_df[acc_col] == row.get("계좌명","")) & \
+                    (full_df["종목명"] == row.get("종목명",""))
+            matched = full_df.loc[m, "수량"]
+            return float(matched.values[0]) if not matched.empty else 0.0
+        act_df["수량"]    = act_df.apply(_recompute_shares, axis=1)
+        if "주당금액" in act_df.columns:
+            act_df["세전금액"] = act_df["주당금액"] * act_df["수량"]
+            # 세후금액: 시트에 입력된 값 우선, 없으면 세전 × (1 - 15.4%)
+            from config import DIVIDEND_TAX_RATE as _DTR
+            mask_zero = act_df.get("세후금액", 0) == 0
+            act_df.loc[mask_zero, "세후금액"] = \
+                act_df.loc[mask_zero, "세전금액"] * (1 - _DTR)
 
     if act_df.empty:
         st.info(
