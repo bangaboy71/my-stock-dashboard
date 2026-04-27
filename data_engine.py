@@ -676,16 +676,16 @@ def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFram
             matched = portfolio_df.loc[mask, "수량"]
             return float(matched.values[0]) if not matched.empty else 0.0
 
-        # 시트에 직접 입력된 세후금액 백업 (수량 계산 중 덮어쓰기 방지)
+        # 시트에 직접 입력된 세후금액 백업 (수량=0 계산 시 덮어쓰기 방지)
         _sheet_net = df["세후금액"].copy() if "세후금액" in df.columns else pd.Series(dtype=float)
         df["수량"]    = df.apply(_get_shares, axis=1)
         df["세전금액"] = df["주당금액"] * df["수량"]
         if "세후금액" not in df.columns:
             df["세후금액"] = 0.0
-        # 시트에 직접 입력된 세후금액 복원 (portfolio_df 유무와 무관하게 유지)
+        # 시트 세후금액 복원 (portfolio_df 유무와 무관하게 유지)
         if not _sheet_net.empty:
             df["세후금액"] = _sheet_net.values
-        # 세후금액이 0인 행만 세전금액 기반 계산
+        # 세후금액 0인 행만 세전기준 계산
         mask = df["세후금액"] == 0
         df.loc[mask, "세후금액"] = df.loc[mask, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
         df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
@@ -724,7 +724,12 @@ def load_trades(conn) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
+def calc_avg_cost(trades_df: pd.DataFrame,
+                  portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    거래내역 → 계좌·종목별 평균단가·보유수량·실현손익 계산.
+    portfolio_df: 종목현황 시트 (거래내역에 매수 없이 매도만 있는 경우 매입단가 조회용)
+    """
     if trades_df.empty:
         return pd.DataFrame(
             columns=["계좌명","종목명","보유수량","평균단가","총매입금액","실현손익"]
