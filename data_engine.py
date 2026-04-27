@@ -718,7 +718,15 @@ def load_trades(conn) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
+def calc_avg_cost(trades_df: pd.DataFrame,
+                  portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    거래내역으로부터 계좌·종목별 평균단가, 보유수량, 실현손익 계산.
+
+    [매도 전용 거래 처리]
+    거래내역에 매수 기록 없이 매도만 있는 경우(종목현황 시트에 기 보유),
+    portfolio_df에서 해당 종목의 수량·매입단가를 가져와 실현손익 계산.
+    """
     if trades_df.empty:
         return pd.DataFrame(
             columns=["계좌명","종목명","보유수량","평균단가","총매입금액","실현손익"]
@@ -745,32 +753,52 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
                     first_buy_date = dt
                 cost_total += q * price + fee
                 qty_hold   += q
-            elif 구분 == "매도" and qty_hold > 0:
-                avg      = cost_total / qty_hold if qty_hold > 0 else 0
-                sold_q   = min(q, qty_hold)
-                gain     = (price - avg) * sold_q - fee
-                realized += gain
-                cost_total = max(0, cost_total - avg * sold_q)
-                qty_hold   = max(0, qty_hold - sold_q)
-                hold_days  = None
-                if first_buy_date is not None and pd.notna(dt):
-                    try:
-                        hold_days = (pd.Timestamp(dt) - pd.Timestamp(first_buy_date)).days
-                    except Exception:
-                        hold_days = None
-                sell_records.append({
-                    "매도일":    pd.Timestamp(dt).strftime("%Y-%m-%d") if pd.notna(dt) else "",
-                    "계좌명":    acc,
-                    "종목명":    nm,
-                    "매도수량":  int(sold_q),
-                    "매입단가":  round(avg),
-                    "매도단가":  int(price),
-                    "매도금액":  int(price * sold_q),
-                    "실현손익":  round(gain),
-                    "수익률(%)": round((price / avg - 1) * 100, 2) if avg > 0 else 0,
-                    "보유일수":  hold_days,
-                    "수수료":    int(fee),
-                })
+            elif 구분 == "매도":
+                # ── 거래내역에 매수 없는 매도 → 종목현황 시트에서 초기값 보완 ──
+                if qty_hold == 0 and portfolio_df is not None and not portfolio_df.empty:
+                    acc_col = next((c for c in ["계좌명","계좌"] if c in portfolio_df.columns), None)
+                    if acc_col:
+                        p_mask = (
+                            (portfolio_df[acc_col].astype(str).str.strip() == acc) &
+                            (portfolio_df["종목명"].astype(str).str.strip() == nm)
+                        )
+                    else:
+                        p_mask = portfolio_df["종목명"].astype(str).str.strip() == nm
+                    if p_mask.any():
+                        qty_hold   = float(portfolio_df.loc[p_mask, "수량"].iloc[0])
+                        buy_price  = float(portfolio_df.loc[p_mask, "매입단가"].iloc[0])
+                        cost_total = qty_hold * buy_price
+                        if first_buy_date is None:
+                            raw_dt = portfolio_df.loc[p_mask].get("최초매입일", pd.Series([None])).iloc[0]
+                            if raw_dt is not None and pd.notna(raw_dt):
+                                first_buy_date = raw_dt
+
+                if qty_hold > 0:
+                    avg      = cost_total / qty_hold
+                    sold_q   = min(q, qty_hold)
+                    gain     = (price - avg) * sold_q - fee
+                    realized += gain
+                    cost_total = max(0, cost_total - avg * sold_q)
+                    qty_hold   = max(0, qty_hold - sold_q)
+                    hold_days  = None
+                    if first_buy_date is not None and pd.notna(dt):
+                        try:
+                            hold_days = (pd.Timestamp(dt) - pd.Timestamp(first_buy_date)).days
+                        except Exception:
+                            hold_days = None
+                    sell_records.append({
+                        "매도일":    pd.Timestamp(dt).strftime("%Y-%m-%d") if pd.notna(dt) else "",
+                        "계좌명":    acc,
+                        "종목명":    nm,
+                        "매도수량":  int(sold_q),
+                        "매입단가":  round(avg),
+                        "매도단가":  int(price),
+                        "매도금액":  int(price * sold_q),
+                        "실현손익":  round(gain),
+                        "수익률(%)": round((price / avg - 1) * 100, 2) if avg > 0 else 0,
+                        "보유일수":  hold_days,
+                        "수수료":    int(fee),
+                    })
 
         avg_cost = cost_total / qty_hold if qty_hold > 0 else 0.0
         if qty_hold <= 0:
@@ -795,15 +823,7 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
 
 def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
                                avg_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    거래내역 기반 avg_df와 종목현황 시트(portfolio_df)를 병합.
-
-    [중복 방지 원칙]
-    종목현황 시트에 이미 정확한 수량이 입력돼 있는 경우
-    거래내역 수량이 시트 수량 이하라면 합산하지 않고 단가만 보정.
-    거래내역 수량이 시트 수량을 초과할 때만 초과분을 추가 합산.
-    → 시트에 직접 입력한 종목과 거래내역이 중복 집계되는 것을 방지.
-    """
+    """거래내역(추가분) + 종목현황 시트(기존분) 합산 병합 (기존 유지)"""
     if avg_df.empty:
         return portfolio_df
     df = portfolio_df.copy()
@@ -828,34 +848,24 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
             mask = df["종목명"].astype(str).str.strip() == row_nm
         if not mask.any():
             continue
-
         trade_qty_net = float(row.get("보유수량", 0))
         trade_cost    = float(row.get("총매입금액", 0))
         sheet_qty     = float(df.loc[mask, "수량"].iloc[0])
         sheet_price   = float(df.loc[mask, "매입단가"].iloc[0])
         sheet_cost    = sheet_qty * sheet_price
-
-        # ── 중복 방지 ────────────────────────────────────────
-        if trade_qty_net <= sheet_qty:
-            # 거래내역 수량 ≤ 시트 수량
-            # → 시트에 이미 반영된 상태로 판단, 수량 변경 없이 단가만 보정
-            trade_avg = float(row.get("평균단가", 0))
-            if trade_avg > 0:
-                df.loc[mask, "매입단가"] = round(trade_avg)
-                df.loc[mask, "매입금액"] = round(sheet_qty * trade_avg)
-            continue
-
-        # 거래내역 수량 > 시트 수량 → 초과분만 추가 합산
-        extra_qty  = trade_qty_net - sheet_qty
-        extra_cost = (trade_cost / trade_qty_net * extra_qty) if trade_qty_net > 0 else 0
-        new_qty    = sheet_qty + extra_qty
+        new_qty       = sheet_qty + trade_qty_net
         if new_qty <= 0:
             df.loc[mask, "수량"] = 0
             continue
-        new_avg = (sheet_cost + extra_cost) / new_qty if new_qty > 0 else sheet_price
+        if trade_qty_net > 0 and trade_cost > 0:
+            new_avg = (sheet_cost + trade_cost) / new_qty
+        elif trade_qty_net < 0:
+            new_avg = sheet_price
+        else:
+            new_avg = sheet_price
         df.loc[mask, "수량"]     = new_qty
         df.loc[mask, "매입단가"] = round(new_avg)
-        df.loc[mask, "매입금액"] = round(new_qty * new_avg)
+        df.loc[mask, "매입금액"] = new_qty * round(new_avg)
     return df
 
 
