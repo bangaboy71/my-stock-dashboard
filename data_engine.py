@@ -676,10 +676,16 @@ def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFram
             matched = portfolio_df.loc[mask, "수량"]
             return float(matched.values[0]) if not matched.empty else 0.0
 
-        df["수량"]   = df.apply(_get_shares, axis=1)
+        # 시트에 직접 입력된 세후금액 백업 (덮어쓰기 방지)
+        _sheet_net = df["세후금액"].copy() if "세후금액" in df.columns else pd.Series(dtype=float)
+        df["수량"]    = df.apply(_get_shares, axis=1)
         df["세전금액"] = df["주당금액"] * df["수량"]
         if "세후금액" not in df.columns:
             df["세후금액"] = 0.0
+        # 시트에 직접 입력된 세후금액이 있으면 복원 (수량 계산과 무관하게 유지)
+        if not _sheet_net.empty:
+            df["세후금액"] = _sheet_net.values
+        # 세후금액이 0인 행만 세전금액으로 계산
         mask = df["세후금액"] == 0
         df.loc[mask, "세후금액"] = df.loc[mask, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
         df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
@@ -721,7 +727,7 @@ def load_trades(conn) -> pd.DataFrame:
 def calc_avg_cost(trades_df: pd.DataFrame,
                   portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
     """
-    거래내역으로부터 계좌·종목별 평균단가, 보유수량, 실현손익 계산.
+    거래내역 → 계좌·종목별 평균단가·보유수량·실현손익 계산.
 
     [매도 전용 거래 처리]
     거래내역에 매수 기록 없이 매도만 있는 경우(종목현황 시트에 기 보유),
@@ -754,24 +760,22 @@ def calc_avg_cost(trades_df: pd.DataFrame,
                 cost_total += q * price + fee
                 qty_hold   += q
             elif 구분 == "매도":
-                # ── 거래내역에 매수 없는 매도 → 종목현황 시트에서 초기값 보완 ──
+                # 거래내역에 매수 없는 매도 → 종목현황 시트에서 초기값 조회
                 if qty_hold == 0 and portfolio_df is not None and not portfolio_df.empty:
-                    acc_col = next((c for c in ["계좌명","계좌"] if c in portfolio_df.columns), None)
-                    if acc_col:
-                        p_mask = (
-                            (portfolio_df[acc_col].astype(str).str.strip() == acc) &
-                            (portfolio_df["종목명"].astype(str).str.strip() == nm)
-                        )
+                    _acc_col = next((c for c in ["계좌명","계좌"] if c in portfolio_df.columns), None)
+                    if _acc_col:
+                        _pm = ((portfolio_df[_acc_col].astype(str).str.strip() == acc) &
+                               (portfolio_df["종목명"].astype(str).str.strip() == nm))
                     else:
-                        p_mask = portfolio_df["종목명"].astype(str).str.strip() == nm
-                    if p_mask.any():
-                        qty_hold   = float(portfolio_df.loc[p_mask, "수량"].iloc[0])
-                        buy_price  = float(portfolio_df.loc[p_mask, "매입단가"].iloc[0])
-                        cost_total = qty_hold * buy_price
+                        _pm = portfolio_df["종목명"].astype(str).str.strip() == nm
+                    if _pm.any():
+                        qty_hold   = float(portfolio_df.loc[_pm, "수량"].iloc[0])
+                        _buy_price = float(portfolio_df.loc[_pm, "매입단가"].iloc[0])
+                        cost_total = qty_hold * _buy_price
                         if first_buy_date is None:
-                            raw_dt = portfolio_df.loc[p_mask].get("최초매입일", pd.Series([None])).iloc[0]
-                            if raw_dt is not None and pd.notna(raw_dt):
-                                first_buy_date = raw_dt
+                            _raw_dt = portfolio_df.loc[_pm].get("최초매입일", pd.Series([None])).iloc[0]
+                            if _raw_dt is not None and pd.notna(_raw_dt):
+                                first_buy_date = _raw_dt
 
                 if qty_hold > 0:
                     avg      = cost_total / qty_hold
