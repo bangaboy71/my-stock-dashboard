@@ -676,16 +676,13 @@ def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFram
             matched = portfolio_df.loc[mask, "수량"]
             return float(matched.values[0]) if not matched.empty else 0.0
 
-        # 시트에 직접 입력된 세후금액 백업 (수량=0 계산 중 덮어쓰기 방지)
         _sheet_net = df["세후금액"].copy() if "세후금액" in df.columns else pd.Series(dtype=float)
         df["수량"]    = df.apply(_get_shares, axis=1)
         df["세전금액"] = df["주당금액"] * df["수량"]
         if "세후금액" not in df.columns:
             df["세후금액"] = 0.0
-        # 시트 세후금액 복원 (portfolio_df 유무와 무관하게 입력값 유지)
         if not _sheet_net.empty:
             df["세후금액"] = _sheet_net.values
-        # 세후금액 0인 행만 세전기준 계산 (세후금액을 비워둔 경우)
         mask = df["세후금액"] == 0
         df.loc[mask, "세후금액"] = df.loc[mask, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
         df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
@@ -729,9 +726,10 @@ def calc_avg_cost(trades_df: pd.DataFrame,
     """
     거래내역 → 계좌·종목별 평균단가·보유수량·실현손익 계산.
 
-    portfolio_df: 종목현황 시트 DataFrame.
-    거래내역에 매수 없이 매도만 있는 경우(종목현황에 기 보유),
-    portfolio_df에서 수량·매입단가를 조회해 실현손익을 계산합니다.
+    매도 시 매입단가 조회 우선순위:
+      1순위: 거래내역 내 이전 매수 기록 (qty_hold 누적)
+      2순위: 매도 행의 메모 열에 숫자 입력 (예: '124000')
+      3순위: portfolio_df(종목현황 시트)에서 조회
     """
     if trades_df.empty:
         return pd.DataFrame(
@@ -753,6 +751,7 @@ def calc_avg_cost(trades_df: pd.DataFrame,
             fee   = float(row.get("수수료", 0) or 0)
             구분  = row["구분"]
             dt    = row.get("날짜", None)
+            memo  = str(row.get("메모", "") or "").strip()
 
             if 구분 == "매수":
                 if first_buy_date is None and pd.notna(dt):
@@ -760,7 +759,19 @@ def calc_avg_cost(trades_df: pd.DataFrame,
                 cost_total += q * price + fee
                 qty_hold   += q
             elif 구분 == "매도":
-                # 거래내역에 매수 없는 매도 → 종목현황 시트에서 초기값 조회
+                # 매입단가 조회 우선순위 ──────────────────────────
+                # 2순위: 메모 열에 숫자 입력 → 매입단가로 사용
+                # (매도 행의 메모에 매입단가만 숫자로 기입하면 됨)
+                if qty_hold == 0 and memo:
+                    try:
+                        memo_price = float(memo.replace(",", ""))
+                        if memo_price > 0:
+                            qty_hold   = q
+                            cost_total = q * memo_price
+                    except ValueError:
+                        pass
+
+                # 3순위: portfolio_df(종목현황 시트)에서 조회
                 if qty_hold == 0 and portfolio_df is not None and not portfolio_df.empty:
                     _ac = next((c for c in ["계좌명","계좌"] if c in portfolio_df.columns), None)
                     if _ac:
@@ -772,7 +783,8 @@ def calc_avg_cost(trades_df: pd.DataFrame,
                         qty_hold   = float(portfolio_df.loc[_pm, "수량"].iloc[0])
                         cost_total = qty_hold * float(portfolio_df.loc[_pm, "매입단가"].iloc[0])
                         if first_buy_date is None:
-                            _rd = portfolio_df.loc[_pm].get("최초매입일", pd.Series([None])).iloc[0]
+                            _rd = portfolio_df.loc[_pm].get(
+                                "최초매입일", pd.Series([None])).iloc[0]
                             if _rd is not None and pd.notna(_rd):
                                 first_buy_date = _rd
 
@@ -826,15 +838,7 @@ def calc_avg_cost(trades_df: pd.DataFrame,
 
 def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
                                avg_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    거래내역 기반 avg_df와 종목현황 시트(portfolio_df)를 병합.
-
-    [중복 방지 원칙]
-    trade_qty_net <= sheet_qty: 시트에 이미 반영된 상태 → 수량 유지, 단가만 보정
-    trade_qty_net >  sheet_qty: 초과분만 추가 합산
-    → 시트에 직접 입력한 수량과 거래내역이 중복 집계되는 것을 방지.
-    (예: SK하이닉스 시트 1주 + 거래내역 1주 → 1주 유지)
-    """
+    """거래내역(추가분) + 종목현황 시트(기존분) 합산 병합 (기존 유지)"""
     if avg_df.empty:
         return portfolio_df
     df = portfolio_df.copy()
@@ -859,32 +863,24 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
             mask = df["종목명"].astype(str).str.strip() == row_nm
         if not mask.any():
             continue
-
         trade_qty_net = float(row.get("보유수량", 0))
         trade_cost    = float(row.get("총매입금액", 0))
         sheet_qty     = float(df.loc[mask, "수량"].iloc[0])
         sheet_price   = float(df.loc[mask, "매입단가"].iloc[0])
         sheet_cost    = sheet_qty * sheet_price
-
-        if trade_qty_net <= sheet_qty:
-            # 거래내역 수량 ≤ 시트 수량 → 이미 반영된 상태
-            # 수량은 시트 그대로, 단가는 거래내역 평균으로 보정
-            trade_avg = float(row.get("평균단가", 0))
-            if trade_avg > 0:
-                df.loc[mask, "매입단가"] = round(trade_avg)
-                df.loc[mask, "매입금액"] = round(sheet_qty * trade_avg)
+        new_qty       = sheet_qty + trade_qty_net
+        if new_qty <= 0:
+            df.loc[mask, "수량"] = 0
+            continue
+        if trade_qty_net > 0 and trade_cost > 0:
+            new_avg = (sheet_cost + trade_cost) / new_qty
+        elif trade_qty_net < 0:
+            new_avg = sheet_price
         else:
-            # 거래내역 수량 > 시트 수량 → 초과분만 추가
-            extra_qty  = trade_qty_net - sheet_qty
-            extra_cost = (trade_cost / trade_qty_net * extra_qty) if trade_qty_net > 0 else 0
-            new_qty    = sheet_qty + extra_qty
-            if new_qty <= 0:
-                df.loc[mask, "수량"] = 0
-                continue
-            new_avg = (sheet_cost + extra_cost) / new_qty
-            df.loc[mask, "수량"]     = new_qty
-            df.loc[mask, "매입단가"] = round(new_avg)
-            df.loc[mask, "매입금액"] = round(new_qty * new_avg)
+            new_avg = sheet_price
+        df.loc[mask, "수량"]     = new_qty
+        df.loc[mask, "매입단가"] = round(new_avg)
+        df.loc[mask, "매입금액"] = new_qty * round(new_avg)
     return df
 
 
