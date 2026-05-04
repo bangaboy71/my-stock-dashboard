@@ -657,7 +657,8 @@ def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFram
         df = conn.read(worksheet=WS_DIVIDEND, ttl=0)
         if df.empty or "입금일" not in df.columns:
             return pd.DataFrame()
-        for col in ["주당금액", "세후금액"]:
+
+        for col in ["주당금액", "세후금액", "수량"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(
                     df[col].astype(str).str.replace(",", "").str.replace("-", ""),
@@ -666,7 +667,23 @@ def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFram
         if "세전금액" in df.columns and "주당금액" not in df.columns:
             df = df.rename(columns={"세전금액": "주당금액"})
 
+        # ── 수량 결정: 시트 입력값 우선 ─────────────────────────
+        # 우선순위:
+        #   1순위: 배당실적 시트의 '수량' 컬럼 직접 입력값 (수령 당시 수량)
+        #   2순위: portfolio_df(종목현황)에서 현재 보유수량 조회 (미입력 시)
+        # 배당 수령 당시와 현재 보유수량이 다를 수 있으므로
+        # 시트에 입력된 수량을 반드시 우선 적용해야 정확한 세전금액 산출 가능.
+
+        has_sheet_qty = "수량" in df.columns
+
         def _get_shares(row) -> float:
+            # 1순위: 시트 수량이 있고 0보다 크면 그대로 사용
+            if has_sheet_qty:
+                sheet_qty = float(row.get("수량", 0) or 0)
+                if sheet_qty > 0:
+                    return sheet_qty
+
+            # 2순위: portfolio_df(종목현황)에서 현재 수량 조회 (폴백)
             if portfolio_df is None or portfolio_df.empty:
                 return 0.0
             mask = (
@@ -676,15 +693,23 @@ def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFram
             matched = portfolio_df.loc[mask, "수량"]
             return float(matched.values[0]) if not matched.empty else 0.0
 
+        # 세후금액 백업 (시트에 직접 입력된 값 보존)
         _sheet_net = df["세후금액"].copy() if "세후금액" in df.columns else pd.Series(dtype=float)
+
         df["수량"]    = df.apply(_get_shares, axis=1)
         df["세전금액"] = df["주당금액"] * df["수량"]
+
         if "세후금액" not in df.columns:
             df["세후금액"] = 0.0
+
+        # 시트 세후금액 복원 (수량 재계산과 무관하게 입력값 유지)
         if not _sheet_net.empty:
             df["세후금액"] = _sheet_net.values
-        mask = df["세후금액"] == 0
-        df.loc[mask, "세후금액"] = df.loc[mask, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
+
+        # 세후금액이 0인 행만 세전금액 기반 자동 계산
+        mask_zero = df["세후금액"] == 0
+        df.loc[mask_zero, "세후금액"] = df.loc[mask_zero, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
+
         df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
         df = df.dropna(subset=["입금일"]).sort_values("입금일")
         df["연도"] = df["입금일"].dt.year
@@ -721,8 +746,7 @@ def load_trades(conn) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def calc_avg_cost(trades_df: pd.DataFrame,
-                  portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
+def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
     if trades_df.empty:
         return pd.DataFrame(
             columns=["계좌명","종목명","보유수량","평균단가","총매입금액","실현손익"]
@@ -749,54 +773,32 @@ def calc_avg_cost(trades_df: pd.DataFrame,
                     first_buy_date = dt
                 cost_total += q * price + fee
                 qty_hold   += q
-            elif 구분 == "매도":
-                # 메모에 매입단가 입력 시 사용 (예: 메모='124000')
-                if qty_hold == 0:
-                    memo = str(row.get("메모", "") or "").strip()
-                    if memo:
-                        try:
-                            mp = float(memo.replace(",", ""))
-                            if mp > 0:
-                                qty_hold = q; cost_total = q * mp
-                        except ValueError:
-                            pass
-                # portfolio_df(종목현황)에서 조회
-                if qty_hold == 0 and portfolio_df is not None and not portfolio_df.empty:
-                    _ac = next((c for c in ["계좌명","계좌"] if c in portfolio_df.columns), None)
-                    if _ac:
-                        _pm = ((portfolio_df[_ac].astype(str).str.strip() == acc) &
-                               (portfolio_df["종목명"].astype(str).str.strip() == nm))
-                    else:
-                        _pm = portfolio_df["종목명"].astype(str).str.strip() == nm
-                    if _pm.any():
-                        qty_hold   = float(portfolio_df.loc[_pm,"수량"].iloc[0])
-                        cost_total = qty_hold * float(portfolio_df.loc[_pm,"매입단가"].iloc[0])
-                if qty_hold > 0:
-                    avg      = cost_total / qty_hold if qty_hold > 0 else 0
-                    sold_q   = min(q, qty_hold)
-                    gain     = (price - avg) * sold_q - fee
-                    realized += gain
-                    cost_total = max(0, cost_total - avg * sold_q)
-                    qty_hold   = max(0, qty_hold - sold_q)
-                    hold_days  = None
-                    if first_buy_date is not None and pd.notna(dt):
-                        try:
-                            hold_days = (pd.Timestamp(dt) - pd.Timestamp(first_buy_date)).days
-                        except Exception:
-                            hold_days = None
-                    sell_records.append({
-                        "매도일":    pd.Timestamp(dt).strftime("%Y-%m-%d") if pd.notna(dt) else "",
-                        "계좌명":    acc,
-                        "종목명":    nm,
-                        "매도수량":  int(sold_q),
-                        "매입단가":  round(avg),
-                        "매도단가":  int(price),
-                        "매도금액":  int(price * sold_q),
-                        "실현손익":  round(gain),
-                        "수익률(%)": round((price / avg - 1) * 100, 2) if avg > 0 else 0,
-                        "보유일수":  hold_days,
-                        "수수료":    int(fee),
-                    })
+            elif 구분 == "매도" and qty_hold > 0:
+                avg      = cost_total / qty_hold if qty_hold > 0 else 0
+                sold_q   = min(q, qty_hold)
+                gain     = (price - avg) * sold_q - fee
+                realized += gain
+                cost_total = max(0, cost_total - avg * sold_q)
+                qty_hold   = max(0, qty_hold - sold_q)
+                hold_days  = None
+                if first_buy_date is not None and pd.notna(dt):
+                    try:
+                        hold_days = (pd.Timestamp(dt) - pd.Timestamp(first_buy_date)).days
+                    except Exception:
+                        hold_days = None
+                sell_records.append({
+                    "매도일":    pd.Timestamp(dt).strftime("%Y-%m-%d") if pd.notna(dt) else "",
+                    "계좌명":    acc,
+                    "종목명":    nm,
+                    "매도수량":  int(sold_q),
+                    "매입단가":  round(avg),
+                    "매도단가":  int(price),
+                    "매도금액":  int(price * sold_q),
+                    "실현손익":  round(gain),
+                    "수익률(%)": round((price / avg - 1) * 100, 2) if avg > 0 else 0,
+                    "보유일수":  hold_days,
+                    "수수료":    int(fee),
+                })
 
         avg_cost = cost_total / qty_hold if qty_hold > 0 else 0.0
         if qty_hold <= 0:
@@ -851,27 +853,19 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
         sheet_qty     = float(df.loc[mask, "수량"].iloc[0])
         sheet_price   = float(df.loc[mask, "매입단가"].iloc[0])
         sheet_cost    = sheet_qty * sheet_price
-
-        # 중복 방지: 거래내역 수량 ≤ 시트 수량이면 이미 반영된 상태
-        # → 수량 유지, 평균단가만 보정
-        if trade_qty_net <= sheet_qty:
-            trade_avg = float(row.get("평균단가", 0))
-            if trade_avg > 0:
-                df.loc[mask, "매입단가"] = round(trade_avg)
-                df.loc[mask, "매입금액"] = round(sheet_qty * trade_avg)
-            continue
-
-        # 초과분만 추가 합산
-        extra_qty  = trade_qty_net - sheet_qty
-        extra_cost = (trade_cost / trade_qty_net * extra_qty) if trade_qty_net > 0 else 0
-        new_qty    = sheet_qty + extra_qty
+        new_qty       = sheet_qty + trade_qty_net
         if new_qty <= 0:
             df.loc[mask, "수량"] = 0
             continue
-        new_avg = (sheet_cost + extra_cost) / new_qty
+        if trade_qty_net > 0 and trade_cost > 0:
+            new_avg = (sheet_cost + trade_cost) / new_qty
+        elif trade_qty_net < 0:
+            new_avg = sheet_price
+        else:
+            new_avg = sheet_price
         df.loc[mask, "수량"]     = new_qty
         df.loc[mask, "매입단가"] = round(new_avg)
-        df.loc[mask, "매입금액"] = round(new_qty * new_avg)
+        df.loc[mask, "매입금액"] = new_qty * round(new_avg)
     return df
 
 
