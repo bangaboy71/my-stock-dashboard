@@ -1206,13 +1206,14 @@ def render_dividend_actual_tab(
     # [Rate Limit 방어] load_dividend_actual(conn) → load_dividend_cached(conn)
     # 배당 탭을 열 때마다 conn.read(WS_DIVIDEND, ttl=0) 이 실행되던 것을
     # TTL=5분 캐시로 전환 → 분당 읽기 횟수 대폭 감소
-    # load_dividend_actual은 portfolio_df=None이어도 "수량" 컬럼을 0으로 추가하므로
-    # "수량 not in columns" 조건은 항상 False → portfolio_df 없는 캐시 그대로 사용됨
-    # 수정: portfolio_df(full_df)를 직접 전달해 수량·세전금액·세후금액 정확히 계산
     try:
-        act_df = load_dividend_actual(conn, portfolio_df=full_df)
+        from mem_cache import load_dividend_cached
+        act_df = load_dividend_cached(conn, _portfolio_df_hash=len(full_df))
+        # 캐시는 portfolio_df 없이 읽으므로 수량/세전금액 후처리는 여기서 보완
+        if not act_df.empty and "수량" not in act_df.columns:
+            act_df = load_dividend_actual(conn, portfolio_df=full_df)
     except Exception:
-        act_df = pd.DataFrame()
+        act_df = load_dividend_actual(conn, portfolio_df=full_df)  # 폴백
 
     if act_df.empty:
         st.info(
@@ -1363,15 +1364,22 @@ def render_dividend_actual_tab(
     # ── 투자원금 대비 배당수익률 (영리단단리) ───────────────
     st.divider()
     st.markdown("#### 📈 종목별 투자원금 대비 누적 배당수익률")
-    by_stock_full = act_df.groupby("종목명")["세후금액"].sum()
+
+    # 종목명 정규화 후 그룹핑 (공백·특수문자 불일치 방지)
+    act_df_n = act_df.copy()
+    act_df_n["종목명"] = act_df_n["종목명"].astype(str).str.strip()
+    by_stock_full = act_df_n.groupby("종목명")["세후금액"].sum()
 
     # 종목명 기준 전체 계좌 매입금액 합산 (drop_duplicates 사용 시 다계좌 누락 방지)
-    buy_by_stock  = full_df.groupby("종목명")["매입금액"].sum()
+    full_df_n = full_df.copy()
+    full_df_n["종목명"] = full_df_n["종목명"].astype(str).str.strip()
+    buy_by_stock  = full_df_n.groupby("종목명")["매입금액"].sum()
 
     rows_yield = []
     for name in buy_by_stock.index:
+        name_clean = str(name).strip()
         buy_amt = float(buy_by_stock.get(name, 0))
-        net_div = float(by_stock_full.get(name, 0))
+        net_div = float(by_stock_full.get(name_clean, 0))
         if buy_amt > 0:
             rows_yield.append({
                 "종목명":        name,
