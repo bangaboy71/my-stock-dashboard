@@ -799,7 +799,18 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
 
 def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
                                avg_df: pd.DataFrame) -> pd.DataFrame:
-    """거래내역(추가분) + 종목현황 시트(기존분) 합산 병합 (기존 유지)"""
+    """
+    거래내역에서 계산된 평균단가·수량을 종목현황 시트에 반영한다.
+
+    [수정 이유]
+    기존 로직은 trade_qty_net(거래내역 보유수량)을 sheet_qty(시트 수량)에 더했는데,
+    거래내역은 '전체 보유수량'을 의미하므로 더하면 이중 합산이 발생한다.
+    (예: 시트 1주 + 거래내역 1주 → 잘못된 2주 표시)
+
+    올바른 동작:
+      - 거래내역에 해당 종목이 있으면 → 거래내역의 수량·평균단가로 교체(replace)
+      - 거래내역에 없는 종목 → 시트 원본값 유지
+    """
     if avg_df.empty:
         return portfolio_df
     df = portfolio_df.copy()
@@ -824,24 +835,27 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
             mask = df["종목명"].astype(str).str.strip() == row_nm
         if not mask.any():
             continue
-        trade_qty_net = float(row.get("보유수량", 0))
-        trade_cost    = float(row.get("총매입금액", 0))
-        sheet_qty     = float(df.loc[mask, "수량"].iloc[0])
-        sheet_price   = float(df.loc[mask, "매입단가"].iloc[0])
-        sheet_cost    = sheet_qty * sheet_price
-        new_qty       = sheet_qty + trade_qty_net
-        if new_qty <= 0:
-            df.loc[mask, "수량"] = 0
+
+        # 거래내역에서 계산된 최종 보유수량·평균단가로 교체
+        trade_qty = float(row.get("보유수량", 0))
+        trade_avg = float(row.get("평균단가", 0))
+        trade_cost = float(row.get("총매입금액", 0))
+
+        if trade_qty <= 0:
+            # 거래내역 기준 전량 매도 → 수량 0 처리
+            df.loc[mask, "수량"]     = 0
+            df.loc[mask, "매입금액"] = 0
             continue
-        if trade_qty_net > 0 and trade_cost > 0:
-            new_avg = (sheet_cost + trade_cost) / new_qty
-        elif trade_qty_net < 0:
-            new_avg = sheet_price
+
+        # 평균단가: 거래내역 계산값 우선, 없으면 시트 원본 유지
+        if trade_avg > 0:
+            new_avg = trade_avg
         else:
-            new_avg = sheet_price
-        df.loc[mask, "수량"]     = new_qty
+            new_avg = float(df.loc[mask, "매입단가"].iloc[0])
+
+        df.loc[mask, "수량"]     = trade_qty
         df.loc[mask, "매입단가"] = round(new_avg)
-        df.loc[mask, "매입금액"] = new_qty * round(new_avg)
+        df.loc[mask, "매입금액"] = round(trade_qty * new_avg)
     return df
 
 
