@@ -231,13 +231,15 @@ def _get_market_status_naver() -> dict:
 # 3. 종목 주가 수집 (캐시 → pykrx → 네이버 3단 폴백)
 # ════════════════════════════════════════════════════════
 
-def get_stock_data(name: str) -> tuple[int, int]:
+def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
     """
     종목명 → (현재가, 전일종가) 반환.
     수집 전략: SQLite 캐시 → pykrx → 네이버 크롤링 순으로 시도.
     실패 시 (0, 0).
+    code: STOCK_CODES에 없는 신규 종목의 경우 직접 전달 가능 (예: '016360')
     """
-    code = STOCK_CODES.get(str(name).replace(" ", ""))
+    if code is None:
+        code = STOCK_CODES.get(str(name).replace(" ", ""))
     if not code:
         return 0, 0
 
@@ -287,13 +289,31 @@ def _get_stock_data_naver(code: str) -> tuple[int, int]:
 
 
 def get_stock_data_parallel(
-    names: list[str], on_progress=None
+    names: list[str], on_progress=None, portfolio_df: pd.DataFrame = None
 ) -> list[tuple[int, int]]:
     """
     종목 리스트를 병렬 수집 (원본 순서 보장).
     캐시 히트 종목은 즉시 반환, 나머지만 pykrx 병렬 수집.
     on_progress(done, total, name): 종목 1개 완료 시 호출되는 콜백.
+    portfolio_df: STOCK_CODES에 없는 신규 종목의 '종목코드' 컬럼 폴백용.
     """
+    # 종목코드 폴백 맵 생성: 종목명 → 코드 (STOCK_CODES 미등록 신규 종목 대응)
+    fallback_code_map: dict[str, str] = {}
+    if portfolio_df is not None and not portfolio_df.empty:
+        code_col = next(
+            (c for c in ["종목코드", "코드", "code", "Code"] if c in portfolio_df.columns),
+            None
+        )
+        if code_col:
+            for _, r in portfolio_df.iterrows():
+                nm = str(r.get("종목명", "")).strip()
+                cd = str(r.get(code_col, "")).strip()
+                if nm and cd and nm not in STOCK_CODES:
+                    # 시트에 저장된 코드는 '016360.KS' 형태일 수 있으므로 숫자만 추출
+                    cd_clean = cd.split(".")[0].strip()
+                    if cd_clean:
+                        fallback_code_map[nm] = cd_clean
+
     results: dict[str, tuple[int, int]] = {}
     total = len(names)
     done  = 0
@@ -301,7 +321,7 @@ def get_stock_data_parallel(
     # ── 캐시 선조회 (빠른 종목 먼저 처리) ──
     cache_miss = []
     for n in names:
-        code = STOCK_CODES.get(str(n).replace(" ", ""))
+        code = STOCK_CODES.get(str(n).replace(" ", "")) or fallback_code_map.get(n)
         if not code:
             results[n] = (0, 0)
             done += 1
@@ -323,10 +343,13 @@ def get_stock_data_parallel(
 
     # ── 캐시 미스 종목만 병렬 수집 ──
     if cache_miss:
-        max_workers = min(len(cache_miss), 5)   # pykrx: 5 이하 권장
+        max_workers = min(len(cache_miss), 5)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_name = {
-                executor.submit(get_stock_data, n): n for n in cache_miss
+                executor.submit(
+                    get_stock_data, n,
+                    fallback_code_map.get(n)  # STOCK_CODES 미등록 시 직접 코드 전달
+                ): n for n in cache_miss
             }
             for future in as_completed(future_to_name):
                 n = future_to_name[future]
@@ -506,6 +529,13 @@ def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFram
             ).fillna(0)
         elif c == "목표수익률":
             df["목표수익률"] = 10.0
+
+    # prices 길이 불일치 안전 처리: 부족분은 (0, 0)으로 채움
+    n = len(df)
+    if len(prices) < n:
+        prices = list(prices) + [(0, 0)] * (n - len(prices))
+    elif len(prices) > n:
+        prices = prices[:n]
 
     df["현재가"],  df["전일종가"] = zip(*prices)
 
@@ -800,16 +830,12 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
 def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
                                avg_df: pd.DataFrame) -> pd.DataFrame:
     """
-    거래내역에서 계산된 평균단가·수량을 종목현황 시트에 반영한다.
+    거래내역의 평균단가를 종목현황 시트에 반영한다.
 
-    [수정 이유]
-    기존 로직은 trade_qty_net(거래내역 보유수량)을 sheet_qty(시트 수량)에 더했는데,
-    거래내역은 '전체 보유수량'을 의미하므로 더하면 이중 합산이 발생한다.
-    (예: 시트 1주 + 거래내역 1주 → 잘못된 2주 표시)
-
-    올바른 동작:
-      - 거래내역에 해당 종목이 있으면 → 거래내역의 수량·평균단가로 교체(replace)
-      - 거래내역에 없는 종목 → 시트 원본값 유지
+    설계 원칙:
+      - 수량(수량 컬럼)은 구글 시트 '종목현황'이 정본(ground truth) → 변경하지 않음
+      - 평균단가만 거래내역에서 계산된 값으로 보정
+      - 거래내역에 없는 종목(신규 추가 포함) → 시트 원본값 그대로 유지
     """
     if avg_df.empty:
         return portfolio_df
@@ -834,28 +860,19 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
         else:
             mask = df["종목명"].astype(str).str.strip() == row_nm
         if not mask.any():
+            # 거래내역에 있지만 시트에 없는 종목 → 무시 (시트가 정본)
             continue
 
-        # 거래내역에서 계산된 최종 보유수량·평균단가로 교체
-        trade_qty = float(row.get("보유수량", 0))
         trade_avg = float(row.get("평균단가", 0))
-        trade_cost = float(row.get("총매입금액", 0))
-
-        if trade_qty <= 0:
-            # 거래내역 기준 전량 매도 → 수량 0 처리
-            df.loc[mask, "수량"]     = 0
-            df.loc[mask, "매입금액"] = 0
+        if trade_avg <= 0:
+            # 평균단가 계산 불가 → 시트 원본 유지
             continue
 
-        # 평균단가: 거래내역 계산값 우선, 없으면 시트 원본 유지
-        if trade_avg > 0:
-            new_avg = trade_avg
-        else:
-            new_avg = float(df.loc[mask, "매입단가"].iloc[0])
+        # 수량은 시트값 그대로, 평균단가만 거래내역 계산값으로 보정
+        sheet_qty = float(df.loc[mask, "수량"].iloc[0])
+        df.loc[mask, "매입단가"] = round(trade_avg)
+        df.loc[mask, "매입금액"] = round(sheet_qty * trade_avg)
 
-        df.loc[mask, "수량"]     = trade_qty
-        df.loc[mask, "매입단가"] = round(new_avg)
-        df.loc[mask, "매입금액"] = round(trade_qty * new_avg)
     return df
 
 
