@@ -78,7 +78,7 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
         # 거래내역 로드 → 평균단가 자동 계산 → 종목현황에 병합
         # [Rate Limit 방어] load_trades → load_trades_cached (TTL=5분)
         trades_df = load_trades_cached(conn)
-        avg_cost_df = calc_avg_cost(trades_df)
+        avg_cost_df = calc_avg_cost(trades_df, portfolio_df=full_df)
         sell_df     = avg_cost_df.attrs.get("sell_df", __import__("pandas").DataFrame())
         if not avg_cost_df.empty:
             full_df = merge_trades_to_portfolio(full_df, avg_cost_df)
@@ -99,6 +99,7 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
     prices = get_prices_with_progress(
         full_df["종목명"].tolist() if not full_df.empty else [],
         progress_widget=prog,
+        portfolio_df=full_df,
     )
     prog.progress(1.0, text=f"✅ 주가 수집 완료 ({n_stocks}/{n_stocks})")
 
