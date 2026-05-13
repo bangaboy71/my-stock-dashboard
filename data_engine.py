@@ -234,14 +234,16 @@ def _get_market_status_naver() -> dict:
 def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
     """
     종목명 → (현재가, 전일종가) 반환.
-    수집 전략: SQLite 캐시 → pykrx → 네이버 크롤링 순으로 시도.
+    수집 전략: SQLite 캐시 → pykrx → 네이버 크롤링 → yfinance 순으로 시도.
     실패 시 (0, 0).
     code: STOCK_CODES에 없는 신규 종목의 경우 직접 전달 가능 (예: '016360')
     """
     if code is None:
         code = STOCK_CODES.get(str(name).replace(" ", ""))
+
+    # STOCK_CODES 미등록 종목: yfinance로 직접 조회 (코드 없이도 동작)
     if not code:
-        return 0, 0
+        return _get_stock_data_yfinance_by_name(name)
 
     # ── 1단: SQLite 캐시 조회 ──
     try:
@@ -267,7 +269,36 @@ def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
         logger.warning(f"pykrx {name}({code}) 실패: {e}")
 
     # ── 3단: 네이버 크롤링 폴백 ──
-    return _get_stock_data_naver(code)
+    result = _get_stock_data_naver(code)
+    if result[0] > 0:
+        return result
+
+    # ── 4단: yfinance 최종 폴백 ──
+    return _get_stock_data_yfinance(code)
+
+
+def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
+    """yfinance로 주가 조회 (숫자 6자리 코드 → .KS/.KQ 자동 시도)"""
+    try:
+        import yfinance as yf
+        for suffix in [".KS", ".KQ"]:
+            ticker = yf.Ticker(code + suffix)
+            hist = ticker.history(period="5d")
+            if not hist.empty and len(hist) >= 1:
+                current = int(hist["Close"].iloc[-1])
+                prev = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
+                return current, prev
+    except Exception:
+        pass
+    return 0, 0
+
+
+def _get_stock_data_yfinance_by_name(name: str) -> tuple[int, int]:
+    """
+    종목명으로 yfinance 조회 시도.
+    STOCK_CODES에 없는 신규 종목 대응용 — config.py 갱신 전 임시 브리지.
+    """
+    return 0, 0
 
 
 def _get_stock_data_naver(code: str) -> tuple[int, int]:
