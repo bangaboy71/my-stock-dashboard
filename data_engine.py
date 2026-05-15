@@ -865,8 +865,10 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
 
     설계 원칙:
       - 수량(수량 컬럼)은 구글 시트 '종목현황'이 정본(ground truth) → 변경하지 않음
-      - 평균단가만 거래내역에서 계산된 값으로 보정
-      - 거래내역에 없는 종목(신규 추가 포함) → 시트 원본값 그대로 유지
+      - 평균단가 보정 조건: 거래내역 보유수량 == 시트 수량 (±1주 허용)
+        → 일치: 거래내역이 전체 이력을 포함 → 계산된 평균단가로 보정
+        → 불일치: 거래내역이 부분 기록(추가매수분만) → 시트 원본값 유지
+      - 거래내역에 없는 종목 → 시트 원본값 그대로 유지
     """
     if avg_df.empty:
         return portfolio_df
@@ -891,16 +893,21 @@ def merge_trades_to_portfolio(portfolio_df: pd.DataFrame,
         else:
             mask = df["종목명"].astype(str).str.strip() == row_nm
         if not mask.any():
-            # 거래내역에 있지만 시트에 없는 종목 → 무시 (시트가 정본)
             continue
 
         trade_avg = float(row.get("평균단가", 0))
+        trade_qty = float(row.get("보유수량", 0))
         if trade_avg <= 0:
-            # 평균단가 계산 불가 → 시트 원본 유지
             continue
 
-        # 수량은 시트값 그대로, 평균단가만 거래내역 계산값으로 보정
         sheet_qty = float(df.loc[mask, "수량"].iloc[0])
+
+        # 핵심 조건: 거래내역 보유수량 ≈ 시트 수량 (±1주 허용)
+        # 불일치 시 거래내역이 부분 기록(추가매수분만)이므로 시트 원본 유지
+        if abs(trade_qty - sheet_qty) > 1:
+            continue
+
+        # 수량 일치: 평균단가만 거래내역 계산값으로 보정
         df.loc[mask, "매입단가"] = round(trade_avg)
         df.loc[mask, "매입금액"] = round(sheet_qty * trade_avg)
 
