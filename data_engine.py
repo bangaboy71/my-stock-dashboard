@@ -297,7 +297,12 @@ def _get_stock_data_yfinance_by_name(name: str) -> tuple[int, int]:
     """
     종목명으로 yfinance 조회 시도.
     STOCK_CODES에 없는 신규 종목 대응용 — config.py 갱신 전 임시 브리지.
+    Google Sheets 포트폴리오에 '종목코드' 컬럼이 있으면 그 코드를 우선 사용.
     """
+    # Google Sheets에서 읽어온 종목코드가 있으면 우선 시도
+    # (get_stock_data_parallel의 fallback_code_map에서 처리됐어야 하지만
+    #  단독 호출 경로에서도 안전망 역할)
+    logger.warning(f"STOCK_CODES 미등록 종목 '{name}' — yfinance 이름 검색 불가. config.py에 추가 필요.")
     return 0, 0
 
 
