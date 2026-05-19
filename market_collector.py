@@ -372,11 +372,41 @@ def get_krx_ohlcv(
         #       중복제거가 실패 → 04-01 데이터가 매 저장마다 중복 append됨
         # 해결: end를 명시하지 않고 start만 지정 → yfinance가 최신 데이터까지
         #       자동으로 반환 (당일 장 마감 후면 당일 포함, 미마감이면 전일까지)
-        ticker = yf.Ticker(f"{code}.KS")
-        df = ticker.history(start=from_dt, interval="1d")
 
-        if df is None or df.empty:
-            logger.warning(f"yfinance OHLCV 빈 결과({code}.KS)")
+        # ── 우선주 티커 명시 처리 ────────────────────────────────
+        # config.PREFERRED_STOCK_TICKERS 에 등록된 종목(삼성전자우·현대차2우B 등)은
+        # 보통주(005930 → 005930.KS) 패턴이 동일하지만, config에서 명시 티커를
+        # 가져와 사용한다. 미등록 종목은 기존 {code}.KS → {code}.KQ 자동 시도.
+        try:
+            from config import PREFERRED_STOCK_TICKERS as _PREF
+            # code 값이 PREFERRED_STOCK_TICKERS의 value로 등록돼 있으면 그 값 사용
+            # (예: "005935" → "005935.KS")
+            _code_to_ticker = {v.split(".")[0]: v for v in _PREF.values()}
+            _explicit_ticker = _code_to_ticker.get(code)
+        except Exception:
+            _explicit_ticker = None
+
+        if _explicit_ticker:
+            yf_tickers_to_try = [_explicit_ticker]
+        else:
+            yf_tickers_to_try = [f"{code}.KS", f"{code}.KQ"]
+
+        df = pd.DataFrame()
+        used_ticker = ""
+        for _yt in yf_tickers_to_try:
+            try:
+                _t = yf.Ticker(_yt)
+                _df = _t.history(start=from_dt, interval="1d")
+                if _df is not None and not _df.empty:
+                    df = _df
+                    used_ticker = _yt
+                    break
+                logger.warning(f"yfinance OHLCV 빈 결과({_yt})")
+            except Exception as _e:
+                logger.warning(f"yfinance OHLCV 시도 실패({_yt}): {_e}")
+
+        if df.empty:
+            logger.warning(f"yfinance OHLCV 모든 티커 실패({code})")
             return pd.DataFrame()
 
         df = df.reset_index()
@@ -411,10 +441,10 @@ def get_krx_ohlcv(
 
         # yfinance가 반환한 데이터가 비어있으면 빈 DataFrame 처리
         if df.empty:
-            logger.warning(f"yfinance OHLCV 컬럼 정리 후 빈 결과({code}.KS)")
+            logger.warning(f"yfinance OHLCV 컬럼 정리 후 빈 결과({used_ticker})")
             return pd.DataFrame()
 
-        logger.info(f"yfinance OHLCV 폴백 성공({code}.KS): {len(df)}행")
+        logger.info(f"yfinance OHLCV 폴백 성공({used_ticker}): {len(df)}행")
         return df
 
     except Exception as e:
