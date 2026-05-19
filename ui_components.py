@@ -272,7 +272,7 @@ def _render_radar_chart(full_df: pd.DataFrame, sum_acc: pd.DataFrame):
         mn, mx = radar_df[col].min(), radar_df[col].max()
         radar_norm[col] = (radar_df[col] - mn) / (mx - mn) * 100 if mx - mn > 0 else 50
 
-    COLORS = ["#87CEEB", "#FFD700", "#FF4B4B", "#7CFC00"]
+    COLORS = ["#87CEEB", "#FFD700", "#FF4B4B", "#7CFC00", "#FF69B4"]
     fig = go.Figure()
     for i, row in radar_norm.iterrows():
         acc   = row["계좌명"]; raw = radar_df.loc[i]; color = COLORS[i % len(COLORS)]
@@ -1222,7 +1222,8 @@ def render_dividend_actual_tab(
             "| 입금일 | 계좌명 | 종목명 | 주당금액 | 세후금액 | 비고 |\n"
             "|---|---|---|---|---|---|\n"
             "| 2026-04-17 | 큰스님투자 | KODEX200타겟위클리커버드콜 | 252 | | |\n"
-            "| 2026-04-20 | 서은투자 | 삼성전자 | 361 | | |\n\n"
+            "| 2026-04-20 | 서은투자 | 삼성전자 | 361 | | |\n"
+            "| 2026-05-15 | 어머니투자 | TIGER배당커버드콜액티브 | 45 | | |\n\n"
             "주당금액 × 수량(종목현황 탭 자동 조회) = 세전금액 자동 계산\n"
             "세후금액을 비워두면 세전 × 84.6%로 자동 계산됩니다."
         )
