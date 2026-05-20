@@ -1112,15 +1112,16 @@ def render_trades_tab(
         return
 
     # ── 실현손익 요약 카드 ──────────────────────────────
-    _realized_total = avg_cost_df["실현손익"].sum() if not avg_cost_df.empty else 0
+    _realized_total = sell_df["실현손익"].sum() if not sell_df.empty and "실현손익" in sell_df.columns else 0
     _sell_cnt       = len(sell_df) if not sell_df.empty else 0
     _this_year      = str(_dt.datetime.now().year)
     _realized_yr    = 0
     if not sell_df.empty and "매도일" in sell_df.columns:
-        _realized_yr = sell_df[sell_df["매도일"].str.startswith(_this_year)]["실현손익"].sum()
+        if "매도일" in sell_df.columns:
+            _realized_yr = sell_df[sell_df["매도일"].str.startswith(_this_year)]["실현손익"].sum()
 
-    _sell_total_amt = sell_df["매도금액"].sum() if not sell_df.empty else 0
-    _avg_ret        = sell_df["수익률(%)"].mean() if not sell_df.empty else 0
+    _sell_total_amt = sell_df["매도금액"].sum() if not sell_df.empty and "매도금액" in sell_df.columns else 0
+    _avg_ret        = sell_df["수익률(%)"].mean() if not sell_df.empty and "수익률(%)" in sell_df.columns else 0
 
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("누적 실현손익",     f"{_realized_total:+,.0f}원",
