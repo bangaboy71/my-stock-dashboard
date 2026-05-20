@@ -37,60 +37,115 @@ def get_now_kst() -> datetime:
 # ════════════════════════════════════════════════════════
 
 def get_market_status() -> dict:
-    """KOSPI·KOSDAQ·USD/KRW·거래량 실시간 수집"""
+    """
+    KOSPI·KOSDAQ·USD/KRW·미국10년물(US10Y) 실시간 수집.
+
+    Yahoo Finance v8 Chart API (requests 직접 호출) 사용.
+    Streamlit Cloud에서 네이버/KRX 방화벽 차단 문제 우회.
+
+    반환 키: KOSPI | KOSDAQ | USD/KRW | US10Y
+    각 값: {"val": str, "pct": str, "color": str}
+    """
+    # 기본값 (수집 실패 시 표시)
     data = {
-        "KOSPI":   {"val": "-", "pct": "0.00%", "color": "#ffffff"},
-        "KOSDAQ":  {"val": "-", "pct": "0.00%", "color": "#ffffff"},
-        "USD/KRW": {"val": "-", "pct": "0원",   "color": "#ffffff"},
-        "VOLUME":  {"val": "-", "pct": "천주",  "color": "#ffffff"},
+        "KOSPI":   {"val": "-", "pct": "-",    "color": "#ffffff"},
+        "KOSDAQ":  {"val": "-", "pct": "-",    "color": "#ffffff"},
+        "USD/KRW": {"val": "-", "pct": "-",    "color": "#ffffff"},
+        "US10Y":   {"val": "-", "pct": "-",    "color": "#ffffff"},
     }
-    header = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.naver.com/"}
-    try:
-        for code in ["KOSPI", "KOSDAQ"]:
-            url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
-            res = requests.get(url, headers=header, timeout=5)
-            res.encoding = "euc-kr"
-            soup = BeautifulSoup(res.text, "html.parser")
 
-            now_el = soup.select_one("#now_value")
-            if now_el:
-                data[code]["val"] = now_el.get_text(strip=True)
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://finance.yahoo.com",
+    }
 
-            diff_el = soup.select_one("#change_value_and_rate")
-            if diff_el:
-                raw = diff_el.get_text(" ", strip=True)
-                for word in ["상승", "하락", "보합"]:
-                    raw = raw.replace(word, "")
-                if "+" in raw:
-                    data[code]["color"] = "#FF4B4B"
-                elif "-" in raw:
-                    data[code]["color"] = "#87CEEB"
-                data[code]["pct"] = raw.strip()
+    # Yahoo Finance 티커 매핑
+    _TICKERS = {
+        "KOSPI":   "^KS11",
+        "KOSDAQ":  "^KQ11",
+        "USD/KRW": "USDKRW=X",
+        "US10Y":   "^TNX",
+    }
 
-            if code == "KOSPI":
-                vol_el = soup.select_one("#quant")
-                if vol_el:
-                    data["VOLUME"]["val"] = vol_el.get_text(strip=True)
-                    data["VOLUME"]["pct"] = "천주"
+    def _fetch(ticker: str) -> dict | None:
+        """Yahoo v8 Chart API로 단일 티커 조회"""
+        for base in ("https://query1.finance.yahoo.com",
+                     "https://query2.finance.yahoo.com"):
+            try:
+                resp = requests.get(
+                    f"{base}/v8/finance/chart/{ticker}",
+                    params={"range": "1d", "interval": "1m",
+                            "includePrePost": "false"},
+                    headers=_HEADERS,
+                    timeout=5,
+                )
+                if resp.status_code != 200:
+                    continue
+                result = resp.json().get("chart", {}).get("result")
+                if result:
+                    return result[0].get("meta", {})
+            except Exception:
+                continue
+        return None
 
-        ex_res = requests.get(
-            "https://finance.naver.com/marketindex/", headers=header, timeout=5
-        )
-        ex_soup = BeautifulSoup(ex_res.text, "html.parser")
-        ex_val = ex_soup.select_one("span.value")
-        if ex_val:
-            data["USD/KRW"]["val"] = ex_val.get_text(strip=True)
-            ex_change = ex_soup.select_one("span.change").get_text(strip=True)
-            ex_blind  = ex_soup.select_one("div.head_info > span.blind").get_text()
-            if "상승" in ex_blind:
-                data["USD/KRW"]["color"], sign = "#FF4B4B", "+"
-            elif "하락" in ex_blind:
-                data["USD/KRW"]["color"], sign = "#87CEEB", "-"
-            else:
-                data["USD/KRW"]["color"], sign = "#ffffff", ""
-            data["USD/KRW"]["pct"] = f"{sign}{ex_change}원"
-    except Exception:
-        pass
+    # ── KOSPI / KOSDAQ ────────────────────────────────────
+    _KOSPI_MAX  = 4_500.0
+    _KOSDAQ_MAX = 1_500.0
+
+    for key, ticker in [("KOSPI", "^KS11"), ("KOSDAQ", "^KQ11")]:
+        meta = _fetch(ticker)
+        if not meta:
+            continue
+        cur  = meta.get("regularMarketPrice")
+        prev = meta.get("previousClose") or meta.get("chartPreviousClose")
+        if not cur or cur <= 0:
+            continue
+        # 지수 2배 버그 방어
+        limit = _KOSPI_MAX if key == "KOSPI" else _KOSDAQ_MAX
+        if cur > limit:
+            continue
+        if prev and prev > 0:
+            chg  = cur - prev
+            pct  = chg / prev * 100
+            sign = "+" if chg >= 0 else ""
+            color = "#FF4B4B" if chg >= 0 else "#87CEEB"
+            data[key]["val"]   = f"{cur:,.2f}"
+            data[key]["pct"]   = f"{sign}{chg:,.2f} {sign}{pct:.2f}%"
+            data[key]["color"] = color
+        else:
+            data[key]["val"] = f"{cur:,.2f}"
+
+    # ── USD/KRW ───────────────────────────────────────────
+    meta = _fetch("USDKRW=X")
+    if meta:
+        cur  = meta.get("regularMarketPrice")
+        prev = meta.get("previousClose") or meta.get("chartPreviousClose")
+        if cur and cur > 0:
+            chg   = (cur - prev) if prev and prev > 0 else 0.0
+            sign  = "+" if chg >= 0 else ""
+            color = "#FF4B4B" if chg >= 0 else "#87CEEB"
+            data["USD/KRW"]["val"]   = f"{cur:,.2f}"
+            data["USD/KRW"]["pct"]   = f"{sign}{chg:.2f}원"
+            data["USD/KRW"]["color"] = color
+
+    # ── US10Y (미국 10년물 국채금리) ──────────────────────
+    meta = _fetch("^TNX")
+    if meta:
+        cur  = meta.get("regularMarketPrice")
+        prev = meta.get("previousClose") or meta.get("chartPreviousClose")
+        if cur and cur > 0:
+            chg   = (cur - prev) if prev and prev > 0 else 0.0
+            sign  = "+" if chg >= 0 else ""
+            color = "#FF4B4B" if chg >= 0 else "#87CEEB"
+            data["US10Y"]["val"]   = f"{cur:.2f}"
+            data["US10Y"]["pct"]   = f"{sign}{chg:.2f}%p"
+            data["US10Y"]["color"] = color
+
     return data
 
 
