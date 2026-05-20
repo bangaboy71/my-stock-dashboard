@@ -37,22 +37,27 @@ logger = logging.getLogger(__name__)
 def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
     """
     종목 코드 → (현재가, 전일종가) 반환.
-    pykrx는 당일 장중에는 전 영업일 종가를 반환하므로
-    '현재가 = 오늘 종가(또는 현재)', '전일종가 = 전날 종가' 로 처리합니다.
+
+    수집 전략:
+      1차) pykrx — KRX 공식 (로컬 환경, krx.co.kr 접근 가능한 경우)
+      2차) yfinance — Streamlit Cloud 등 KRX 차단 환경 폴백
+
+    영숫자 혼합 코드(0177R0, 0190G0 등 신규상장 ETF) 처리:
+      - config.PREFERRED_STOCK_TICKERS 에 등록된 명시 티커 우선 사용
+      - 미등록 시 {code}.KS → {code}.KQ 자동 시도
     실패 시 (0, 0) 반환.
     """
+    # ── 1차: pykrx ───────────────────────────────────────────
     try:
         from pykrx import stock as krx
 
         today = datetime.now().strftime("%Y%m%d")
-        # 오늘 포함 최근 5 영업일 조회 (휴장일 안전망)
         from_date = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
 
         for attempt in range(retries):
             try:
                 df = krx.get_market_ohlcv(from_date, today, code)
                 if df is not None and not df.empty:
-                    # 마지막 행 = 가장 최근 거래일
                     current = int(df["종가"].iloc[-1])
                     prev    = int(df["종가"].iloc[-2]) if len(df) >= 2 else current
                     return current, prev
@@ -61,14 +66,50 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
                 if attempt < retries - 1:
                     time.sleep(0.5 * (attempt + 1))
 
-        return 0, 0
+    except ImportError:
+        logger.warning("pykrx 미설치 — yfinance 폴백으로 진행")
+    except Exception as e:
+        logger.warning(f"pykrx get_krx_price({code}): {e}")
+
+    # ── 2차: yfinance 폴백 ───────────────────────────────────
+    # Streamlit Cloud에서 krx.co.kr 차단 시, 또는 pykrx 빈 결과 시 사용
+    try:
+        import yfinance as yf
+
+        # PREFERRED_STOCK_TICKERS 명시 티커 우선 (영숫자 코드 대응)
+        tickers_to_try: list[str] = []
+        try:
+            from config import PREFERRED_STOCK_TICKERS as _PREF
+            _explicit = next(
+                (v for v in _PREF.values() if v.split(".")[0] == code),
+                None,
+            )
+            if _explicit:
+                tickers_to_try = [_explicit]
+        except Exception:
+            pass
+
+        if not tickers_to_try:
+            tickers_to_try = [f"{code}.KS", f"{code}.KQ"]
+
+        for ticker_sym in tickers_to_try:
+            try:
+                hist = yf.Ticker(ticker_sym).history(period="5d")
+                if hist is not None and not hist.empty and len(hist) >= 1:
+                    current = int(hist["Close"].iloc[-1])
+                    prev    = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
+                    logger.info(f"yfinance 폴백 성공({ticker_sym}): {current:,}원")
+                    return current, prev
+                logger.warning(f"yfinance 빈 결과({ticker_sym})")
+            except Exception as e:
+                logger.warning(f"yfinance {ticker_sym}: {e}")
 
     except ImportError:
-        logger.error("pykrx 미설치. pip install pykrx 후 재시도하세요.")
-        return 0, 0
+        logger.error("yfinance 미설치")
     except Exception as e:
-        logger.error(f"get_krx_price({code}): {e}")
-        return 0, 0
+        logger.error(f"yfinance get_krx_price({code}) 전체 오류: {e}")
+
+    return 0, 0
 
 
 def get_krx_prices_parallel(
