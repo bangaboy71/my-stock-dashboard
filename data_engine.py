@@ -280,92 +280,105 @@ def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
     return _get_stock_data_yfinance(code)
 
 
-def _yf_fetch_price(ticker_sym: str) -> tuple[int, int]:
+def _yahoo_api_price(ticker_sym: str) -> tuple[int, int]:
     """
-    yfinance 단일 티커 → (현재가, 전일종가) 반환.
+    Yahoo Finance v8 Chart API 직접 호출 → (현재가, 전일종가).
 
-    수집 전략:
-      현재가) period="1d" interval="1m" 분봉 마지막 Close
-              → 장중 실시간 현재가. 일봉 period="5d"는 장중에
-                오늘 Close가 전일종가로 고정되는 Yahoo Finance
-                동작 특성 때문에 사용하지 않음.
-      전일종가) period="5d" interval="1d" iloc[-2]
-               → 전전거래일이 아닌 직전 거래일 확정 종가.
-      분봉 실패 시 일봉 iloc[-1] 을 현재가로 대체.
+    yfinance 라이브러리를 우회하고 requests로 직접 호출합니다.
+    - meta.regularMarketPrice : 실시간 현재가 (장중/장후 모두 최신값)
+    - meta.previousClose      : 전일 확정 종가
+    yfinance history("5d","1d") 일봉은 장중에 오늘 Close가
+    전일종가로 고정되는 Yahoo 동작 특성이 있어 이 방식으로 대체합니다.
     """
-    import yfinance as yf
-    tkr = yf.Ticker(ticker_sym)
+    import requests as _req
 
-    prev = 0  # 전일종가 먼저 확보
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        "Referer": "https://finance.yahoo.com",
+    }
 
-    # ── 전일종가: 일봉 5거래일 il[-2] ────────────────────
-    try:
-        daily = tkr.history(period="5d", interval="1d", auto_adjust=True)
-        if daily is not None and not daily.empty and len(daily) >= 2:
-            prev = int(daily["Close"].iloc[-2])
-            # 일봉 마지막 행도 현재가 후보로 보관 (분봉 실패 대비)
-            daily_cur = int(daily["Close"].iloc[-1])
-        elif daily is not None and not daily.empty:
-            daily_cur = int(daily["Close"].iloc[-1])
-            prev = daily_cur
-        else:
-            daily_cur = 0
-    except Exception:
-        daily_cur = 0
-
-    # ── 현재가: 분봉 1d/1m (장중 실시간) ─────────────────
-    try:
-        intra = tkr.history(period="1d", interval="1m", auto_adjust=True)
-        if intra is not None and not intra.empty:
-            current = int(intra["Close"].iloc[-1])
-            if current > 0:
-                if prev == 0:
-                    prev = current
-                return current, prev
-    except Exception:
-        pass
-
-    # ── 분봉 실패: 일봉 최신값으로 대체 ─────────────────
-    if daily_cur > 0:
-        return daily_cur, prev if prev > 0 else daily_cur
-
+    for base in (
+        "https://query1.finance.yahoo.com",
+        "https://query2.finance.yahoo.com",
+    ):
+        url = f"{base}/v8/finance/chart/{ticker_sym}"
+        params = {"range": "1d", "interval": "1m", "includePrePost": "false"}
+        try:
+            resp = _req.get(url, params=params, headers=_HEADERS, timeout=5)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            result = data.get("chart", {}).get("result")
+            if not result:
+                continue
+            meta = result[0].get("meta", {})
+            cur  = meta.get("regularMarketPrice")
+            prev = meta.get("previousClose") or meta.get("chartPreviousClose")
+            if cur and cur > 0:
+                return int(cur), int(prev) if prev and prev > 0 else int(cur)
+        except Exception:
+            continue
     return 0, 0
 
 
 def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
-    """yfinance로 주가 조회.
-
-    처리 순서:
-      1. config.PREFERRED_STOCK_TICKERS에 명시된 종목 → 명시 티커 사용
-         (우선주·신규상장 ETF 영숫자 코드: 0177R0, 0190G0 등)
-      2. 미등록 종목 → {code}.KS → {code}.KQ 자동 시도
-    각 티커에 대해 _yf_fetch_price() 호출.
     """
+    Yahoo Finance에서 (현재가, 전일종가) 조회.
+
+    수집 전략:
+      1차) _yahoo_api_price() — requests로 Yahoo v8 직접 호출
+           regularMarketPrice(실시간) + previousClose(전일 확정)
+           yfinance 1.3.x 일봉 장중 고정 문제 완전 우회.
+      2차) yfinance history(period="5d") — 1차 실패 시 폴백.
+
+    티커 우선순위:
+      PREFERRED_STOCK_TICKERS 명시 티커 → {code}.KS → {code}.KQ
+    """
+    # 티커 목록 결정
+    tickers_to_try: list[str] = []
     try:
-        tickers_to_try: list[str] = []
+        from config import PREFERRED_STOCK_TICKERS as _PREF
+        _explicit = next(
+            (v for v in _PREF.values() if v.split(".")[0] == code),
+            None,
+        )
+        if _explicit:
+            tickers_to_try = [_explicit]
+    except Exception:
+        pass
+    if not tickers_to_try:
+        tickers_to_try = [f"{code}.KS", f"{code}.KQ"]
+
+    # ── 1차: Yahoo v8 직접 ───────────────────────────────
+    for ticker_sym in tickers_to_try:
         try:
-            from config import PREFERRED_STOCK_TICKERS as _PREF
-            _explicit = next(
-                (v for v in _PREF.values() if v.split(".")[0] == code),
-                None,
-            )
-            if _explicit:
-                tickers_to_try = [_explicit]
+            cur, prev = _yahoo_api_price(ticker_sym)
+            if cur > 0:
+                return cur, prev
         except Exception:
-            pass
+            continue
 
-        if not tickers_to_try:
-            tickers_to_try = [f"{code}.KS", f"{code}.KQ"]
-
+    # ── 2차: yfinance history 폴백 ───────────────────────
+    try:
+        import yfinance as yf
         for ticker_sym in tickers_to_try:
             try:
-                cur, prev = _yf_fetch_price(ticker_sym)
-                if cur > 0:
+                hist = yf.Ticker(ticker_sym).history(period="5d", interval="1d")
+                if hist is not None and not hist.empty and len(hist) >= 1:
+                    cur  = int(hist["Close"].iloc[-1])
+                    prev = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else cur
                     return cur, prev
             except Exception:
                 continue
     except Exception:
         pass
+
     return 0, 0
 
 
