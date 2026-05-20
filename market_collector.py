@@ -68,14 +68,14 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
     except Exception as e:
         logger.warning(f"pykrx get_krx_price({code}): {e}")
 
-    # ── 2차: yfinance 폴백 ─────────────────────────────────
+    # ── 2차: Yahoo Finance 직접 호출 폴백 ───────────────────
     # Streamlit Cloud에서 krx.co.kr 차단 시 자동 전환.
-    # 현재가: 분봉(1d/1m) 마지막 Close — 장중 실시간.
-    # 전일종가: 일봉(5d/1d) iloc[-2] — 확정된 전일 종가.
+    # Yahoo v8 API 직접 호출 (yfinance 라이브러리 장중 고정 문제 우회):
+    #   regularMarketPrice → 실시간 현재가
+    #   previousClose      → 전일 확정 종가
     # PREFERRED_STOCK_TICKERS 명시 티커 우선 (영숫자 ETF 코드 대응).
     try:
-        import yfinance as yf
-        from data_engine import _yf_fetch_price
+        from data_engine import _yahoo_api_price
 
         tickers_to_try: list[str] = []
         try:
@@ -94,18 +94,29 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
 
         for ticker_sym in tickers_to_try:
             try:
-                cur, prev = _yf_fetch_price(ticker_sym)
+                cur, prev = _yahoo_api_price(ticker_sym)
                 if cur > 0:
-                    logger.info(f"yfinance 폴백 성공({ticker_sym}): {cur:,}원")
+                    logger.info(f"Yahoo v8 폴백 성공({ticker_sym}): {cur:,}원")
                     return cur, prev
-                logger.warning(f"yfinance 빈 결과({ticker_sym})")
+                logger.warning(f"Yahoo v8 빈 결과({ticker_sym})")
+            except Exception as e:
+                logger.warning(f"Yahoo v8 {ticker_sym}: {e}")
+
+        # yfinance history 최종 폴백
+        import yfinance as yf
+        for ticker_sym in tickers_to_try:
+            try:
+                hist = yf.Ticker(ticker_sym).history(period="5d", interval="1d")
+                if hist is not None and not hist.empty and len(hist) >= 1:
+                    current = int(hist["Close"].iloc[-1])
+                    prev    = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
+                    logger.info(f"yfinance 최종 폴백 성공({ticker_sym}): {current:,}원")
+                    return current, prev
             except Exception as e:
                 logger.warning(f"yfinance {ticker_sym}: {e}")
 
-    except ImportError:
-        logger.error("yfinance 미설치")
     except Exception as e:
-        logger.error(f"yfinance get_krx_price({code}): {e}")
+        logger.error(f"get_krx_price 폴백 실패({code}): {e}")
 
     return 0, 0
 
