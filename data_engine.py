@@ -63,8 +63,7 @@ def get_market_status() -> dict:
     }
 
     # ── 1차: pykrx — KRX 공식 지수 (가장 정확) ──────────
-    # ★ pykrx 2배 버그 방어: KRX 네트워크 차단 시 잘못된 값 반환 가능
-    #   KOSPI 현실 범위: 500 ~ 4,500 / KOSDAQ: 100 ~ 1,500
+    # ★ pykrx 2배 버그 방어: 비정상값(KOSPI>4500, KOSDAQ>1500) 수신 시 무시
     _KOSPI_MAX  = 4_500.0
     _KOSDAQ_MAX = 1_500.0
     try:
@@ -78,16 +77,12 @@ def get_market_status() -> dict:
                 _df = _pykrx.get_index_ohlcv_by_date(_d, _d, "1001")  # KOSPI
                 if not _df.empty:
                     _cur  = float(_df["종가"].iloc[-1])
-                    # ★ 비정상값 방어: 상한 초과 시 무시하고 yfinance 폴백으로
                     if _cur > _KOSPI_MAX:
                         logger.warning(f"pykrx KOSPI 비정상값({_cur:.2f}) 무시 → yfinance 폴백")
                         break
-                    _prev = float(_df["시가"].iloc[-1])  # 당일 시가 대신 전일종가 필요
-                    # 전일종가: 2일치 조회
                     _d2  = (_dt.date.today() - _dt.timedelta(days=_offset+5)).strftime("%Y%m%d")
                     _df2 = _pykrx.get_index_ohlcv_by_date(_d2, _d, "1001")
-                    if len(_df2) >= 2:
-                        _prev = float(_df2["종가"].iloc[-2])
+                    _prev = float(_df2["종가"].iloc[-2]) if len(_df2) >= 2 else _cur
                     _chg  = _cur - _prev
                     _pct  = (_chg / _prev * 100) if _prev > 0 else 0.0
                     _sign = "+" if _chg >= 0 else ""
@@ -104,16 +99,12 @@ def get_market_status() -> dict:
                 _df = _pykrx.get_index_ohlcv_by_date(_d, _d, "2001")  # KOSDAQ
                 if not _df.empty:
                     _cur  = float(_df["종가"].iloc[-1])
-                    # ★ 비정상값 방어
                     if _cur > _KOSDAQ_MAX:
                         logger.warning(f"pykrx KOSDAQ 비정상값({_cur:.2f}) 무시 → yfinance 폴백")
                         break
                     _d2   = (_dt.date.today() - _dt.timedelta(days=_offset+5)).strftime("%Y%m%d")
                     _df2  = _pykrx.get_index_ohlcv_by_date(_d2, _d, "2001")
-                    if len(_df2) >= 2:
-                        _prev = float(_df2["종가"].iloc[-2])
-                    else:
-                        _prev = _cur
+                    _prev = float(_df2["종가"].iloc[-2]) if len(_df2) >= 2 else _cur
                     _chg  = _cur - _prev
                     _pct  = (_chg / _prev * 100) if _prev > 0 else 0.0
                     _sign = "+" if _chg >= 0 else ""
@@ -289,22 +280,62 @@ def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
     return _get_stock_data_yfinance(code)
 
 
+def _yf_get_price_pair(ticker_sym: str) -> tuple[int, int]:
+    """
+    yfinance 단일 티커 → (현재가, 전일종가) 반환.
+
+    수집 전략:
+      1차) fast_info.last_price + fast_info.previous_close
+           → regularMarketPrice(실시간) + 전일종가 — 가장 정확
+      2차) history(period="5d") iloc[-1] / iloc[-2]
+           → fast_info 실패 시 폴백 (장 마감 후에도 안정적)
+    """
+    import yfinance as yf
+
+    tkr = yf.Ticker(ticker_sym)
+
+    # ── 1차: fast_info (실시간 현재가) ───────────────────
+    try:
+        fi = tkr.fast_info
+        cur  = fi.last_price          # regularMarketPrice — 실시간
+        prev = fi.previous_close      # 전일 종가
+        if cur and cur > 0:
+            return int(cur), int(prev) if prev and prev > 0 else int(cur)
+    except Exception:
+        pass
+
+    # ── 2차: history(period="5d") 폴백 ───────────────────
+    # yfinance 1.3.x에서 장 중 period="5d" 시 오늘 데이터가
+    # end_dt 이후로 판단되어 제거될 수 있음 → period="10d" 로 보완
+    try:
+        hist = tkr.history(period="10d", interval="1d", auto_adjust=True)
+        if hist is not None and not hist.empty:
+            hist = hist.dropna(subset=["Close"])
+            if len(hist) >= 2:
+                return int(hist["Close"].iloc[-1]), int(hist["Close"].iloc[-2])
+            if len(hist) == 1:
+                v = int(hist["Close"].iloc[-1])
+                return v, v
+    except Exception:
+        pass
+
+    return 0, 0
+
+
 def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
     """yfinance로 주가 조회.
 
     처리 순서:
-      1. config.PREFERRED_STOCK_TICKERS에 명시된 종목 → 해당 티커 직접 사용
-         (우선주·신규상장 ETF 영숫자 코드 포함: 0177R0, 0190G0 등)
-      2. 미등록 종목 → {code}.KS → {code}.KQ 순으로 자동 시도
+      1. config.PREFERRED_STOCK_TICKERS에 명시된 종목 → 명시 티커 사용
+         (우선주·신규상장 ETF 영숫자 코드: 0177R0, 0190G0 등)
+      2. 미등록 종목 → {code}.KS → {code}.KQ 자동 시도
+    각 티커에 대해 _yf_get_price_pair() 호출 (fast_info 우선).
     """
     try:
-        import yfinance as yf
-
-        # PREFERRED_STOCK_TICKERS에서 이 코드에 해당하는 티커 탐색
+        # PREFERRED_STOCK_TICKERS 명시 티커 우선
         tickers_to_try: list[str] = []
         try:
             from config import PREFERRED_STOCK_TICKERS as _PREF
-            # value가 "{code}.KS" 형태이므로 코드 부분 비교
             _explicit = next(
                 (v for v in _PREF.values() if v.split(".")[0] == code),
                 None,
@@ -319,12 +350,9 @@ def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
 
         for ticker_sym in tickers_to_try:
             try:
-                ticker = yf.Ticker(ticker_sym)
-                hist = ticker.history(period="5d")
-                if not hist.empty and len(hist) >= 1:
-                    current = int(hist["Close"].iloc[-1])
-                    prev = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
-                    return current, prev
+                cur, prev = _yf_get_price_pair(ticker_sym)
+                if cur > 0:
+                    return cur, prev
             except Exception:
                 continue
     except Exception:
@@ -614,17 +642,16 @@ def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFram
 
     df["현재가"],  df["전일종가"] = zip(*prices)
 
-    # ── 현재가 0 폴백: API 전체 실패 시 매입단가로 대체 ──────────────
-    # 신규상장 ETF(0177R0, 0190G0, 494300 등) Yahoo Finance 미등록 종목 보호.
-    # 현재가가 0이면 평가금액·손익이 모두 음수(-100%)로 표시되는 문제 방지.
-    # 전일종가도 동일하게 매입단가로 설정 → 전일대비 변동 0으로 표시.
-    still_zero = df["현재가"] == 0
-    if still_zero.any():
-        df.loc[still_zero, "현재가"]  = df.loc[still_zero, "매입단가"]
-        df.loc[still_zero, "전일종가"] = df.loc[still_zero, "매입단가"]
-        _zero_names = df.loc[still_zero, "종목명"].tolist()
+    # ── 현재가 0 폴백: 모든 API 실패 시 매입단가 사용 ──────────────
+    # 신규상장 ETF(0177R0, 0190G0, 494300) Yahoo Finance 미등록 종목 보호.
+    # 현재가 0 → 평가금액/손익 -100% 표시 방지.
+    _still_zero = df["현재가"] == 0
+    if _still_zero.any():
+        df.loc[_still_zero, "현재가"]  = df.loc[_still_zero, "매입단가"]
+        df.loc[_still_zero, "전일종가"] = df.loc[_still_zero, "매입단가"]
         logger.warning(
-            f"[process_portfolio] 현재가 0 → 매입단가 폴백: {_zero_names}"
+            f"[process_portfolio] 현재가 0 → 매입단가 폴백: "
+            f"{df.loc[_still_zero, '종목명'].tolist()}"
         )
 
     df["매입금액"]       = df["수량"] * df["매입단가"]
