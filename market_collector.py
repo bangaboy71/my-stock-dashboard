@@ -39,16 +39,17 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
     종목 코드 → (현재가, 전일종가) 반환.
 
     수집 전략:
-      1차) pykrx — KRX 공식 (로컬 환경)
-      2차) yfinance — Streamlit Cloud 등 krx.co.kr 차단 환경 폴백
-           영숫자 혼합 코드(0177R0, 0190G0 등) → PREFERRED_STOCK_TICKERS 명시 티커 사용
+      1차) pykrx — KRX 공식 (로컬 환경 / krx.co.kr 허용 네트워크)
+      2차) yfinance fast_info — regularMarketPrice(실시간) + previous_close
+           Streamlit Cloud처럼 krx.co.kr 차단 환경에서 자동 전환
+           영숫자 코드(0177R0, 0190G0) → PREFERRED_STOCK_TICKERS 명시 티커 사용
     실패 시 (0, 0) 반환.
     """
     # ── 1차: pykrx ───────────────────────────────────────────
     try:
         from pykrx import stock as krx
 
-        today = datetime.now().strftime("%Y%m%d")
+        today     = datetime.now().strftime("%Y%m%d")
         from_date = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
 
         for attempt in range(retries):
@@ -64,16 +65,19 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
                     time.sleep(0.5 * (attempt + 1))
 
     except ImportError:
-        logger.warning("pykrx 미설치 — yfinance 폴백으로 진행")
+        logger.warning("pykrx 미설치 — yfinance 폴백 진행")
     except Exception as e:
         logger.warning(f"pykrx get_krx_price({code}): {e}")
 
-    # ── 2차: yfinance 폴백 ───────────────────────────────────
-    # Streamlit Cloud에서 krx.co.kr 차단 시 자동 전환
+    # ── 2차: yfinance fast_info 폴백 ─────────────────────────
+    # Streamlit Cloud에서 krx.co.kr 차단 시 자동 전환.
+    # fast_info.last_price = regularMarketPrice (실시간 현재가)
+    # fast_info.previous_close = 전일 종가
+    # history(period="5d")보다 정확 — 장 중 오늘 데이터 누락 문제 없음
     try:
         import yfinance as yf
 
-        # PREFERRED_STOCK_TICKERS 명시 티커 우선 (우선주·영숫자 ETF 코드 대응)
+        # PREFERRED_STOCK_TICKERS 명시 티커 우선 (영숫자 코드 대응)
         tickers_to_try: list[str] = []
         try:
             from config import PREFERRED_STOCK_TICKERS as _PREF
@@ -91,20 +95,33 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
 
         for ticker_sym in tickers_to_try:
             try:
-                hist = yf.Ticker(ticker_sym).history(period="5d")
-                if hist is not None and not hist.empty and len(hist) >= 1:
-                    current = int(hist["Close"].iloc[-1])
-                    prev    = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
-                    logger.info(f"yfinance 현재가 폴백 성공({ticker_sym}): {current:,}원")
-                    return current, prev
-                logger.warning(f"yfinance 빈 결과({ticker_sym})")
+                fi = yf.Ticker(ticker_sym).fast_info
+                cur  = fi.last_price
+                prev = fi.previous_close
+                if cur and cur > 0:
+                    logger.info(f"yfinance fast_info 성공({ticker_sym}): {int(cur):,}원")
+                    return int(cur), int(prev) if prev and prev > 0 else int(cur)
             except Exception as e:
-                logger.warning(f"yfinance {ticker_sym}: {e}")
+                logger.warning(f"yfinance fast_info {ticker_sym}: {e}")
+                # fast_info 실패 시 history 폴백
+                try:
+                    hist = yf.Ticker(ticker_sym).history(
+                        period="10d", interval="1d", auto_adjust=True
+                    )
+                    if hist is not None and not hist.empty:
+                        hist = hist.dropna(subset=["Close"])
+                        if len(hist) >= 2:
+                            cur  = int(hist["Close"].iloc[-1])
+                            prev = int(hist["Close"].iloc[-2])
+                            logger.info(f"yfinance history 폴백 성공({ticker_sym}): {cur:,}원")
+                            return cur, prev
+                except Exception as e2:
+                    logger.warning(f"yfinance history {ticker_sym}: {e2}")
 
     except ImportError:
         logger.error("yfinance 미설치")
     except Exception as e:
-        logger.error(f"yfinance get_krx_price({code}) 전체 오류: {e}")
+        logger.error(f"yfinance get_krx_price({code}): {e}")
 
     return 0, 0
 
