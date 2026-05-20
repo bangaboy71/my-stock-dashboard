@@ -94,12 +94,6 @@ def get_market_status() -> dict:
         return None
 
     # ── KOSPI / KOSDAQ ────────────────────────────────────
-    # Yahoo Finance ^KS11·^KQ11은 실제 지수값의 2배를 반환하는 버그가 있음.
-    # 정상 범위 상한: KOSPI 4,500 / KOSDAQ 1,500
-    # 초과 시 /2 보정 후 재검증 → 그래도 초과면 무효 처리.
-    _KOSPI_MAX  = 4_500.0
-    _KOSDAQ_MAX = 1_500.0
-
     for key, ticker in [("KOSPI", "^KS11"), ("KOSDAQ", "^KQ11")]:
         meta = _fetch(ticker)
         if not meta:
@@ -108,14 +102,6 @@ def get_market_status() -> dict:
         prev = meta.get("previousClose") or meta.get("chartPreviousClose")
         if not cur or cur <= 0:
             continue
-        limit = _KOSPI_MAX if key == "KOSPI" else _KOSDAQ_MAX
-        # 2배 버그 보정: 초과 시 /2 후 재검증
-        if cur > limit:
-            cur = cur / 2.0
-            if prev and prev > limit:
-                prev = prev / 2.0
-            if cur > limit:   # 보정 후에도 초과면 무효
-                continue
         if prev and prev > 0:
             chg  = cur - prev
             pct  = chg / prev * 100
