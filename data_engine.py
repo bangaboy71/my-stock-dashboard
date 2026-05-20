@@ -441,6 +441,70 @@ def resolve_settings(conn) -> dict:
 # 거래내역 로드 및 평균단가 계산
 # ════════════════════════════════════════════════════════
 
+def load_dividend_actual(conn, portfolio_df: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    구글 시트 '배당실적' 탭 로드 및 정제.
+
+    시트 컬럼: 입금일 | 계좌명 | 종목명 | 수량 | 주당금액 | 세후금액 | 주당과세표준액 | 비고
+    반환 컬럼: 입금일 | 계좌명 | 종목명 | 수량 | 주당금액 | 세전금액 | 세후금액 | 연도 | 연월
+    실패 시 빈 DataFrame 반환.
+    """
+    try:
+        df = conn.read(worksheet=WS_DIVIDEND, ttl=0)
+        if df.empty:
+            return pd.DataFrame()
+        df.columns = [str(c).strip() for c in df.columns]
+
+        required = {"입금일", "계좌명", "종목명"}
+        if not required.issubset(df.columns):
+            return pd.DataFrame()
+
+        df["입금일"] = pd.to_datetime(df["입금일"], errors="coerce")
+        df = df.dropna(subset=["입금일"]).copy()
+
+        # 수치 컬럼 정제
+        for col in ["수량", "주당금액", "세후금액"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", ""), errors="coerce"
+                ).fillna(0)
+            else:
+                df[col] = 0.0
+
+        # 수량이 없으면 portfolio_df에서 보완
+        if portfolio_df is not None and not portfolio_df.empty:
+            qty_map: dict[tuple, float] = {}
+            for _, r in portfolio_df.iterrows():
+                key = (str(r.get("계좌명", "")).strip(),
+                       str(r.get("종목명", "")).strip())
+                qty_map[key] = float(r.get("수량", 0))
+            mask_zero = df["수량"] == 0
+            for idx in df[mask_zero].index:
+                k = (str(df.at[idx, "계좌명"]).strip(),
+                     str(df.at[idx, "종목명"]).strip())
+                if k in qty_map:
+                    df.at[idx, "수량"] = qty_map[k]
+
+        # 세전금액 계산 (주당금액 × 수량)
+        df["세전금액"] = df["주당금액"] * df["수량"]
+
+        # 세후금액 비어있으면 세전 × (1 - 배당세율) 자동 계산
+        mask_no_net = df["세후금액"] == 0
+        df.loc[mask_no_net, "세후금액"] = (
+            df.loc[mask_no_net, "세전금액"] * (1 - DIVIDEND_TAX_RATE)
+        ).round()
+
+        # 연도·연월 컬럼 추가
+        df["연도"] = df["입금일"].dt.year.astype(int)
+        df["연월"] = df["입금일"].dt.strftime("%Y-%m")
+
+        cols = ["입금일", "계좌명", "종목명", "수량", "주당금액", "세전금액", "세후금액", "연도", "연월"]
+        return df[[c for c in cols if c in df.columns]].reset_index(drop=True)
+
+    except Exception:
+        return pd.DataFrame()
+
+
 def load_trades(conn) -> pd.DataFrame:
     """
     구글 시트 '거래내역' 탭 로드.
