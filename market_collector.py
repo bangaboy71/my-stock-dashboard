@@ -39,12 +39,9 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
     종목 코드 → (현재가, 전일종가) 반환.
 
     수집 전략:
-      1차) pykrx — KRX 공식 (로컬 환경, krx.co.kr 접근 가능한 경우)
-      2차) yfinance — Streamlit Cloud 등 KRX 차단 환경 폴백
-
-    영숫자 혼합 코드(0177R0, 0190G0 등 신규상장 ETF) 처리:
-      - config.PREFERRED_STOCK_TICKERS 에 등록된 명시 티커 우선 사용
-      - 미등록 시 {code}.KS → {code}.KQ 자동 시도
+      1차) pykrx — KRX 공식 (로컬 환경)
+      2차) yfinance — Streamlit Cloud 등 krx.co.kr 차단 환경 폴백
+           영숫자 혼합 코드(0177R0, 0190G0 등) → PREFERRED_STOCK_TICKERS 명시 티커 사용
     실패 시 (0, 0) 반환.
     """
     # ── 1차: pykrx ───────────────────────────────────────────
@@ -72,11 +69,11 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
         logger.warning(f"pykrx get_krx_price({code}): {e}")
 
     # ── 2차: yfinance 폴백 ───────────────────────────────────
-    # Streamlit Cloud에서 krx.co.kr 차단 시, 또는 pykrx 빈 결과 시 사용
+    # Streamlit Cloud에서 krx.co.kr 차단 시 자동 전환
     try:
         import yfinance as yf
 
-        # PREFERRED_STOCK_TICKERS 명시 티커 우선 (영숫자 코드 대응)
+        # PREFERRED_STOCK_TICKERS 명시 티커 우선 (우선주·영숫자 ETF 코드 대응)
         tickers_to_try: list[str] = []
         try:
             from config import PREFERRED_STOCK_TICKERS as _PREF
@@ -98,7 +95,7 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
                 if hist is not None and not hist.empty and len(hist) >= 1:
                     current = int(hist["Close"].iloc[-1])
                     prev    = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
-                    logger.info(f"yfinance 폴백 성공({ticker_sym}): {current:,}원")
+                    logger.info(f"yfinance 현재가 폴백 성공({ticker_sym}): {current:,}원")
                     return current, prev
                 logger.warning(f"yfinance 빈 결과({ticker_sym})")
             except Exception as e:
