@@ -278,16 +278,43 @@ def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
 
 
 def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
-    """yfinance로 주가 조회 (숫자 6자리 코드 → .KS/.KQ 자동 시도)"""
+    """yfinance로 주가 조회.
+
+    처리 순서:
+      1. config.PREFERRED_STOCK_TICKERS에 명시된 종목 → 해당 티커 직접 사용
+         (우선주·신규상장 ETF 영숫자 코드 포함: 0177R0, 0190G0 등)
+      2. 미등록 종목 → {code}.KS → {code}.KQ 순으로 자동 시도
+    """
     try:
         import yfinance as yf
-        for suffix in [".KS", ".KQ"]:
-            ticker = yf.Ticker(code + suffix)
-            hist = ticker.history(period="5d")
-            if not hist.empty and len(hist) >= 1:
-                current = int(hist["Close"].iloc[-1])
-                prev = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
-                return current, prev
+
+        # PREFERRED_STOCK_TICKERS에서 이 코드에 해당하는 티커 탐색
+        tickers_to_try: list[str] = []
+        try:
+            from config import PREFERRED_STOCK_TICKERS as _PREF
+            # value가 "{code}.KS" 형태이므로 코드 부분 비교
+            _explicit = next(
+                (v for v in _PREF.values() if v.split(".")[0] == code),
+                None,
+            )
+            if _explicit:
+                tickers_to_try = [_explicit]
+        except Exception:
+            pass
+
+        if not tickers_to_try:
+            tickers_to_try = [f"{code}.KS", f"{code}.KQ"]
+
+        for ticker_sym in tickers_to_try:
+            try:
+                ticker = yf.Ticker(ticker_sym)
+                hist = ticker.history(period="5d")
+                if not hist.empty and len(hist) >= 1:
+                    current = int(hist["Close"].iloc[-1])
+                    prev = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
+                    return current, prev
+            except Exception:
+                continue
     except Exception:
         pass
     return 0, 0
