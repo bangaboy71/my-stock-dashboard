@@ -316,10 +316,6 @@ TARGET_ALERT_PCT = 0.95  # 목표가 근접 경보: 목표가의 95%
 # ── 배당세율 ─────────────────────────────────────────────
 DIVIDEND_TAX_RATE = 0.154  # 배당소득세 15.4%
 
-# ── KOSPI HUD 비정상값 방어 (pykrx 2배 버그 대응) ──────────────
-KOSPI_SANITY_MAX  = 4_500.0   # KOSPI  현실 상한 (이 값 초과 시 yfinance 폴백)
-KOSDAQ_SANITY_MAX = 1_500.0   # KOSDAQ 현실 상한
-
 # ── KOSPI 기준일 코드 기본값 (secrets.toml > overrides.toml > 이 값 순으로 덮어씀) ─
 KOSPI_BASE_DATE_DEFAULT = "2026-03-03"
 
