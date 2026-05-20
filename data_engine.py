@@ -280,22 +280,71 @@ def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
     return _get_stock_data_yfinance(code)
 
 
+def _yf_fetch_price(ticker_sym: str) -> tuple[int, int]:
+    """
+    yfinance 단일 티커 → (현재가, 전일종가) 반환.
+
+    수집 전략:
+      현재가) period="1d" interval="1m" 분봉 마지막 Close
+              → 장중 실시간 현재가. 일봉 period="5d"는 장중에
+                오늘 Close가 전일종가로 고정되는 Yahoo Finance
+                동작 특성 때문에 사용하지 않음.
+      전일종가) period="5d" interval="1d" iloc[-2]
+               → 전전거래일이 아닌 직전 거래일 확정 종가.
+      분봉 실패 시 일봉 iloc[-1] 을 현재가로 대체.
+    """
+    import yfinance as yf
+    tkr = yf.Ticker(ticker_sym)
+
+    prev = 0  # 전일종가 먼저 확보
+
+    # ── 전일종가: 일봉 5거래일 il[-2] ────────────────────
+    try:
+        daily = tkr.history(period="5d", interval="1d", auto_adjust=True)
+        if daily is not None and not daily.empty and len(daily) >= 2:
+            prev = int(daily["Close"].iloc[-2])
+            # 일봉 마지막 행도 현재가 후보로 보관 (분봉 실패 대비)
+            daily_cur = int(daily["Close"].iloc[-1])
+        elif daily is not None and not daily.empty:
+            daily_cur = int(daily["Close"].iloc[-1])
+            prev = daily_cur
+        else:
+            daily_cur = 0
+    except Exception:
+        daily_cur = 0
+
+    # ── 현재가: 분봉 1d/1m (장중 실시간) ─────────────────
+    try:
+        intra = tkr.history(period="1d", interval="1m", auto_adjust=True)
+        if intra is not None and not intra.empty:
+            current = int(intra["Close"].iloc[-1])
+            if current > 0:
+                if prev == 0:
+                    prev = current
+                return current, prev
+    except Exception:
+        pass
+
+    # ── 분봉 실패: 일봉 최신값으로 대체 ─────────────────
+    if daily_cur > 0:
+        return daily_cur, prev if prev > 0 else daily_cur
+
+    return 0, 0
+
+
 def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
     """yfinance로 주가 조회.
 
     처리 순서:
-      1. config.PREFERRED_STOCK_TICKERS에 명시된 종목 → 해당 티커 직접 사용
-         (우선주·신규상장 ETF 영숫자 코드 포함: 0177R0, 0190G0 등)
-      2. 미등록 종목 → {code}.KS → {code}.KQ 순으로 자동 시도
+      1. config.PREFERRED_STOCK_TICKERS에 명시된 종목 → 명시 티커 사용
+         (우선주·신규상장 ETF 영숫자 코드: 0177R0, 0190G0 등)
+      2. 미등록 종목 → {code}.KS → {code}.KQ 자동 시도
+    각 티커에 대해 _yf_fetch_price() 호출.
     """
     try:
-        import yfinance as yf
-
-        # PREFERRED_STOCK_TICKERS에서 이 코드에 해당하는 티커 탐색
         tickers_to_try: list[str] = []
         try:
             from config import PREFERRED_STOCK_TICKERS as _PREF
-            # value가 "{code}.KS" 형태이므로 코드 부분 비교
             _explicit = next(
                 (v for v in _PREF.values() if v.split(".")[0] == code),
                 None,
@@ -310,12 +359,9 @@ def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
 
         for ticker_sym in tickers_to_try:
             try:
-                ticker = yf.Ticker(ticker_sym)
-                hist = ticker.history(period="5d")
-                if not hist.empty and len(hist) >= 1:
-                    current = int(hist["Close"].iloc[-1])
-                    prev = int(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
-                    return current, prev
+                cur, prev = _yf_fetch_price(ticker_sym)
+                if cur > 0:
+                    return cur, prev
             except Exception:
                 continue
     except Exception:
