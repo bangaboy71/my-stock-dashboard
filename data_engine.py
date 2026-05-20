@@ -634,14 +634,22 @@ def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
                     remaining = 0
             holdings[key] = new_lots
             avg_cost_sold = cost_basis / qty if qty > 0 else 0
+            realized = (price - avg_cost_sold) * qty
+            ret_pct  = ((price / avg_cost_sold) - 1) * 100 if avg_cost_sold > 0 else 0.0
+            _날짜 = row.get("날짜")
+            _날짜_str = str(_날짜)[:10] if _날짜 is not None else ""
             sell_records.append({
-                "날짜":   row.get("날짜"),
-                "계좌명": acc,
-                "종목명": name,
-                "매도수량": qty,
-                "매도단가": price,
+                "매도일":      _날짜_str,          # ui_components 요구: "매도일"
+                "날짜":        _날짜,
+                "계좌명":      acc,
+                "종목명":      name,
+                "매도수량":    qty,
+                "매도단가":    price,
+                "매도금액":    price * qty,         # ui_components 요구: "매도금액"
                 "평균매입단가": avg_cost_sold,
-                "실현손익": (price - avg_cost_sold) * qty,
+                "실현손익":    realized,
+                "수익률(%)":   round(ret_pct, 2),   # ui_components 요구: "수익률(%)"
+                "연도":        _날짜_str[:4] if _날짜_str else "",
             })
 
     # 보유 잔고 → 평균단가 계산
