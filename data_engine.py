@@ -63,6 +63,10 @@ def get_market_status() -> dict:
     }
 
     # ── 1차: pykrx — KRX 공식 지수 (가장 정확) ──────────
+    # ★ pykrx 2배 버그 방어: KRX 네트워크 차단 시 잘못된 값 반환 가능
+    #   KOSPI 현실 범위: 500 ~ 4,500 / KOSDAQ: 100 ~ 1,500
+    _KOSPI_MAX  = 4_500.0
+    _KOSDAQ_MAX = 1_500.0
     try:
         from pykrx import stock as _pykrx
         import datetime as _dt
@@ -74,6 +78,10 @@ def get_market_status() -> dict:
                 _df = _pykrx.get_index_ohlcv_by_date(_d, _d, "1001")  # KOSPI
                 if not _df.empty:
                     _cur  = float(_df["종가"].iloc[-1])
+                    # ★ 비정상값 방어: 상한 초과 시 무시하고 yfinance 폴백으로
+                    if _cur > _KOSPI_MAX:
+                        logger.warning(f"pykrx KOSPI 비정상값({_cur:.2f}) 무시 → yfinance 폴백")
+                        break
                     _prev = float(_df["시가"].iloc[-1])  # 당일 시가 대신 전일종가 필요
                     # 전일종가: 2일치 조회
                     _d2  = (_dt.date.today() - _dt.timedelta(days=_offset+5)).strftime("%Y%m%d")
@@ -96,6 +104,10 @@ def get_market_status() -> dict:
                 _df = _pykrx.get_index_ohlcv_by_date(_d, _d, "2001")  # KOSDAQ
                 if not _df.empty:
                     _cur  = float(_df["종가"].iloc[-1])
+                    # ★ 비정상값 방어
+                    if _cur > _KOSDAQ_MAX:
+                        logger.warning(f"pykrx KOSDAQ 비정상값({_cur:.2f}) 무시 → yfinance 폴백")
+                        break
                     _d2   = (_dt.date.today() - _dt.timedelta(days=_offset+5)).strftime("%Y%m%d")
                     _df2  = _pykrx.get_index_ohlcv_by_date(_d2, _d, "2001")
                     if len(_df2) >= 2:
@@ -602,36 +614,17 @@ def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFram
 
     df["현재가"],  df["전일종가"] = zip(*prices)
 
-    # ── 신규상장 ETF 폴백: API 조회 실패(현재가=0) 시 시트 원본값 사용 ──
-    # 구글 시트 '종목 현황' 탭에 '현재가' 컬럼이 직접 입력돼 있는 경우
-    # (신규상장 ETF, Yahoo Finance 미등록 종목 등)
-    sheet_price_col = next(
-        (c for c in ["현재가_시트", "시트현재가", "현재가"] if c in full_df.columns),
-        None,
-    )
-    if sheet_price_col and sheet_price_col in full_df.columns:
-        sheet_prices = pd.to_numeric(
-            full_df[sheet_price_col].astype(str).str.replace(",", ""),
-            errors="coerce",
-        ).fillna(0)
-        # API 조회 실패(현재가=0)인 행만 시트값으로 대체
-        mask = (df["현재가"] == 0) & (sheet_prices > 0)
-        if mask.any():
-            df.loc[mask, "현재가"]  = sheet_prices[mask]
-            df.loc[mask, "전일종가"] = sheet_prices[mask]  # 전일종가도 동일값으로 보수적 처리
-            logger.info(
-                f"시트 현재가 폴백 적용: {df.loc[mask, '종목명'].tolist()}"
-            )
-
-    # ── 매입단가 폴백: 현재가가 여전히 0이면 매입단가로 대체 (최후 수단) ──
-    # Yahoo Finance 미등록 + 시트 현재가 컬럼 없는 신규종목 보호
+    # ── 현재가 0 폴백: API 전체 실패 시 매입단가로 대체 ──────────────
+    # 신규상장 ETF(0177R0, 0190G0, 494300 등) Yahoo Finance 미등록 종목 보호.
+    # 현재가가 0이면 평가금액·손익이 모두 음수(-100%)로 표시되는 문제 방지.
+    # 전일종가도 동일하게 매입단가로 설정 → 전일대비 변동 0으로 표시.
     still_zero = df["현재가"] == 0
     if still_zero.any():
         df.loc[still_zero, "현재가"]  = df.loc[still_zero, "매입단가"]
         df.loc[still_zero, "전일종가"] = df.loc[still_zero, "매입단가"]
-        _names = df.loc[still_zero, "종목명"].tolist()
+        _zero_names = df.loc[still_zero, "종목명"].tolist()
         logger.warning(
-            f"현재가 0 → 매입단가 폴백 적용 (API 전체 실패): {_names}"
+            f"[process_portfolio] 현재가 0 → 매입단가 폴백: {_zero_names}"
         )
 
     df["매입금액"]       = df["수량"] * df["매입단가"]
