@@ -289,6 +289,10 @@ def _yahoo_api_price(ticker_sym: str) -> tuple[int, int]:
     - meta.previousClose      : 전일 확정 종가
     yfinance history("5d","1d") 일봉은 장중에 오늘 Close가
     전일종가로 고정되는 Yahoo 동작 특성이 있어 이 방식으로 대체합니다.
+
+    가격 합리성 검증: 1원~5,000,000원 범위를 벗어나면 무효 처리.
+    (095610.KS처럼 KOSDAQ 종목을 .KS로 잘못 조회해 다른 종목 가격이
+    반환되는 경우 차단.)
     """
     import requests as _req
 
@@ -302,6 +306,8 @@ def _yahoo_api_price(ticker_sym: str) -> tuple[int, int]:
         "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
         "Referer": "https://finance.yahoo.com",
     }
+    _PRICE_MIN = 1
+    _PRICE_MAX = 5_000_000  # 한국 주식 현실 범위 상한
 
     for base in (
         "https://query1.finance.yahoo.com",
@@ -320,8 +326,10 @@ def _yahoo_api_price(ticker_sym: str) -> tuple[int, int]:
             meta = result[0].get("meta", {})
             cur  = meta.get("regularMarketPrice")
             prev = meta.get("previousClose") or meta.get("chartPreviousClose")
-            if cur and cur > 0:
-                return int(cur), int(prev) if prev and prev > 0 else int(cur)
+            # ★ 가격 합리성 검증: 범위를 벗어나면 다른 종목 가격으로 판단
+            if cur and _PRICE_MIN <= cur <= _PRICE_MAX:
+                prev_val = int(prev) if prev and _PRICE_MIN <= prev <= _PRICE_MAX else int(cur)
+                return int(cur), prev_val
         except Exception:
             continue
     return 0, 0
@@ -339,6 +347,8 @@ def _get_stock_data_yfinance(code: str) -> tuple[int, int]:
 
     티커 우선순위:
       PREFERRED_STOCK_TICKERS 명시 티커 → {code}.KS → {code}.KQ
+      ※ KOSDAQ 종목(테스 095610 등)은 PREFERRED_STOCK_TICKERS에
+        {종목명}: "{코드}.KQ" 를 명시해 .KS 오조회를 방지할 것.
     """
     # 티커 목록 결정
     tickers_to_try: list[str] = []
