@@ -602,6 +602,38 @@ def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFram
 
     df["현재가"],  df["전일종가"] = zip(*prices)
 
+    # ── 신규상장 ETF 폴백: API 조회 실패(현재가=0) 시 시트 원본값 사용 ──
+    # 구글 시트 '종목 현황' 탭에 '현재가' 컬럼이 직접 입력돼 있는 경우
+    # (신규상장 ETF, Yahoo Finance 미등록 종목 등)
+    sheet_price_col = next(
+        (c for c in ["현재가_시트", "시트현재가", "현재가"] if c in full_df.columns),
+        None,
+    )
+    if sheet_price_col and sheet_price_col in full_df.columns:
+        sheet_prices = pd.to_numeric(
+            full_df[sheet_price_col].astype(str).str.replace(",", ""),
+            errors="coerce",
+        ).fillna(0)
+        # API 조회 실패(현재가=0)인 행만 시트값으로 대체
+        mask = (df["현재가"] == 0) & (sheet_prices > 0)
+        if mask.any():
+            df.loc[mask, "현재가"]  = sheet_prices[mask]
+            df.loc[mask, "전일종가"] = sheet_prices[mask]  # 전일종가도 동일값으로 보수적 처리
+            logger.info(
+                f"시트 현재가 폴백 적용: {df.loc[mask, '종목명'].tolist()}"
+            )
+
+    # ── 매입단가 폴백: 현재가가 여전히 0이면 매입단가로 대체 (최후 수단) ──
+    # Yahoo Finance 미등록 + 시트 현재가 컬럼 없는 신규종목 보호
+    still_zero = df["현재가"] == 0
+    if still_zero.any():
+        df.loc[still_zero, "현재가"]  = df.loc[still_zero, "매입단가"]
+        df.loc[still_zero, "전일종가"] = df.loc[still_zero, "매입단가"]
+        _names = df.loc[still_zero, "종목명"].tolist()
+        logger.warning(
+            f"현재가 0 → 매입단가 폴백 적용 (API 전체 실패): {_names}"
+        )
+
     df["매입금액"]       = df["수량"] * df["매입단가"]
     df["평가금액"]       = df["수량"] * df["현재가"]
     df["손익"]           = df["평가금액"] - df["매입금액"]
