@@ -19,6 +19,7 @@ from config import (
     STOCK_CODES, DIVIDEND_SCHEDULE, DIVIDEND_TAX_RATE,
     KOSPI_BASE_DATE_DEFAULT, STOP_LOSS_PCT, TRAILING_PCT, TARGET_ALERT_PCT,
     WS_PORTFOLIO, WS_TREND, WS_MEMO, WS_SNAPSHOT,
+    WS_TRADES, WS_DIVIDEND,
 )
 
 
@@ -435,6 +436,142 @@ def resolve_settings(conn) -> dict:
 # ════════════════════════════════════════════════════════
 # 6. 데이터 정제 및 지표 계산
 # ════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════
+# 거래내역 로드 및 평균단가 계산
+# ════════════════════════════════════════════════════════
+
+def load_trades(conn) -> pd.DataFrame:
+    """
+    구글 시트 '거래내역' 탭 로드.
+    컬럼: 날짜 | 계좌명 | 종목명 | 구분 | 수량 | 단가 | 수수료 | 메모
+    실패 시 빈 DataFrame 반환.
+    """
+    try:
+        df = conn.read(worksheet=WS_TRADES, ttl=0)
+        if df.empty:
+            return pd.DataFrame()
+        df.columns = [str(c).strip() for c in df.columns]
+        # 필수 컬럼 확인
+        required = {"날짜", "계좌명", "종목명", "구분", "수량", "단가"}
+        if not required.issubset(df.columns):
+            return pd.DataFrame()
+        df["수량"] = pd.to_numeric(df["수량"], errors="coerce").fillna(0)
+        df["단가"] = pd.to_numeric(df["단가"], errors="coerce").fillna(0)
+        df = df[df["수량"] > 0].copy()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def calc_avg_cost(trades_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    거래내역 → 종목별 평균단가 계산 (FIFO 방식).
+
+    반환 DataFrame 컬럼: 계좌명 | 종목명 | 수량 | 평균단가 | 매입금액
+    attrs["sell_df"]: 매도 실적 DataFrame (편매 실적 탭용)
+    """
+    if trades_df.empty:
+        df = pd.DataFrame(columns=["계좌명", "종목명", "수량", "평균단가", "매입금액"])
+        df.attrs["sell_df"] = pd.DataFrame()
+        return df
+
+    sell_records = []
+    # (계좌명, 종목명) 별로 매수 내역 누적
+    holdings: dict[tuple, list[tuple[float, float]]] = {}  # key → [(수량, 단가)]
+
+    # 날짜순 정렬
+    df = trades_df.copy()
+    if "날짜" in df.columns:
+        df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
+        df = df.sort_values("날짜")
+
+    for _, row in df.iterrows():
+        acc   = str(row.get("계좌명", "")).strip()
+        name  = str(row.get("종목명", "")).strip()
+        구분   = str(row.get("구분", "")).strip()
+        qty   = float(row.get("수량", 0))
+        price = float(row.get("단가", 0))
+        key   = (acc, name)
+
+        if 구분 == "매수":
+            holdings.setdefault(key, []).append((qty, price))
+        elif 구분 in ("매도", "일부매도"):
+            # FIFO 방식으로 매도 처리
+            remaining = qty
+            cost_basis = 0.0
+            lots = holdings.get(key, [])
+            new_lots = []
+            for lot_qty, lot_price in lots:
+                if remaining <= 0:
+                    new_lots.append((lot_qty, lot_price))
+                    continue
+                if lot_qty <= remaining:
+                    cost_basis += lot_qty * lot_price
+                    remaining -= lot_qty
+                else:
+                    cost_basis += remaining * lot_price
+                    new_lots.append((lot_qty - remaining, lot_price))
+                    remaining = 0
+            holdings[key] = new_lots
+            avg_cost_sold = cost_basis / qty if qty > 0 else 0
+            sell_records.append({
+                "날짜":   row.get("날짜"),
+                "계좌명": acc,
+                "종목명": name,
+                "매도수량": qty,
+                "매도단가": price,
+                "평균매입단가": avg_cost_sold,
+                "실현손익": (price - avg_cost_sold) * qty,
+            })
+
+    # 보유 잔고 → 평균단가 계산
+    rows = []
+    for (acc, name), lots in holdings.items():
+        total_qty  = sum(q for q, _ in lots)
+        total_cost = sum(q * p for q, p in lots)
+        if total_qty > 0:
+            rows.append({
+                "계좌명":   acc,
+                "종목명":   name,
+                "수량":     total_qty,
+                "평균단가": round(total_cost / total_qty),
+                "매입금액": round(total_cost),
+            })
+
+    result = pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=["계좌명", "종목명", "수량", "평균단가", "매입금액"]
+    )
+    sell_df = pd.DataFrame(sell_records) if sell_records else pd.DataFrame()
+    result.attrs["sell_df"] = sell_df
+    return result
+
+
+def merge_trades_to_portfolio(
+    full_df: pd.DataFrame,
+    avg_cost_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    종목현황(full_df)에 거래내역 기반 평균단가를 병합.
+    매입단가를 평균단가로, 수량도 거래내역 기준으로 보완.
+    """
+    if avg_cost_df.empty or full_df.empty:
+        return full_df
+
+    df = full_df.copy()
+    for _, row in avg_cost_df.iterrows():
+        acc  = row["계좌명"]
+        name = row["종목명"]
+        mask = (
+            (df["계좌명"].str.strip() == acc) &
+            (df["종목명"].str.strip() == name)
+        )
+        if mask.any():
+            # 평균단가 업데이트
+            df.loc[mask, "매입단가"] = row["평균단가"]
+            df.loc[mask, "수량"]     = row["수량"]
+    return df
+
 
 def process_portfolio(full_df: pd.DataFrame, prices: list[tuple]) -> pd.DataFrame:
     """
