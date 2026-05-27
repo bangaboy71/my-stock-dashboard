@@ -92,6 +92,18 @@ def get_krx_price(code: str, retries: int = 3) -> tuple[int, int]:
         if not tickers_to_try:
             tickers_to_try = [f"{code}.KS", f"{code}.KQ"]
 
+        # 영숫자 혼합 ETF 코드 추가 티커 후보 확장
+        import re as _re
+        if _re.search(r"[A-Za-z]", code):
+            _extra: list[str] = []
+            for sfx in (".KS", ".KQ"):
+                _extra.append(f"A{code}{sfx}")
+                if code.startswith("0"):
+                    _extra.append(f"{code.lstrip('0')}{sfx}")
+            for t in _extra:
+                if t not in tickers_to_try:
+                    tickers_to_try.append(t)
+
         for ticker_sym in tickers_to_try:
             try:
                 cur, prev = _yahoo_api_price(ticker_sym)
