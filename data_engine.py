@@ -227,6 +227,21 @@ def get_stock_data(name: str, code: str = None) -> tuple[int, int]:
     if not tickers_to_try:
         tickers_to_try = [f"{code}.KS", f"{code}.KQ"]
 
+    # ── 영숫자 혼합 ETF 코드 추가 티커 후보 확장 ─────────────
+    # Yahoo Finance에서 일부 신규 ETF(영숫자 코드)는 표준 {code}.KS 조회 실패.
+    # 'A' 접두 패턴(KRX ISA 코드 체계), 앞자리 0 제거 등 추가 후보 자동 생성.
+    import re as _re
+    if _re.search(r"[A-Za-z]", code):   # 영숫자 혼합 코드에만 적용
+        _extra: list[str] = []
+        for sfx in (".KS", ".KQ"):
+            _extra.append(f"A{code}{sfx}")          # A 접두
+            if code.startswith("0"):
+                _extra.append(f"{code.lstrip('0')}{sfx}")  # 앞자리 0 제거
+        # 이미 있는 것은 제외하고 뒤에 추가
+        for t in _extra:
+            if t not in tickers_to_try:
+                tickers_to_try.append(t)
+
     # ── 1차: Yahoo v8 직접 호출 ──────────────────────────────
     for ticker_sym in tickers_to_try:
         cur, prev = _yahoo_api_price(ticker_sym)
