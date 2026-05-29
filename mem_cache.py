@@ -80,21 +80,18 @@ def get_market_status_cached() -> dict:
 @st.cache_data(ttl=TTL_PRICES, show_spinner=False)
 def get_prices_cached(
     names: tuple[str, ...],          # list 는 해시 불가 → tuple 로 변환해서 전달
+    _portfolio_df: "pd.DataFrame | None" = None,  # STOCK_CODES 미등록 종목 코드 폴백용
 ) -> list[tuple[int, int]]:
     """
     종목 주가 병렬 수집 캐시. TTL=4분.
 
-    app.py 교체:
-        # 기존
-        prices = get_stock_data_parallel(full_df["종목명"].tolist(), on_progress=_on_progress)
-        # 변경
-        from mem_cache import get_prices_cached
-        prices = get_prices_cached(tuple(full_df["종목명"].tolist()))
-        # ※ on_progress 콜백은 캐시 히트 시 호출 안 됨 — 프로그레스바는 아래 참고
+    _portfolio_df: full_df 를 전달하면 STOCK_CODES 에 없는 종목도
+                   시트의 '종목코드' 컬럼에서 코드를 읽어 주가 조회 가능.
+                   (언더스코어 prefix → st.cache_data 해시 대상 제외)
     """
     from data_engine import get_stock_data_parallel
     logger.info(f"주가 실제 수집 (캐시 미스): {len(names)}종목")
-    return get_stock_data_parallel(list(names))
+    return get_stock_data_parallel(list(names), portfolio_df=_portfolio_df)
 
 
 @st.cache_data(ttl=TTL_NEWS, show_spinner=False)
@@ -331,7 +328,8 @@ def clear_sheets_cache() -> None:
 
 def get_prices_with_progress(
     names: list[str],
-    progress_widget,          # st.progress() 반환 객체
+    progress_widget,                        # st.progress() 반환 객체
+    portfolio_df: "pd.DataFrame | None" = None,  # STOCK_CODES 미등록 종목 코드 폴백용
 ) -> list[tuple[int, int]]:
     """
     cache_data 캐시를 활용하되 캐시 미스 시 프로그레스바 표시.
@@ -339,9 +337,12 @@ def get_prices_with_progress(
     캐시 히트면 즉시 반환 (프로그레스바 스킵).
     캐시 미스면 실제 수집하면서 progress_widget 업데이트.
 
+    portfolio_df: full_df 를 넘기면 STOCK_CODES 에 없는 신규 종목도
+                  시트의 '종목코드' 컬럼으로 주가 조회 가능.
+
     app.py 에서:
         prog = st.progress(0, text="주가 수집 중...")
-        prices = get_prices_with_progress(names, prog)
+        prices = get_prices_with_progress(names, prog, portfolio_df=full_df)
         prog.progress(1.0, text="완료")
     """
     name_tuple = tuple(names)
@@ -353,14 +354,11 @@ def get_prices_with_progress(
     if age is not None and age < TTL_PRICES:
         # 캐시 히트 — 프로그레스바 즉시 완료 표시
         progress_widget.progress(1.0, text=f"✅ 캐시 사용 중 (갱신까지 {TTL_PRICES - age}초)")
-        return get_prices_cached(name_tuple)
+        return get_prices_cached(name_tuple, _portfolio_df=portfolio_df)
 
     # ── 캐시 미스 — 실제 수집 (프로그레스바 포함) ──
     from data_engine import get_stock_data_parallel
 
-    results_ordered: list[tuple[int, int]] = [(0, 0)] * len(names)
-    name_to_idx = {n: i for i, n in enumerate(names)}
-    collected = {}
     total = len(names)
     done  = 0
 
@@ -371,12 +369,9 @@ def get_prices_with_progress(
         pct = d / t if t > 0 else 1.0
         progress_widget.progress(pct, text=f"📈 주가 수집 중... ({d}/{t}) · {short} ✓")
 
-    raw = get_stock_data_parallel(names, on_progress=_on_progress)
+    raw = get_stock_data_parallel(names, on_progress=_on_progress, portfolio_df=portfolio_df)
 
-    # cache_data 에도 저장 (다음 호출부터 캐시 히트)
-    # → get_prices_cached 를 같은 tuple 인자로 호출해 캐시 채움
-    # (단, cache_data 는 함수 반환값을 자동 캐싱하므로 직접 저장 불가
-    #  → 대신 session_state 에 수집 시각 기록으로 간접 제어)
+    # session_state 에 수집 시각 기록 (다음 호출 캐시 히트 판단용)
     ss_set_fetch_time("prices")
 
     return raw
