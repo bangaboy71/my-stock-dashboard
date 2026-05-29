@@ -99,6 +99,7 @@ with st.status("📡 데이터를 불러오는 중...", expanded=True) as status
     prices = get_prices_with_progress(
         full_df["종목명"].tolist() if not full_df.empty else [],
         progress_widget=prog,
+        portfolio_df=full_df if not full_df.empty else None,
     )
     prog.progress(1.0, text=f"✅ 주가 수집 완료 ({n_stocks}/{n_stocks})")
 
