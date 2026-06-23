@@ -1071,23 +1071,125 @@ def _render_record_manager(
 
 
 
-def _render_avg_calc():
-    """추가매입 평균단가 계산기 (공통 헬퍼)"""
+def _render_avg_calc(
+    portfolio_df: pd.DataFrame | None = None,
+    avg_cost_df: pd.DataFrame | None = None,
+):
+    """
+    추가매입 평균단가 계산기 (공통 헬퍼).
+
+    portfolio_df / avg_cost_df 제공 시:
+      - 계좌명 × 종목명 콤보를 selectbox로 선택하면
+        현재 보유 수량과 평균단가를 자동으로 채워줍니다.
+      - avg_cost_df 우선(거래내역 기반 실제 평균단가),
+        없으면 portfolio_df 의 매입단가로 폴백합니다.
+      - 자동 채움 후에도 수동 수정이 가능합니다.
+    """
     with st.expander("💹 추가매입 평균단가 계산기"):
+
+        # ── 종목 불러오기 (portfolio_df 제공 시만 표시) ──────────
+        if portfolio_df is not None and not portfolio_df.empty:
+            combo_options = ["— 직접 입력 —"] + [
+                f"{row['계좌명']}  |  {row['종목명']}"
+                for _, row in portfolio_df.drop_duplicates(
+                    subset=["계좌명", "종목명"]
+                ).iterrows()
+            ]
+            selected = st.selectbox(
+                "📂 보유 종목에서 불러오기",
+                combo_options,
+                key="calc_stock_selector",
+                help="선택하면 현재 수량과 평균단가가 자동으로 채워집니다. 이후 직접 수정도 가능합니다.",
+            )
+
+            if selected != "— 직접 입력 —":
+                # "계좌명  |  종목명" 파싱
+                parts      = selected.split("|", 1)
+                acc_name   = parts[0].strip()
+                stock_name = parts[1].strip()
+
+                loaded_qty, loaded_price = 0, 0
+
+                # 1순위: avg_cost_df (거래내역 기반 실제 평균단가)
+                if avg_cost_df is not None and not avg_cost_df.empty:
+                    mask_ac = (
+                        (avg_cost_df["계좌명"] == acc_name) &
+                        (avg_cost_df["종목명"] == stock_name)
+                    )
+                    row_ac = avg_cost_df[mask_ac]
+                    if not row_ac.empty:
+                        loaded_qty   = int(row_ac.iloc[0].get("수량",    0))
+                        loaded_price = int(row_ac.iloc[0].get("평균단가", 0))
+
+                # 2순위: portfolio_df 의 매입단가 (거래내역 미연동 시 폴백)
+                if loaded_qty == 0:
+                    mask_p = (
+                        (portfolio_df["계좌명"] == acc_name) &
+                        (portfolio_df["종목명"] == stock_name)
+                    )
+                    row_p = portfolio_df[mask_p]
+                    if not row_p.empty:
+                        loaded_qty   = int(row_p.iloc[0].get("수량",      0))
+                        loaded_price = int(row_p.iloc[0].get("매입단가",   0))
+
+                # 선택 종목이 바뀔 때만 session_state 갱신 (수동 수정 값 보호)
+                prev_sel = st.session_state.get("calc_last_selected", "")
+                if selected != prev_sel:
+                    st.session_state["calc_cq"] = loaded_qty
+                    st.session_state["calc_cp"] = loaded_price
+                    st.session_state["calc_last_selected"] = selected
+
+                # 불러온 수치 인포 표시
+                if loaded_qty > 0:
+                    st.caption(
+                        f"✅ **{acc_name}** — **{stock_name}** "
+                        f"| 수량 {loaded_qty:,}주 / 평균단가 {loaded_price:,}원 자동 입력됨"
+                    )
+                else:
+                    st.caption("⚠️ 해당 종목의 수량/단가 정보를 찾을 수 없습니다. 직접 입력해 주세요.")
+
+        # ── 입력 폼 ──────────────────────────────────────────────
         cc1, cc2 = st.columns(2)
-        _cur_qty   = cc1.number_input("현재 보유 수량",     min_value=0, value=100,   step=1,   key="calc_cq")
-        _cur_price = cc1.number_input("현재 평균단가 (원)", min_value=0, value=60000, step=100, key="calc_cp")
-        _add_qty   = cc2.number_input("추가 매입 수량",     min_value=0, value=50,    step=1,   key="calc_aq")
-        _add_price = cc2.number_input("추가 매입 단가 (원)",min_value=0, value=55000, step=100, key="calc_ap")
+        _cur_qty = cc1.number_input(
+            "현재 보유 수량",
+            min_value=0,
+            value=st.session_state.get("calc_cq", 100),
+            step=1,
+            key="calc_cq",
+        )
+        _cur_price = cc1.number_input(
+            "현재 평균단가 (원)",
+            min_value=0,
+            value=st.session_state.get("calc_cp", 60000),
+            step=100,
+            key="calc_cp",
+        )
+        _add_qty = cc2.number_input(
+            "추가 매입 수량",
+            min_value=0,
+            value=50,
+            step=1,
+            key="calc_aq",
+        )
+        _add_price = cc2.number_input(
+            "추가 매입 단가 (원)",
+            min_value=0,
+            value=55000,
+            step=100,
+            key="calc_ap",
+        )
+
         if _cur_qty + _add_qty > 0:
             _new_qty = _cur_qty + _add_qty
-            _new_avg = (_cur_qty*_cur_price + _add_qty*_add_price) / _new_qty
+            _new_avg = (_cur_qty * _cur_price + _add_qty * _add_price) / _new_qty
             ra, rb, rc = st.columns(3)
             ra.metric("합산 수량",   f"{_new_qty:,}주")
-            rb.metric("새 평균단가", f"{_new_avg:,.0f}원",
-                      delta=f"{_new_avg-_cur_price:+,.0f}원",
-                      delta_color="inverse" if _new_avg > _cur_price else "normal")
-            rc.metric("추가 투자금", f"{_add_qty*_add_price:,.0f}원")
+            rb.metric(
+                "새 평균단가", f"{_new_avg:,.0f}원",
+                delta=f"{_new_avg - _cur_price:+,.0f}원",
+                delta_color="inverse" if _new_avg > _cur_price else "normal",
+            )
+            rc.metric("추가 투자금", f"{_add_qty * _add_price:,.0f}원")
 
 def render_trades_tab(
     trades_df: pd.DataFrame,
@@ -1108,7 +1210,7 @@ def render_trades_tab(
             "```\n날짜 | 계좌명 | 종목명 | 구분 | 수량 | 단가 | 수수료 | 메모\n```\n\n"
             "매도(`구분: 매도`) 행 입력 시 편매 실적이 자동 집계됩니다."
         )
-        _render_avg_calc()
+        _render_avg_calc(portfolio_df=portfolio_df, avg_cost_df=avg_cost_df)
         return
 
     # ── 실현손익 요약 카드 ──────────────────────────────
@@ -1190,7 +1292,7 @@ def render_trades_tab(
 
     # ── 추가매입 평균단가 계산기 ─────────────────────────
     st.divider()
-    _render_avg_calc()
+    _render_avg_calc(portfolio_df=portfolio_df, avg_cost_df=avg_cost_df)
 
 def render_dividend_actual_tab(
     full_df: pd.DataFrame,
